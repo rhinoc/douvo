@@ -36,6 +36,13 @@ jobs:
           NEW="$(scripts/update_version.sh)"
           echo "version=$NEW" >>"$GITHUB_OUTPUT"
 
+      - name: Import code signing identity
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: scripts/code-sign-import.sh
+
       - name: Build release DMG
         run: scripts/build-dmg.sh
 

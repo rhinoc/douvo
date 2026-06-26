@@ -35,6 +35,13 @@ cp -R "$SPARKLE_FW" "$FRAMEWORKS/"
 install_name_tool -add_rpath @executable_path/../Frameworks "$MACOS/Douvo" 2>/dev/null || true
 
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$CODESIGN_IDENTITY" ]]; then
+  CODESIGN_IDENTITY="$(
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk -F'"' '/Douvo Local Code Signing/ { print $2; exit }'
+  )"
+fi
+
 if [[ -n "$CODESIGN_IDENTITY" ]]; then
   codesign_args=(--force --deep)
   if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then
@@ -42,6 +49,8 @@ if [[ -n "$CODESIGN_IDENTITY" ]]; then
   fi
   codesign "${codesign_args[@]}" --sign "$CODESIGN_IDENTITY" "$APP" >/dev/null
 else
-  codesign --force --deep --sign - "$APP" >/dev/null
+  echo "error: no codesigning identity found. Refusing to build an ad-hoc signed app." >&2
+  echo "Set CODESIGN_IDENTITY or install 'Douvo Local Code Signing'." >&2
+  exit 1
 fi
 echo "$APP"
