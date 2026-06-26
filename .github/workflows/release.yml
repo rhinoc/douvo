@@ -1,0 +1,71 @@
+# Auto-release on push to main. Bumps VERSION, builds a DMG, updates Sparkle appcast,
+# uploads a GitHub Release, then commits the generated release metadata.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'chore') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync Sparkle SUFeedURL with this repo
+        run: |
+          FEED="https://raw.githubusercontent.com/${{ github.repository }}/main/appcast.xml"
+          /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${FEED}" Sources/Douvo/Info.plist
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Bump version
+        id: ver
+        run: |
+          NEW="$(scripts/update_version.sh)"
+          echo "version=$NEW" >>"$GITHUB_OUTPUT"
+
+      - name: Build release DMG
+        run: scripts/build-dmg.sh
+
+      - name: Update Sparkle appcast
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: scripts/update_appcast.sh
+
+      - name: Upload GitHub Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/douvo-${{ steps.ver.outputs.version }}-macos.dmg
+          asset_name: douvo-${{ steps.ver.outputs.version }}-macos.dmg
+          tag: v${{ steps.ver.outputs.version }}
+          overwrite: true
+          body: |
+            Download the DMG, open it, and drag `Douvo.app` to Applications.
+
+            Browser downloads can be tagged with Gatekeeper quarantine. If macOS blocks first launch or says the app is from an unidentified developer, remove quarantine from the installed app:
+
+            ```bash
+            xattr -dr com.apple.quarantine /Applications/Douvo.app
+            ```
+
+            Or Control-click (right-click) the app -> Open once and confirm.
+
+            More detail: [README — Install](https://github.com/${{ github.repository }}/blob/main/README.md#install) · [SPARKLE.md](https://github.com/${{ github.repository }}/blob/main/SPARKLE.md)
+
+      - name: Commit version bump
+        run: scripts/commit_release.sh

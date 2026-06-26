@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcuserdata/
+*.xcodeproj/
+audits
+dist/
+*_sparkle_private.txt
+sparkle_eddsa_private.txt
