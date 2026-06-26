@@ -54,9 +54,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func loadStatusBarIcon() -> NSImage {
-        for bundle in [Bundle.module, Bundle.main] {
-            guard let url = bundle.url(forResource: "MenuBarIcon", withExtension: "svg"),
-                  let image = NSImage(contentsOf: url) else { continue }
+        let bundleURL = Bundle.main.bundleURL
+        let resourceURL = Bundle.main.resourceURL
+        let candidateURLs = [
+            resourceURL?.appendingPathComponent("MenuBarIcon.svg"),
+            resourceURL?.appendingPathComponent("Douvo_Douvo.bundle/MenuBarIcon.svg"),
+            bundleURL.deletingLastPathComponent().appendingPathComponent("Douvo_Douvo.bundle/MenuBarIcon.svg"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Sources/Douvo/Resources/MenuBarIcon.svg")
+        ].compactMap { $0 }
+
+        for url in candidateURLs {
+            guard let image = NSImage(contentsOf: url) else { continue }
             image.size = NSSize(width: 18, height: 18)
             image.isTemplate = true
             return image
