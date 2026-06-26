@@ -63,8 +63,6 @@ jobs:
             xattr -dr com.apple.quarantine /Applications/Douvo.app
             ```
 
-            Or Control-click (right-click) the app -> Open once and confirm.
-
             More detail: [README — Install](https://github.com/${{ github.repository }}/blob/main/README.md#install) · [SPARKLE.md](https://github.com/${{ github.repository }}/blob/main/SPARKLE.md)
 
       - name: Commit version bump
