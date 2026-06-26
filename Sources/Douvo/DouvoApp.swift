@@ -47,10 +47,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Douvo")
+        statusItem.button?.image = loadStatusBarIcon()
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    private func loadStatusBarIcon() -> NSImage {
+        for bundle in [Bundle.module, Bundle.main] {
+            guard let url = bundle.url(forResource: "MenuBarIcon", withExtension: "svg"),
+                  let image = NSImage(contentsOf: url) else { continue }
+            image.size = NSSize(width: 18, height: 18)
+            image.isTemplate = true
+            return image
+        }
+        return NSImage(systemSymbolName: "waveform", accessibilityDescription: "Douvo")!
     }
 
     private func setupOverlay() {
@@ -245,11 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var appVersion: String {
         let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        if let shortVersion, let build {
-            return "\(shortVersion) (\(build))"
-        }
-        return shortVersion ?? build ?? "Development"
+        return shortVersion ?? "Development"
     }
 
     @objc private func logOut() {

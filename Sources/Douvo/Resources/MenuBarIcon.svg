@@ -1,0 +1,10 @@
+<!-- 18×18 pt canvas (Apple HIG); glyph ~89% (16/18) per Bjango menu bar extra guidelines -->
+<svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g transform="translate(0.82 1) scale(0.032855337)">
+<rect x="147" width="204" height="487" rx="102" fill="#000000" fill-opacity="0.9"/>
+<rect x="268" y="59" width="166" height="369" rx="83" fill="#000000" fill-opacity="0.45"/>
+<rect x="64" y="59" width="166" height="369" rx="83" fill="#000000" fill-opacity="0.45"/>
+<rect x="370" y="122" width="128" height="243" rx="64" fill="#000000" fill-opacity="0.2"/>
+<rect y="122" width="128" height="243" rx="64" fill="#000000" fill-opacity="0.2"/>
+</g>
+</svg>

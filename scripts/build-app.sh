@@ -20,6 +20,12 @@ mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
 cp "$BIN" "$MACOS/Douvo"
 cp "$PLIST_SRC" "$CONTENTS/Info.plist"
 cp "$ROOT/assets/Douvo.icns" "$RESOURCES/Douvo.icns"
+RESOURCE_BUNDLE="$(dirname "$BIN")/Douvo_Douvo.bundle"
+if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
+  echo "error: resource bundle not found (expected: $RESOURCE_BUNDLE)" >&2
+  exit 1
+fi
+cp -R "$RESOURCE_BUNDLE" "$RESOURCES/"
 
 if [[ ! -d "$SPARKLE_FW" ]]; then
   echo "error: Sparkle.framework not found next to release binary (expected: $SPARKLE_FW)" >&2

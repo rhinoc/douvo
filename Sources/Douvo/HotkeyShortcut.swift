@@ -47,6 +47,13 @@ struct HotkeyShortcut: Codable, Equatable {
         }
     }
 
+    var settingsDisplayName: String {
+        guard isModifier else { return displayName }
+        let symbol = compactDisplayName
+        guard symbol != displayName else { return displayName }
+        return "\(displayName) \(symbol)"
+    }
+
     func flagIsDown(in flags: CGEventFlags) -> Bool {
         flagMask != 0 && (flags.rawValue & flagMask) != 0
     }

@@ -11,6 +11,10 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     private var task: URLSessionWebSocketTask?
     private var isConnected = false
     private var pendingAudio: [Data] = []
+    private var queuedAudio: [Data] = []
+    private var isSendingAudio = false
+    private var finishRequested = false
+    private var finishFrameSent = false
     private var sentAudioCount = 0
     private var completedSendCount = 0
     private var receivedMessageCount = 0
@@ -64,12 +68,18 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         request.timeoutInterval = 6
 
         let socket = session.webSocketTask(with: request)
+        lock.lock()
         task = socket
+        queuedAudio.removeAll()
+        isSendingAudio = false
+        finishRequested = false
+        finishFrameSent = false
         sentAudioCount = 0
         completedSendCount = 0
         receivedMessageCount = 0
         openCallbackSent = false
         isConnected = false
+        lock.unlock()
         socket.resume()
         receive()
         startConnectionTimeout()
@@ -86,24 +96,24 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
 
     func sendAudio(_ data: Data) {
         lock.lock()
-        if isConnected, let task {
+        if finishFrameSent {
             lock.unlock()
+            AppLog.info("ASR audio dropped after finish bytes=\(data.count)")
+            return
+        }
+
+        if isConnected, task != nil {
+            queuedAudio.append(data)
             sentAudioCount += 1
-            if sentAudioCount == 1 || sentAudioCount % 50 == 0 {
-                AppLog.info("ASR audio send count=\(sentAudioCount) bytes=\(data.count)")
+            let queuedCount = queuedAudio.count
+            let count = sentAudioCount
+            let shouldStartSending = !isSendingAudio
+            lock.unlock()
+            if count == 1 || count % 50 == 0 {
+                AppLog.info("ASR audio queued count=\(count) queued=\(queuedCount) bytes=\(data.count)")
             }
-            task.send(.data(data)) { [weak self] error in
-                if let error {
-                    AppLog.error("ASR audio send failed error=\(error.localizedDescription)")
-                    self?.onError?(error)
-                    return
-                }
-                guard let self else { return }
-                self.completedSendCount += 1
-                if self.completedSendCount == 1 || self.completedSendCount % 50 == 0 {
-                    AppLog.info("ASR audio send completed count=\(self.completedSendCount)")
-                }
-                self.cancelConnectionTimeout()
+            if shouldStartSending {
+                sendNextAudio()
             }
         } else {
             pendingAudio.append(data)
@@ -117,23 +127,17 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
 
     func finishSending() {
         lock.lock()
+        finishRequested = true
         let pendingCount = pendingAudio.count
-        pendingAudio.removeAll()
-        let socket = task
+        movePendingAudioToQueueLocked()
+        let queuedCount = queuedAudio.count
+        let shouldStartSending = !isSendingAudio
         lock.unlock()
-        isConnected = false
         cancelConnectionTimeout()
-        // Tell the server we're done so it finalizes and emits `finish` promptly,
-        // instead of waiting on its own silence timeout. Matches the doubao web client,
-        // which sends a `{"event":"finish"}` text frame on the same socket.
-        socket?.send(.string("{\"event\":\"finish\"}")) { error in
-            if let error {
-                AppLog.error("ASR finish frame send failed error=\(error.localizedDescription)")
-            } else {
-                AppLog.info("ASR finish frame sent")
-            }
+        if shouldStartSending {
+            sendNextAudio()
         }
-        AppLog.info("ASR finishSending pendingDropped=\(pendingCount) sentAudioCount=\(sentAudioCount)")
+        AppLog.info("ASR finish requested pending=\(pendingCount) queued=\(queuedCount) sentAudioCount=\(sentAudioCount) completedSendCount=\(completedSendCount)")
     }
 
     func disconnect() {
@@ -141,16 +145,31 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         cancelConnectionTimeout()
         lock.lock()
         let pendingCount = pendingAudio.count
+        let queuedCount = queuedAudio.count
         pendingAudio.removeAll()
+        queuedAudio.removeAll()
+        isSendingAudio = false
+        finishRequested = false
+        finishFrameSent = false
         lock.unlock()
         task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
         task = nil
-        AppLog.info("ASR disconnected pendingDropped=\(pendingCount) sentAudioCount=\(sentAudioCount)")
+        AppLog.info("ASR disconnected pendingDropped=\(pendingCount) queuedDropped=\(queuedCount) sentAudioCount=\(sentAudioCount)")
     }
 
     private func markOpen(reason: String) {
+        lock.lock()
         isConnected = true
-        flushPendingAudio()
+        let flushedCount = movePendingAudioToQueueLocked()
+        let queuedCount = queuedAudio.count
+        let shouldStartSending = !isSendingAudio
+        lock.unlock()
+
+        AppLog.info("ASR flushing buffered audio count=\(flushedCount) queued=\(queuedCount)")
+        if shouldStartSending {
+            sendNextAudio()
+        }
+
         guard !openCallbackSent else { return }
         openCallbackSent = true
         AppLog.info("ASR transport opened reason=\(reason)")
@@ -177,15 +196,81 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         connectionTimeout = nil
     }
 
-    private func flushPendingAudio() {
-        lock.lock()
-        let buffered = pendingAudio
+    @discardableResult
+    private func movePendingAudioToQueueLocked() -> Int {
+        let count = pendingAudio.count
+        guard count > 0 else { return 0 }
+        queuedAudio.append(contentsOf: pendingAudio)
+        sentAudioCount += pendingAudio.count
         pendingAudio.removeAll()
+        return count
+    }
+
+    private func sendNextAudio() {
+        lock.lock()
+        guard !isSendingAudio else {
+            lock.unlock()
+            return
+        }
+
+        guard isConnected, let socket = task else {
+            lock.unlock()
+            return
+        }
+
+        guard !queuedAudio.isEmpty else {
+            let shouldSendFinish = finishRequested && !finishFrameSent
+            if shouldSendFinish {
+                finishFrameSent = true
+            }
+            let completedCount = completedSendCount
+            let totalCount = sentAudioCount
+            lock.unlock()
+
+            if shouldSendFinish {
+                sendFinishFrame(socket: socket, completedCount: completedCount, totalCount: totalCount)
+            }
+            return
+        }
+
+        let data = queuedAudio.removeFirst()
+        isSendingAudio = true
         lock.unlock()
 
-        AppLog.info("ASR flushing buffered audio count=\(buffered.count)")
-        for data in buffered {
-            task?.send(.data(data)) { _ in }
+        socket.send(.data(data)) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.lock.lock()
+                self.isSendingAudio = false
+                self.lock.unlock()
+                AppLog.error("ASR audio send failed error=\(error.localizedDescription)")
+                self.onError?(error)
+                return
+            }
+
+            self.lock.lock()
+            self.completedSendCount += 1
+            let completedCount = self.completedSendCount
+            self.isSendingAudio = false
+            self.lock.unlock()
+
+            if completedCount == 1 || completedCount % 50 == 0 {
+                AppLog.info("ASR audio send completed count=\(completedCount)")
+            }
+            self.cancelConnectionTimeout()
+            self.sendNextAudio()
+        }
+    }
+
+    private func sendFinishFrame(socket: URLSessionWebSocketTask, completedCount: Int, totalCount: Int) {
+        // Tell the server we're done only after all locally queued audio frames have
+        // been accepted by URLSession, so the recognizer sees the tail before finish.
+        socket.send(.string("{\"event\":\"finish\"}")) { error in
+            if let error {
+                AppLog.error("ASR finish frame send failed error=\(error.localizedDescription)")
+            } else {
+                AppLog.info("ASR finish frame sent completedSendCount=\(completedCount) sentAudioCount=\(totalCount)")
+            }
         }
     }
 

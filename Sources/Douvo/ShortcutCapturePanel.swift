@@ -37,8 +37,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         self.onCancel = onCancel
 
         let model = SettingsPanelModel(
-            shortcutName: currentShortcut.displayName,
-            resetShortcutName: HotkeyShortcut.defaultShortcut.displayName,
+            shortcutName: currentShortcut.settingsDisplayName,
+            resetShortcutName: HotkeyShortcut.defaultShortcut.settingsDisplayName,
             loginStatus: loginStatus,
             isKeyboardCaptureActive: isKeyboardCaptureActive,
             keyboardCaptureError: keyboardCaptureError,
@@ -57,6 +57,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             },
             onEndCapture: { [weak self] in
                 self?.stopLocalMonitor()
+                self?.clearFocus()
             },
             onReset: onReset,
             onSelectMicrophone: onSelectMicrophone,
@@ -100,8 +101,9 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
     }
 
     func complete(with shortcut: HotkeyShortcut) {
-        model?.shortcutName = shortcut.displayName
+        model?.shortcutName = shortcut.settingsDisplayName
         model?.isCapturingShortcut = false
+        clearFocus()
     }
 
     func refreshLoginStatus(_ loginStatus: LoginStatus) {
@@ -128,6 +130,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
                 Task { @MainActor in
                     self.model?.isCapturingShortcut = false
                     self.stopLocalMonitor()
+                    self.clearFocus()
                 }
                 return nil
             }
@@ -149,6 +152,10 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             NSEvent.removeMonitor(localMonitor)
             self.localMonitor = nil
         }
+    }
+
+    private func clearFocus() {
+        panel?.makeFirstResponder(nil)
     }
 
     private func cancel() {
@@ -303,69 +310,65 @@ private struct SettingsPanelView: View {
     }
 
     private var generalTab: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            settingsTitle("Trigger Key")
+        VStack(alignment: .leading, spacing: 16) {
+            settingsRow("Trigger") {
+                HStack(spacing: 8) {
+                    Button {
+                        model.isCapturingShortcut = true
+                        onBeginCapture()
+                    } label: {
+                        Text(model.shortcutName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(width: 178, height: 34)
+                            .background(shortcutBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(model.isCapturingShortcut ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 2)
+                            )
+                            .accessibilityLabel("Current trigger key \(model.shortcutName)")
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help("Click to set trigger key")
 
-            HStack(spacing: 12) {
-                Button {
-                    model.isCapturingShortcut = true
-                    onBeginCapture()
-                } label: {
-                    Text(model.shortcutName)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.70)
-                        .frame(width: 220, height: 44)
-                        .background(shortcutBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(model.isCapturingShortcut ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 2)
-                        )
-                        .accessibilityLabel("Current trigger key \(model.shortcutName)")
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .help("Click to set trigger key")
-
-                Button {
-                    model.isCapturingShortcut = false
-                    onEndCapture()
-                    onReset()
-                    model.shortcutName = model.resetShortcutName
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.system(size: 20, weight: .semibold))
-                        .frame(width: 46, height: 44)
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .help("Reset trigger key")
-            }
-
-            Text(model.isCapturingShortcut ? "Press any key to update the trigger." : "Click the trigger key field to start listening.")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-
-            Divider()
-                .padding(.vertical, 4)
-
-            settingsTitle("Microphone")
-
-            Picker("", selection: microphoneBinding) {
-                Text("System Default").tag(String?.none)
-                ForEach(model.microphoneDevices) { device in
-                    Text(device.name).tag(Optional(device.uid))
+                    Button {
+                        model.isCapturingShortcut = false
+                        onReset()
+                        model.shortcutName = model.resetShortcutName
+                        onEndCapture()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .help("Reset trigger key")
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 240, alignment: .leading)
 
-            Text("Used as the input device for dictation.")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
+            if model.isCapturingShortcut {
+                Text("Press any key to update the trigger.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 112)
+            }
+
+            settingsRow("Microphone") {
+                Picker("", selection: microphoneBinding) {
+                    Text("System Default").tag(String?.none)
+                    ForEach(model.microphoneDevices) { device in
+                        Text(device.name).tag(Optional(device.uid))
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 240, alignment: .leading)
+            }
         }
     }
 
@@ -462,7 +465,7 @@ private struct SettingsPanelView: View {
 
     private var aboutTab: some View {
         VStack(spacing: 10) {
-            Image(nsImage: NSApp.applicationIconImage)
+            Image(nsImage: Self.aboutIconImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 64, height: 64)
@@ -483,6 +486,21 @@ private struct SettingsPanelView: View {
                 .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private static var aboutIconImage: NSImage {
+        if let url = Bundle.main.url(forResource: "Douvo", withExtension: "icns"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+
+        let developmentIconURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("assets/Douvo.icns")
+        if let image = NSImage(contentsOf: developmentIconURL) {
+            return image
+        }
+
+        return NSApp.applicationIconImage
     }
 
     private func settingsTitle(_ title: String) -> some View {
