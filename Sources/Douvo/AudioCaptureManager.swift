@@ -35,6 +35,7 @@ final class AudioCaptureManager {
     // Align outbound packets to the doubao web client: 2048 samples @16kHz ≈ 128ms.
     private static let packetSampleCount = 2048
     private static let packetByteCount = packetSampleCount * 2
+    private static let tailSilencePacketCount = 4
     private var pcmAccumulator = Data()
 
     var onAudioData: ((Data) -> Void)?
@@ -84,12 +85,7 @@ final class AudioCaptureManager {
         isCapturing = false
         chunkCount = 0
 
-        // Flush any remaining samples (< one packet) so the tail isn't lost.
-        if !pcmAccumulator.isEmpty {
-            let remainder = pcmAccumulator
-            pcmAccumulator.removeAll(keepingCapacity: true)
-            onAudioData?(remainder)
-        }
+        flushTailAudio()
     }
 
     private func applySelectedInputDevice(to inputNode: AVAudioInputNode) {
@@ -176,5 +172,31 @@ final class AudioCaptureManager {
             }
             onAudioData(Data(packet))
         }
+    }
+
+    private func flushTailAudio() {
+        guard let onAudioData else {
+            pcmAccumulator.removeAll(keepingCapacity: true)
+            return
+        }
+
+        var flushedRemainderBytes = 0
+        if !pcmAccumulator.isEmpty {
+            flushedRemainderBytes = pcmAccumulator.count
+            if pcmAccumulator.count < Self.packetByteCount {
+                pcmAccumulator.append(Data(count: Self.packetByteCount - pcmAccumulator.count))
+            }
+            while !pcmAccumulator.isEmpty {
+                let packet = pcmAccumulator.prefix(Self.packetByteCount)
+                pcmAccumulator.removeFirst(min(Self.packetByteCount, pcmAccumulator.count))
+                onAudioData(Data(packet))
+            }
+        }
+
+        let silencePacket = Data(count: Self.packetByteCount)
+        for _ in 0..<Self.tailSilencePacketCount {
+            onAudioData(silencePacket)
+        }
+        AppLog.info("Audio tail flushed remainderBytes=\(flushedRemainderBytes) silencePackets=\(Self.tailSilencePacketCount)")
     }
 }

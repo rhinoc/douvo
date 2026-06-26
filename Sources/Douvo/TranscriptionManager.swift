@@ -13,8 +13,12 @@ final class TranscriptionManager {
     private var awaitingFinalResult = false
     private var isHandlingConnectionError = false
 
+    private var stopFinalizationWork: DispatchWorkItem?
     private var quietCompletionWork: DispatchWorkItem?
     private var hardCompletionWork: DispatchWorkItem?
+    // Keep the mic alive briefly after stop so the last hardware/input-buffered syllable
+    // reaches the ASR stream before we flush tail silence and send finish.
+    private let stopCaptureTailDelay: TimeInterval = 0.28
     // After the user stops, wait this long with no new results before submitting.
     private let finalQuietInterval: TimeInterval = 1.5
     // Absolute cap on how long we keep spinning after stop, in case finish never arrives.
@@ -192,13 +196,22 @@ final class TranscriptionManager {
     private func stopRecording() {
         AppLog.info("Stop recording requested currentTextChars=\(appState.transcript.count)")
         setRecordingState(.stopping)
-        audioCapture.stopCapture()
-        asrClient.finishSending()
         awaitingFinalResult = true
-        // Spin until the recognizer finishes the tail: complete on `finish`, or when
-        // results go quiet, or at the hard cap if the server never finishes.
-        scheduleQuietCompletion()
-        scheduleHardCompletion()
+        stopFinalizationWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, self.awaitingFinalResult, self.appState.recordingState == .stopping else { return }
+                AppLog.info("Stop capture tail delay elapsed; finishing audio stream")
+                self.audioCapture.stopCapture()
+                self.asrClient.finishSending()
+                // Spin until the recognizer finishes the tail: complete on `finish`, or when
+                // results go quiet, or at the hard cap if the server never finishes.
+                self.scheduleQuietCompletion()
+                self.scheduleHardCompletion()
+            }
+        }
+        stopFinalizationWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + stopCaptureTailDelay, execute: work)
     }
 
     private func scheduleQuietCompletion() {
@@ -228,6 +241,8 @@ final class TranscriptionManager {
     }
 
     private func cancelFinalTimers() {
+        stopFinalizationWork?.cancel()
+        stopFinalizationWork = nil
         quietCompletionWork?.cancel()
         quietCompletionWork = nil
         hardCompletionWork?.cancel()
