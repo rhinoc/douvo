@@ -5,5 +5,16 @@
     <link>https://github.com/rhinoc/douvo</link>
     <description>Most recent Douvo releases.</description>
     <language>en</language>
+
+    <item>
+      <title>Version 0.1.1</title>
+      <sparkle:version>0.1.1</sparkle:version>
+      <pubDate>Fri, 26 Jun 2026 12:37:13 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.1/douvo-0.1.1-macos.dmg"
+        sparkle:edSignature="NI2LcEZwzZ0aRPMjH7Pre2D0xFMqLVWFz9y2bagkSLW3425aYfpbNIR6XDGDgwxUH/FbFiYTtoUR6lQ9EM/6Bw==" length="3630596"
+        type="application/octet-stream"/>
+    </item>
   </channel>
 </rss>
