@@ -50,19 +50,26 @@ Douvo uses Doubao's web product as the authentication and ASR source, but keeps 
 
 ## Install
 
+With Homebrew:
+
+```bash
+brew tap rhinoc/douvo
+brew install --cask douvo
+```
+
 Douvo ships as a macOS disk image. Download the latest **`douvo-<version>-macos.dmg`** from **[GitHub Releases](https://github.com/rhinoc/douvo/releases)**.
 
 1. Open the DMG.
 2. Drag **`Douvo.app`** onto the **Applications** shortcut.
 3. Eject the disk image, then launch **Douvo** from **Applications** or Spotlight.
 
-The DMG contains `Douvo.app` and an **Applications** shortcut only. There is no separate installer or package manager step.
+The DMG contains `Douvo.app` and an **Applications** shortcut only. Homebrew Cask installs the same DMG artifact.
 
 In-app updates are handled by Sparkle and use the same DMG artifact published on GitHub Releases.
 
 ### First launch and Gatekeeper
 
-Browser downloads are tagged with Gatekeeper **quarantine** (`com.apple.quarantine`). If macOS warns that Douvo cannot be opened or is from an unidentified developer, remove quarantine after copying the app to **Applications**.
+Browser and Homebrew downloads can be tagged with Gatekeeper **quarantine** (`com.apple.quarantine`). If macOS warns that Douvo cannot be opened or is from an unidentified developer, remove quarantine after copying or installing the app to **Applications**.
 
 Remove quarantine from the installed app:
 

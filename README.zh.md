@@ -50,19 +50,26 @@ Douvo 使用豆包 Web 产品完成登录和语音识别，但应用本身尽量
 
 ## 安装
 
+使用 Homebrew：
+
+```bash
+brew tap rhinoc/douvo
+brew install --cask douvo
+```
+
 Douvo 以 macOS DMG 形式发布。到 **[GitHub Releases](https://github.com/rhinoc/douvo/releases)** 下载最新的 **`douvo-<version>-macos.dmg`**。
 
 1. 打开 DMG。
 2. 把 **`Douvo.app`** 拖到 **Applications** 快捷方式上。
 3. 弹出磁盘镜像，然后从 **Applications** 或 Spotlight 启动 **Douvo**。
 
-DMG 里只有 `Douvo.app` 和 **Applications** 快捷方式，没有额外安装器或包管理步骤。
+DMG 里只有 `Douvo.app` 和 **Applications** 快捷方式。Homebrew Cask 安装的也是同一个 DMG 产物。
 
 应用内自动更新由 Sparkle 处理，使用的也是 GitHub Releases 上发布的同一个 DMG 文件。
 
 ### 首次启动与 Gatekeeper
 
-浏览器下载的应用会带有 Gatekeeper **quarantine** 标记（`com.apple.quarantine`）。如果 macOS 提示 Douvo 无法打开，或提示来自未识别开发者，请先把 app 拖到 **Applications**，然后移除 quarantine 标记。
+浏览器和 Homebrew 下载的应用都可能带有 Gatekeeper **quarantine** 标记（`com.apple.quarantine`）。如果 macOS 提示 Douvo 无法打开，或提示来自未识别开发者，请先把 app 安装到 **Applications**，然后移除 quarantine 标记。
 
 移除已安装 app 的 quarantine 标记：
 

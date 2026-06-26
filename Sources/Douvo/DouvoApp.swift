@@ -88,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupHotkey() {
         hotkeyManager = HotkeyManager()
-        hotkeyManager.onShortcutChanged = { [weak self] _ in
+        hotkeyManager.onShortcutChanged = { [weak self] in
             self?.rebuildMenu()
         }
         hotkeyManager.onAvailabilityChanged = { [weak self] _, _ in
@@ -208,7 +208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let selectedUID = microphoneDevices.contains { $0.uid == storedUID } ? storedUID : nil
 
         settingsPanel.show(
-            currentShortcut: hotkeyManager.shortcut,
+            currentToggleShortcut: hotkeyManager.toggleShortcut,
+            currentHoldShortcut: hotkeyManager.holdShortcut,
             loginStatus: appState.loginStatus,
             isKeyboardCaptureActive: hotkeyManager.isEventTapActive,
             keyboardCaptureError: hotkeyManager.lastEventTapError,
@@ -216,14 +217,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             logPath: AppLog.fileURL.path,
             microphoneDevices: microphoneDevices,
             selectedMicrophoneUID: selectedUID,
-            onCapture: { [weak self] shortcut in
-                guard let self else { return }
-                self.hotkeyManager.setShortcut(shortcut)
-                self.settingsPanel.complete(with: shortcut)
-                self.rebuildMenu()
+            onCapture: { [weak self] slot, shortcut in
+                guard let self else { return false }
+                let accepted: Bool
+                switch slot {
+                case .toggle:
+                    accepted = self.hotkeyManager.setToggleShortcut(shortcut)
+                case .hold:
+                    accepted = self.hotkeyManager.setHoldShortcut(shortcut)
+                }
+
+                if accepted {
+                    self.settingsPanel.complete(with: shortcut, for: slot)
+                    self.rebuildMenu()
+                } else {
+                    self.settingsPanel.showShortcutConflict(for: slot)
+                }
+                return accepted
             },
-            onReset: { [weak self] in
-                self?.resetTriggerKey()
+            onCaptureStateChanged: { [weak self] isCapturing in
+                self?.hotkeyManager.setShortcutHandlingSuspended(isCapturing)
+            },
+            onResetToggle: { [weak self] in
+                self?.resetToggleTriggerKey()
+            },
+            onClearHold: { [weak self] in
+                self?.clearHoldTriggerKey()
             },
             onSelectMicrophone: { uid in
                 AudioDeviceStore.setSelectedUID(uid)
@@ -257,9 +276,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
     }
 
-    @objc private func resetTriggerKey() {
-        AppLog.info("Trigger reset requested")
-        hotkeyManager.resetShortcutToDefault()
+    @objc private func resetToggleTriggerKey() {
+        AppLog.info("Toggle trigger reset requested")
+        if hotkeyManager.resetShortcutToDefault() {
+            settingsPanel.refreshShortcuts(
+                toggleShortcut: hotkeyManager.toggleShortcut,
+                holdShortcut: hotkeyManager.holdShortcut
+            )
+        } else {
+            settingsPanel.showShortcutConflict(for: .toggle)
+        }
+        rebuildMenu()
+    }
+
+    private func clearHoldTriggerKey() {
+        AppLog.info("Hold trigger clear requested")
+        hotkeyManager.clearHoldShortcut()
+        settingsPanel.refreshShortcuts(
+            toggleShortcut: hotkeyManager.toggleShortcut,
+            holdShortcut: hotkeyManager.holdShortcut
+        )
         rebuildMenu()
     }
 

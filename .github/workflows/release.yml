@@ -1,5 +1,5 @@
 # Auto-release on push to main. Bumps VERSION, builds a DMG, updates Sparkle appcast,
-# uploads a GitHub Release, then commits the generated release metadata.
+# uploads a GitHub Release, updates the Homebrew tap, then commits release metadata.
 name: Release
 
 on:
@@ -46,6 +46,12 @@ jobs:
       - name: Build release DMG
         run: scripts/build-dmg.sh
 
+      - name: Collect DMG metadata
+        id: dmg
+        run: |
+          DMG="dist/douvo-${{ steps.ver.outputs.version }}-macos.dmg"
+          echo "sha256=$(shasum -a 256 "$DMG" | awk '{print $1}')" >>"$GITHUB_OUTPUT"
+
       - name: Update Sparkle appcast
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -71,6 +77,52 @@ jobs:
             ```
 
             More detail: [README — Install](https://github.com/${{ github.repository }}/blob/main/README.md#install) · [SPARKLE.md](https://github.com/${{ github.repository }}/blob/main/SPARKLE.md)
+
+      - name: Check Homebrew tap configuration
+        id: homebrew
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || format('{0}/homebrew-douvo', github.repository_owner) }}
+        run: |
+          echo "repository=${HOMEBREW_TAP_REPOSITORY}" >>"$GITHUB_OUTPUT"
+          if [[ -n "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::Skipping Homebrew tap update because HOMEBREW_TAP_GITHUB_TOKEN is not configured."
+          fi
+
+      - name: Check out Homebrew tap
+        if: steps.homebrew.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.homebrew.outputs.repository }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew cask
+        if: steps.homebrew.outputs.enabled == 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          SHA256: ${{ steps.dmg.outputs.sha256 }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: scripts/update_homebrew_cask.sh homebrew-tap
+
+      - name: Push Homebrew cask
+        if: steps.homebrew.outputs.enabled == 'true'
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/douvo.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew cask already up to date."
+          else
+            git commit -m "Update Douvo to ${VERSION}"
+            git push
+          fi
 
       - name: Commit version bump
         run: scripts/commit_release.sh

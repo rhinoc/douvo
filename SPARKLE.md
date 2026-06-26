@@ -25,7 +25,10 @@ Releases are created from pushes to `main`, following the same pattern as Lofii:
 4. `scripts/update_appcast.sh` signs the DMG with Sparkle `sign_update` and
    appends a new item to `appcast.xml`.
 5. The workflow uploads the DMG to GitHub Releases as `v<version>`.
-6. `scripts/commit_release.sh` commits `VERSION`, `Info.plist`, and
+6. If `HOMEBREW_TAP_GITHUB_TOKEN` is configured, the workflow updates
+   `Casks/douvo.rb` in the Homebrew tap repository using the same DMG URL and
+   SHA-256 checksum.
+7. `scripts/commit_release.sh` commits `VERSION`, `Info.plist`, and
    `appcast.xml` with `chore: auto release <version>`.
 
 The release workflow skips `chore` commits to avoid a release loop.
@@ -56,6 +59,32 @@ gh secret set SPARKLE_ED_PRIVATE_KEY --repo rhinoc/douvo < ~/Desktop/douvo_spark
 ```
 
 Do not commit the exported private key.
+
+## Homebrew Cask
+
+Douvo's release workflow can publish the same GitHub Release DMG to a Homebrew
+tap. By default it targets:
+
+```text
+rhinoc/homebrew-douvo
+```
+
+Create that repository with a `Casks/` directory, then add a repository secret
+to `rhinoc/douvo`:
+
+```text
+HOMEBREW_TAP_GITHUB_TOKEN
+```
+
+The token must be able to push to the tap repository. If the tap lives somewhere
+else, set this repository variable:
+
+```text
+HOMEBREW_TAP_REPOSITORY=owner/homebrew-douvo
+```
+
+When the secret is missing, the release workflow leaves the Homebrew step
+disabled and continues publishing the GitHub Release and Sparkle appcast.
 
 ## Signing and Gatekeeper
 

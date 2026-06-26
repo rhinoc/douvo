@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 final class TranscriptionManager {
+    private static let noRecognizedTextMessage = "没有识别到文字"
+    private static let noRecognizedSpeechMessage = "没有识别到语音"
+    private static let authExpiredMessage = "登录已过期，请重新登录"
+
     private let appState: AppState
     private let webViewManager: WebViewManager
     private let overlayPanel: OverlayPanel
@@ -18,7 +22,7 @@ final class TranscriptionManager {
     private var hardCompletionWork: DispatchWorkItem?
     // Keep the mic alive briefly after stop so the last hardware/input-buffered syllable
     // reaches the ASR stream before we flush tail silence and send finish.
-    private let stopCaptureTailDelay: TimeInterval = 0.28
+    private let stopCaptureTailDelay: TimeInterval = 0.15
     // After the user stops, wait this long with no new results before submitting.
     private let finalQuietInterval: TimeInterval = 1.5
     // Absolute cap on how long we keep spinning after stop, in case finish never arrives.
@@ -47,6 +51,10 @@ final class TranscriptionManager {
                 switch event {
                 case .toggleRecording:
                     self.toggleRecording()
+                case .holdRecordingStarted:
+                    self.startRecordingFromHold()
+                case .holdRecordingEnded:
+                    self.stopRecordingFromHold()
                 case .cancel:
                     self.cancelRecording()
                 }
@@ -65,6 +73,15 @@ final class TranscriptionManager {
             Task { @MainActor in
                 guard let self else { return }
                 AppLog.info("ASR result chars=\(text.count) text=\"\(Self.preview(text))\"")
+                if Self.isNonInputStatusMessage(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    if self.awaitingFinalResult || self.appState.recordingState == .stopping {
+                        self.completeWithoutRecognizedText()
+                    } else {
+                        self.appState.errorMessage = Self.noRecognizedTextMessage
+                        self.appState.transcript = ""
+                    }
+                    return
+                }
                 self.appState.transcript = text
                 if self.appState.recordingState == .starting {
                     self.setRecordingState(.recording)
@@ -103,8 +120,7 @@ final class TranscriptionManager {
                     // We already have text; keep it rather than surfacing a raw socket error.
                     self.completeTranscription()
                 } else if Self.isBenignDisconnect(error) {
-                    self.appState.transcript = "没有识别到语音"
-                    self.resetToIdle(after: 1.2)
+                    self.completeWithoutRecognizedText()
                 } else {
                     self.appState.errorMessage = "网络连接中断，请重试"
                     self.resetToIdle(after: 1.8)
@@ -148,6 +164,22 @@ final class TranscriptionManager {
         case .starting, .recording:
             stopRecording()
         case .stopping:
+            break
+        }
+    }
+
+    private func startRecordingFromHold() {
+        AppLog.info("Hold recording start currentState=\(appState.recordingState)")
+        guard appState.recordingState == .idle else { return }
+        startRecording()
+    }
+
+    private func stopRecordingFromHold() {
+        AppLog.info("Hold recording stop currentState=\(appState.recordingState)")
+        switch appState.recordingState {
+        case .starting, .recording:
+            stopRecording()
+        case .idle, .stopping:
             break
         }
     }
@@ -274,14 +306,13 @@ final class TranscriptionManager {
         cancelFinalTimers()
         let text = appState.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         AppLog.info("Complete transcription chars=\(text.count) text=\"\(Self.preview(text))\"")
-        if !text.isEmpty {
+        if text.isEmpty || Self.isNonInputStatusMessage(text) {
+            completeWithoutRecognizedText()
+        } else {
             appState.lastTranscript = text
             PasteHelper.copyAndPaste(text)
             appState.transcript = ""
             resetToIdle(after: 0)
-        } else {
-            appState.transcript = "没有识别到文字"
-            resetToIdle(after: 1.2)
         }
     }
 
@@ -292,8 +323,31 @@ final class TranscriptionManager {
         audioCapture.stopCapture()
         asrClient.disconnect()
         appState.loginStatus = .notLoggedIn
-        resetToIdle(after: 0)
+        appState.transcript = ""
+        appState.errorMessage = Self.authExpiredMessage
+        resetToIdle(after: 1.5)
         onAuthExpired?()
+    }
+
+    private func completeWithoutRecognizedText() {
+        AppLog.info("Complete without recognized text")
+        awaitingFinalResult = false
+        cancelFinalTimers()
+        audioCapture.stopCapture()
+        asrClient.disconnect()
+        appState.errorMessage = Self.noRecognizedTextMessage
+        appState.transcript = ""
+        setRecordingState(.idle)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            Task { @MainActor in
+                guard let self, self.appState.recordingState == .idle else { return }
+                self.overlayPanel.hide()
+                self.appState.errorMessage = nil
+                self.appState.resetAudioLevels()
+                self.usingCachedParams = false
+                self.isHandlingConnectionError = false
+            }
+        }
     }
 
     private func resetToIdle(after delay: TimeInterval) {
@@ -325,6 +379,10 @@ final class TranscriptionManager {
 
     private static func preview(_ text: String) -> String {
         String(text.prefix(120)).replacingOccurrences(of: "\n", with: "\\n")
+    }
+
+    private static func isNonInputStatusMessage(_ text: String) -> Bool {
+        text == noRecognizedTextMessage || text == noRecognizedSpeechMessage
     }
 
     /// Disconnects that typically happen when there was no real speech (e.g. the user

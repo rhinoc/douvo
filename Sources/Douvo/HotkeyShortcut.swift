@@ -138,19 +138,42 @@ struct HotkeyShortcut: Codable, Equatable {
     }
 }
 
-enum HotkeyShortcutStore {
-    private static let key = "triggerShortcut"
+enum HotkeyShortcutSlot {
+    case toggle
+    case hold
+}
 
-    static func load() -> HotkeyShortcut {
-        guard let data = UserDefaults.standard.data(forKey: key),
+enum HotkeyShortcutStore {
+    private static let toggleKey = "triggerShortcut"
+    private static let holdKey = "holdTriggerShortcut"
+
+    static func loadToggleShortcut() -> HotkeyShortcut {
+        guard let data = UserDefaults.standard.data(forKey: toggleKey),
               let shortcut = try? JSONDecoder().decode(HotkeyShortcut.self, from: data) else {
             return .defaultShortcut
         }
         return shortcut
     }
 
-    static func save(_ shortcut: HotkeyShortcut) {
+    static func saveToggleShortcut(_ shortcut: HotkeyShortcut) {
         guard let data = try? JSONEncoder().encode(shortcut) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        UserDefaults.standard.set(data, forKey: toggleKey)
+    }
+
+    static func loadHoldShortcut() -> HotkeyShortcut? {
+        guard let data = UserDefaults.standard.data(forKey: holdKey) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(HotkeyShortcut.self, from: data)
+    }
+
+    static func saveHoldShortcut(_ shortcut: HotkeyShortcut?) {
+        guard let shortcut else {
+            UserDefaults.standard.removeObject(forKey: holdKey)
+            return
+        }
+
+        guard let data = try? JSONEncoder().encode(shortcut) else { return }
+        UserDefaults.standard.set(data, forKey: holdKey)
     }
 }

@@ -35,7 +35,7 @@ final class AudioCaptureManager {
     // Align outbound packets to the doubao web client: 2048 samples @16kHz ≈ 128ms.
     private static let packetSampleCount = 2048
     private static let packetByteCount = packetSampleCount * 2
-    private static let tailSilencePacketCount = 4
+    private static let tailSilencePacketCount = 2
     private var pcmAccumulator = Data()
 
     var onAudioData: ((Data) -> Void)?

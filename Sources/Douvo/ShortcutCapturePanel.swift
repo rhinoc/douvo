@@ -6,12 +6,14 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
     private var localMonitor: Any?
     private var model: SettingsPanelModel?
-    private var onCapture: ((HotkeyShortcut) -> Void)?
+    private var onCapture: ((HotkeyShortcutSlot, HotkeyShortcut) -> Bool)?
+    private var onCaptureStateChanged: ((Bool) -> Void)?
     private var onCancel: (() -> Void)?
     private var isClosingFromCode = false
 
     func show(
-        currentShortcut: HotkeyShortcut,
+        currentToggleShortcut: HotkeyShortcut,
+        currentHoldShortcut: HotkeyShortcut?,
         loginStatus: LoginStatus,
         isKeyboardCaptureActive: Bool,
         keyboardCaptureError: String?,
@@ -19,8 +21,10 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         logPath: String,
         microphoneDevices: [AudioInputDevice],
         selectedMicrophoneUID: String?,
-        onCapture: @escaping (HotkeyShortcut) -> Void,
-        onReset: @escaping () -> Void,
+        onCapture: @escaping (HotkeyShortcutSlot, HotkeyShortcut) -> Bool,
+        onCaptureStateChanged: @escaping (Bool) -> Void,
+        onResetToggle: @escaping () -> Void,
+        onClearHold: @escaping () -> Void,
         onSelectMicrophone: @escaping (String?) -> Void,
         onLogin: @escaping () -> Void,
         onLogout: @escaping () -> Void,
@@ -34,11 +38,13 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onCancel: @escaping () -> Void
     ) {
         self.onCapture = onCapture
+        self.onCaptureStateChanged = onCaptureStateChanged
         self.onCancel = onCancel
 
         let model = SettingsPanelModel(
-            shortcutName: currentShortcut.settingsDisplayName,
-            resetShortcutName: HotkeyShortcut.defaultShortcut.settingsDisplayName,
+            toggleShortcutName: currentToggleShortcut.settingsDisplayName,
+            holdShortcutName: Self.holdShortcutName(currentHoldShortcut),
+            resetToggleShortcutName: HotkeyShortcut.defaultShortcut.settingsDisplayName,
             loginStatus: loginStatus,
             isKeyboardCaptureActive: isKeyboardCaptureActive,
             keyboardCaptureError: keyboardCaptureError,
@@ -59,7 +65,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
                 self?.stopLocalMonitor()
                 self?.clearFocus()
             },
-            onReset: onReset,
+            onResetToggle: onResetToggle,
+            onClearHold: onClearHold,
             onSelectMicrophone: onSelectMicrophone,
             onLogin: onLogin,
             onLogout: onLogout,
@@ -71,7 +78,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onRequestAccessibility: onRequestAccessibility
         )
         let hosting = NSHostingView(rootView: view)
-        hosting.frame = NSRect(x: 0, y: 0, width: 420, height: 380)
+        hosting.frame = NSRect(x: 0, y: 0, width: 460, height: 420)
 
         if panel == nil {
             let panel = NSPanel(
@@ -100,10 +107,34 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         _ = panel?.makeFirstResponder(nil)
     }
 
-    func complete(with shortcut: HotkeyShortcut) {
-        model?.shortcutName = shortcut.settingsDisplayName
-        model?.isCapturingShortcut = false
+    func complete(with shortcut: HotkeyShortcut, for slot: HotkeyShortcutSlot) {
+        switch slot {
+        case .toggle:
+            model?.toggleShortcutName = shortcut.settingsDisplayName
+        case .hold:
+            model?.holdShortcutName = shortcut.settingsDisplayName
+        }
+        model?.capturingShortcut = nil
+        model?.shortcutErrorMessage = nil
         clearFocus()
+    }
+
+    func showShortcutConflict(for slot: HotkeyShortcutSlot) {
+        model?.capturingShortcut = nil
+        switch slot {
+        case .toggle:
+            model?.shortcutErrorMessage = "Short press and hold-to-talk must use different keys."
+        case .hold:
+            model?.shortcutErrorMessage = "Hold-to-talk and short press must use different keys."
+        }
+        clearFocus()
+    }
+
+    func refreshShortcuts(toggleShortcut: HotkeyShortcut, holdShortcut: HotkeyShortcut?) {
+        model?.toggleShortcutName = toggleShortcut.settingsDisplayName
+        model?.holdShortcutName = Self.holdShortcutName(holdShortcut)
+        model?.capturingShortcut = nil
+        model?.shortcutErrorMessage = nil
     }
 
     func refreshLoginStatus(_ loginStatus: LoginStatus) {
@@ -121,14 +152,22 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         }
     }
 
+    func windowDidResignKey(_ notification: Notification) {
+        guard model?.capturingShortcut != nil else { return }
+        model?.capturingShortcut = nil
+        stopLocalMonitor()
+        clearFocus()
+    }
+
     private func startLocalMonitor() {
         stopLocalMonitor()
+        onCaptureStateChanged?(true)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
 
             if event.type == .keyDown, event.keyCode == 53 {
                 Task { @MainActor in
-                    self.model?.isCapturingShortcut = false
+                    self.model?.capturingShortcut = nil
                     self.stopLocalMonitor()
                     self.clearFocus()
                 }
@@ -140,8 +179,9 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             }
 
             Task { @MainActor in
+                guard let slot = self.model?.capturingShortcut else { return }
                 self.stopLocalMonitor()
-                self.onCapture?(shortcut)
+                _ = self.onCapture?(slot, shortcut)
             }
             return nil
         }
@@ -151,6 +191,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         if let localMonitor {
             NSEvent.removeMonitor(localMonitor)
             self.localMonitor = nil
+            onCaptureStateChanged?(false)
         }
     }
 
@@ -165,15 +206,21 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         isClosingFromCode = false
         onCancel?()
     }
+
+    private static func holdShortcutName(_ shortcut: HotkeyShortcut?) -> String {
+        shortcut?.settingsDisplayName ?? "Not Set"
+    }
 }
 
 private final class SettingsPanelModel: ObservableObject {
-    @Published var shortcutName: String
+    @Published var toggleShortcutName: String
+    @Published var holdShortcutName: String
     @Published var loginStatus: LoginStatus
-    let resetShortcutName: String
+    let resetToggleShortcutName: String
     @Published var isKeyboardCaptureActive: Bool
     @Published var keyboardCaptureError: String?
-    @Published var isCapturingShortcut: Bool = false
+    @Published var capturingShortcut: HotkeyShortcutSlot?
+    @Published var shortcutErrorMessage: String?
     @Published var canCheckForUpdates: Bool = false
     let appVersion: String
     let logPath: String
@@ -181,8 +228,9 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var selectedMicrophoneUID: String?
 
     init(
-        shortcutName: String,
-        resetShortcutName: String,
+        toggleShortcutName: String,
+        holdShortcutName: String,
+        resetToggleShortcutName: String,
         loginStatus: LoginStatus,
         isKeyboardCaptureActive: Bool,
         keyboardCaptureError: String?,
@@ -191,8 +239,9 @@ private final class SettingsPanelModel: ObservableObject {
         microphoneDevices: [AudioInputDevice],
         selectedMicrophoneUID: String?
     ) {
-        self.shortcutName = shortcutName
-        self.resetShortcutName = resetShortcutName
+        self.toggleShortcutName = toggleShortcutName
+        self.holdShortcutName = holdShortcutName
+        self.resetToggleShortcutName = resetToggleShortcutName
         self.loginStatus = loginStatus
         self.isKeyboardCaptureActive = isKeyboardCaptureActive
         self.keyboardCaptureError = keyboardCaptureError
@@ -229,11 +278,32 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+private extension HotkeyShortcutSlot {
+    var accessibilityName: String {
+        switch self {
+        case .toggle:
+            return "Short press"
+        case .hold:
+            return "Hold-to-talk"
+        }
+    }
+
+    var helpName: String {
+        switch self {
+        case .toggle:
+            return "short press"
+        case .hold:
+            return "hold-to-talk"
+        }
+    }
+}
+
 private struct SettingsPanelView: View {
     @ObservedObject var model: SettingsPanelModel
     let onBeginCapture: () -> Void
     let onEndCapture: () -> Void
-    let onReset: () -> Void
+    let onResetToggle: () -> Void
+    let onClearHold: () -> Void
     let onSelectMicrophone: (String?) -> Void
     let onLogin: () -> Void
     let onLogout: () -> Void
@@ -258,7 +328,7 @@ private struct SettingsPanelView: View {
                 .padding(22)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(width: 420, height: 380)
+        .frame(width: 460, height: 420)
     }
 
     private var tabBar: some View {
@@ -272,7 +342,8 @@ private struct SettingsPanelView: View {
 
     private func settingsTabItem(_ tab: SettingsTab) -> some View {
         Button {
-            model.isCapturingShortcut = false
+            model.capturingShortcut = nil
+            model.shortcutErrorMessage = nil
             onEndCapture()
             selectedTab = tab
         } label: {
@@ -283,7 +354,7 @@ private struct SettingsPanelView: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .foregroundColor(selectedTab == tab ? .primary : .secondary)
-            .frame(width: 82, height: 52)
+            .frame(width: 90, height: 52)
             .background(tabBackground(for: tab), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
@@ -311,50 +382,42 @@ private struct SettingsPanelView: View {
 
     private var generalTab: some View {
         VStack(alignment: .leading, spacing: 16) {
-            settingsRow("Trigger") {
-                HStack(spacing: 8) {
-                    Button {
-                        model.isCapturingShortcut = true
-                        onBeginCapture()
-                    } label: {
-                        Text(model.shortcutName)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .frame(width: 178, height: 34)
-                            .background(shortcutBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(model.isCapturingShortcut ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 2)
-                            )
-                            .accessibilityLabel("Current trigger key \(model.shortcutName)")
-                    }
-                    .buttonStyle(.plain)
-                    .focusable(false)
-                    .help("Click to set trigger key")
-
-                    Button {
-                        model.isCapturingShortcut = false
-                        onReset()
-                        model.shortcutName = model.resetShortcutName
+            settingsRow("Short Press") {
+                shortcutButtons(
+                    slot: .toggle,
+                    name: model.toggleShortcutName,
+                    resetIcon: "arrow.counterclockwise",
+                    resetHelp: "Reset short press key",
+                    onReset: {
+                        model.capturingShortcut = nil
+                        model.shortcutErrorMessage = nil
+                        onResetToggle()
+                        model.toggleShortcutName = model.resetToggleShortcutName
                         onEndCapture()
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 34, height: 34)
                     }
-                    .buttonStyle(.plain)
-                    .focusable(false)
-                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .help("Reset trigger key")
-                }
+                )
             }
 
-            if model.isCapturingShortcut {
-                Text("Press any key to update the trigger.")
+            settingsRow("Hold") {
+                shortcutButtons(
+                    slot: .hold,
+                    name: model.holdShortcutName,
+                    resetIcon: "xmark",
+                    resetHelp: "Clear hold-to-talk key",
+                    onReset: {
+                        model.capturingShortcut = nil
+                        model.shortcutErrorMessage = nil
+                        onClearHold()
+                        model.holdShortcutName = "Not Set"
+                        onEndCapture()
+                    }
+                )
+            }
+
+            if let message = shortcutStatusText {
+                Text(message)
                     .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(model.shortcutErrorMessage == nil ? .secondary : .red)
                     .padding(.leading, 112)
             }
 
@@ -372,8 +435,61 @@ private struct SettingsPanelView: View {
         }
     }
 
-    private var shortcutBackground: Color {
-        model.isCapturingShortcut ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.08)
+    private func shortcutButtons(
+        slot: HotkeyShortcutSlot,
+        name: String,
+        resetIcon: String,
+        resetHelp: String,
+        onReset: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                model.capturingShortcut = slot
+                model.shortcutErrorMessage = nil
+                onBeginCapture()
+            } label: {
+                Text(name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(width: 178, height: 34)
+                    .background(shortcutBackground(for: slot), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(model.capturingShortcut == slot ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 2)
+                    )
+                    .accessibilityLabel("\(slot.accessibilityName) key \(name)")
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Click to set \(slot.helpName) key")
+
+            Button(action: onReset) {
+                Image(systemName: resetIcon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .help(resetHelp)
+        }
+    }
+
+    private func shortcutBackground(for slot: HotkeyShortcutSlot) -> Color {
+        model.capturingShortcut == slot ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.08)
+    }
+
+    private var shortcutStatusText: String? {
+        if let shortcutErrorMessage = model.shortcutErrorMessage {
+            return shortcutErrorMessage
+        }
+
+        guard let capturingShortcut = model.capturingShortcut else {
+            return nil
+        }
+        return "Press any key to update \(capturingShortcut.helpName)."
     }
 
     private var microphoneBinding: Binding<String?> {
