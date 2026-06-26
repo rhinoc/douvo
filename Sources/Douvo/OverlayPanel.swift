@@ -72,9 +72,16 @@ private struct OverlayView: View {
     var body: some View {
         VStack(spacing: 8) {
             if let subtitle = subtitleText {
-                SubtitleView(text: subtitle)
+                if isMessageOnly {
+                    SubtitleView(text: subtitle)
+                        .frame(height: OverlayMetrics.pillHeight, alignment: .center)
+                } else {
+                    SubtitleView(text: subtitle)
+                }
             }
-            pill
+            if !isMessageOnly {
+                pill
+            }
         }
         .frame(
             width: OverlayMetrics.containerWidth,
@@ -132,6 +139,10 @@ private struct OverlayView: View {
         }
         let transcript = appState.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         return transcript.isEmpty ? nil : transcript
+    }
+
+    private var isMessageOnly: Bool {
+        appState.recordingState == .idle && appState.errorMessage?.isEmpty == false
     }
 }
 

@@ -505,9 +505,7 @@ private struct SettingsPanelView: View {
     private var accountTab: some View {
         VStack(alignment: .leading, spacing: 16) {
             settingsRow("Status") {
-                Text(model.isLoggedIn ? "Logged in" : "Not logged in")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(model.isLoggedIn ? .primary : .secondary)
+                statusText(model.isLoggedIn ? "Logged in" : "Not logged in", isHealthy: model.isLoggedIn)
             }
 
             settingsRow("Account") {
@@ -540,9 +538,7 @@ private struct SettingsPanelView: View {
     private var diagnoseTab: some View {
         VStack(alignment: .leading, spacing: 16) {
             settingsRow("Keyboard") {
-                Text(model.isKeyboardCaptureActive ? "Active" : "Needs Permission")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(model.isKeyboardCaptureActive ? .green : .orange)
+                statusText(model.isKeyboardCaptureActive ? "Active" : "Needs Permission", isHealthy: model.isKeyboardCaptureActive)
             }
 
             if !model.isKeyboardCaptureActive {
@@ -600,8 +596,20 @@ private struct SettingsPanelView: View {
                 .focusable(false)
                 .disabled(!model.canCheckForUpdates)
                 .padding(.top, 8)
+
+            Link(Self.repositoryURL.absoluteString, destination: Self.repositoryURL)
+                .font(.system(size: 12, weight: .medium))
+                .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private static let repositoryURL = URL(string: "https://github.com/rhinoc/douvo")!
+
+    private func statusText(_ text: String, isHealthy: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(isHealthy ? .green : .orange)
     }
 
     private static var aboutIconImage: NSImage {
