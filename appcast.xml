@@ -7,6 +7,17 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.8</title>
+      <sparkle:version>0.1.8</sparkle:version>
+      <pubDate>Sat, 27 Jun 2026 02:55:18 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.8/douvo-0.1.8-macos.dmg"
+        sparkle:edSignature="xzkDNN30F3XvSb4V9bljntOAggwEYUvdlIHUt0T2j24biAiIdZN7afhed4OjFpzaw5kWNJ0gkj2DZ9ggT4kGCA==" length="3664197"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.7</title>
       <sparkle:version>0.1.7</sparkle:version>
       <pubDate>Fri, 26 Jun 2026 17:14:47 +0000</pubDate>
