@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Douvo needs microphone access to transcribe speech.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Douvo needs accessibility access to capture global shortcuts.</string>
 	<key>SUAutomaticallyUpdate</key>
 	<true/>
 	<key>SUEnableAutomaticChecks</key>

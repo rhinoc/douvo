@@ -27,4 +27,11 @@ jobs:
         run: scripts/code-sign-import.sh
 
       - name: Build app bundle
+        if: github.event_name != 'pull_request'
+        run: scripts/build-app.sh
+
+      - name: Build app bundle for PR
+        if: github.event_name == 'pull_request'
+        env:
+          CODESIGN_IDENTITY: "-"
         run: scripts/build-app.sh
