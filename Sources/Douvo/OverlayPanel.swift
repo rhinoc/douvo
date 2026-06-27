@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 private enum OverlayMetrics {
-    static let pillWidth: CGFloat = 150
+    static let pillWidth: CGFloat = 120
     static let pillHeight: CGFloat = 40
+    static let pillGlowPadding: CGFloat = 5
     // Subtitle floats above the pill and is capped at 3x the pill width.
     static let subtitleMaxWidth: CGFloat = pillWidth * 3
     static let containerWidth: CGFloat = subtitleMaxWidth
@@ -138,47 +139,72 @@ private struct OverlayView: View {
     }
 
     private var pill: some View {
-        HStack(spacing: 10) {
-            Button(action: { appState.onCancelTapped?() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Color.white.opacity(0.85))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(L10n.text(en: "Cancel (Esc)", zh: "取消 (Esc)"))
+        ZStack {
+            Capsule()
+                .stroke(Color.white.opacity(0.1), lineWidth: 4)
+                .frame(width: OverlayMetrics.pillWidth + 4, height: OverlayMetrics.pillHeight + 4)
+                .blur(radius: 3)
 
-            WaveformView(levels: appState.audioLevels, isActive: appState.recordingState == .recording)
-                .frame(maxWidth: .infinity)
-
-            if appState.recordingState == .starting {
-                ProcessingIndicatorView(accessibilityLabel: L10n.text(en: "Starting", zh: "准备中"))
-                    .frame(width: 24, height: 24)
-            } else if appState.recordingState == .stopping {
-                ProcessingIndicatorView(accessibilityLabel: L10n.text(en: "Processing", zh: "处理中"))
-                    .frame(width: 24, height: 24)
-            } else {
-                Button(action: { appState.onSubmitTapped?() }) {
-                    ZStack {
-                        Circle().fill(Color.white)
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.black)
-                    }
-                    .frame(width: 24, height: 24)
-                    .contentShape(Circle())
+            HStack(spacing: 8) {
+                Button(action: { appState.onCancelTapped?() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color.white.opacity(0.85))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(L10n.text(en: "Submit (Enter)", zh: "提交 (Enter)"))
+                .help(L10n.text(en: "Cancel (Esc)", zh: "取消 (Esc)"))
+
+                WaveformView(levels: appState.audioLevels, isActive: appState.recordingState == .recording)
+                    .frame(maxWidth: .infinity)
+
+                if appState.recordingState == .starting {
+                    ProcessingIndicatorView(accessibilityLabel: L10n.text(en: "Starting", zh: "准备中"))
+                        .frame(width: 24, height: 24)
+                } else if appState.recordingState == .stopping {
+                    ProcessingIndicatorView(accessibilityLabel: L10n.text(en: "Processing", zh: "处理中"))
+                        .frame(width: 24, height: 24)
+                } else {
+                    Button(action: { appState.onSubmitTapped?() }) {
+                        ZStack {
+                            Circle().fill(Color.white)
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.black)
+                        }
+                        .frame(width: 24, height: 24)
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.text(en: "Submit (Enter)", zh: "提交 (Enter)"))
+                }
             }
+            .padding(.horizontal, 9)
+            .frame(width: OverlayMetrics.pillWidth, height: OverlayMetrics.pillHeight)
+            .background(.ultraThinMaterial, in: Capsule())
+            .background(Color.black.opacity(0.82), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.34),
+                                Color.white.opacity(0.12),
+                                Color.white.opacity(0.22)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
         }
-        .padding(.horizontal, 10)
-        .frame(width: OverlayMetrics.pillWidth, height: OverlayMetrics.pillHeight)
-        .background(Color.black.opacity(0.62), in: Capsule())
-        .overlay(
-            Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1)
+        .frame(
+            width: OverlayMetrics.pillWidth + OverlayMetrics.pillGlowPadding * 2,
+            height: OverlayMetrics.pillHeight + OverlayMetrics.pillGlowPadding * 2
         )
+        .shadow(color: Color.white.opacity(0.08), radius: 6, x: 0, y: 0)
     }
 
     private var subtitleText: String? {
@@ -257,6 +283,18 @@ private struct WaveformView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black, location: 0.18),
+                        .init(color: .black, location: 0.82),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
         }
         .frame(height: 20)
         .animation(.linear(duration: 0.08), value: levels)
