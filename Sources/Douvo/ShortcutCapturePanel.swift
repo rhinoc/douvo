@@ -304,6 +304,10 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var selectedMicrophoneUID: String?
     @Published var selectedASRProvider: ASRProvider
     @Published var selectedLanguage: AppLanguage
+    @Published var launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
+    @Published var overlayShowsControls = OverlayAppearanceStore.showsControls
+    @Published var overlayShowsBorderLight = OverlayAppearanceStore.showsBorderLight
+    @Published var selectedOverlaySize = OverlayAppearanceStore.size
     @Published var localPostProcessingEnabled = LocalLLMSettingsStore.postProcessingEnabled
     @Published var correctionBackend = CorrectionSettingsStore.backend
     @Published var selectedLocalLLMModel = LocalLLMSettingsStore.selectedModel
@@ -641,103 +645,146 @@ private struct SettingsPanelView: View {
     }
 
     private var generalTab: some View {
-        VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
-            settingsTitle(L10n.text(en: "Shortcuts", zh: "快捷键"))
+        ScrollView {
+            VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
+                settingsTitle(L10n.text(en: "Startup", zh: "启动"))
 
-            settingsSection {
-                settingsListRow(L10n.text(en: "Short Press", zh: "短按")) {
-                    shortcutButtons(
-                        slot: .toggle,
-                        name: model.toggleShortcutName,
-                        resetHelp: L10n.text(en: "Reset short press key", zh: "重置短按按键"),
-                        clearHelp: L10n.text(en: "Clear short press key", zh: "清除短按按键"),
-                        onReset: {
-                            model.capturingShortcut = nil
-                            model.shortcutErrorMessage = nil
-                            onResetToggle()
-                            model.toggleShortcut = HotkeyShortcut.defaultShortcut
-                            model.toggleShortcutName = HotkeyShortcut.defaultShortcut.settingsDisplayName
-                            onEndCapture()
-                        },
-                        onClear: {
-                            model.capturingShortcut = nil
-                            model.shortcutErrorMessage = nil
-                            onClearToggle()
-                            model.toggleShortcut = nil
-                            model.toggleShortcutName = L10n.text(en: "Not Set", zh: "未设置")
-                            onEndCapture()
-                        }
-                    )
-                }
-
-                settingsDivider()
-
-                settingsListRow(L10n.text(en: "Hold", zh: "按住说话")) {
-                    shortcutButtons(
-                        slot: .hold,
-                        name: model.holdShortcutName,
-                        resetHelp: L10n.text(en: "Reset hold-to-talk key", zh: "重置按住说话按键"),
-                        clearHelp: L10n.text(en: "Clear hold-to-talk key", zh: "清除按住说话按键"),
-                        onReset: {
-                            model.capturingShortcut = nil
-                            model.shortcutErrorMessage = nil
-                            onResetHold()
-                            model.holdShortcut = HotkeyShortcut.defaultHoldShortcut
-                            model.holdShortcutName = HotkeyShortcut.defaultHoldShortcut.settingsDisplayName
-                            onEndCapture()
-                        },
-                        onClear: {
-                            model.capturingShortcut = nil
-                            model.shortcutErrorMessage = nil
-                            onClearHold()
-                            model.holdShortcut = nil
-                            model.holdShortcutName = L10n.text(en: "Not Set", zh: "未设置")
-                            onEndCapture()
-                        }
-                    )
-                }
-
-            }
-
-            if let message = shortcutStatusText {
-                Text(message)
-                    .font(.system(size: 12))
-                    .foregroundColor(model.shortcutErrorMessage == nil ? .secondary : .red)
-                    .padding(.horizontal, 14)
-            }
-
-            settingsTitle(L10n.text(en: "Input", zh: "输入"))
-
-            settingsSection {
-                settingsListRow(L10n.text(en: "Microphone", zh: "麦克风")) {
-                    Picker("", selection: microphoneBinding) {
-                        Text(L10n.text(en: "System Default", zh: "系统默认")).tag(String?.none)
-                        ForEach(model.microphoneDevices) { device in
-                            Text(device.name).tag(Optional(device.uid))
-                        }
+                settingsSection {
+                    settingsListRow(L10n.text(en: "Launch at Login", zh: "开机自启动")) {
+                        Toggle("", isOn: launchAtLoginBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: Self.settingsRowContentWidth, alignment: .trailing)
                 }
-            }
 
-            settingsTitle(L10n.text(en: "Interface", zh: "界面"))
+                settingsTitle(L10n.text(en: "Shortcuts", zh: "快捷键"))
 
-            settingsSection {
-                settingsListRow(L10n.text(en: "Language", zh: "语言")) {
-                    Picker("", selection: languageBinding) {
-                        ForEach(AppLanguage.allCases) { language in
-                            Text(language.displayName).tag(language)
-                        }
+                settingsSection {
+                    settingsListRow(L10n.text(en: "Short Press", zh: "短按")) {
+                        shortcutButtons(
+                            slot: .toggle,
+                            name: model.toggleShortcutName,
+                            resetHelp: L10n.text(en: "Reset short press key", zh: "重置短按按键"),
+                            clearHelp: L10n.text(en: "Clear short press key", zh: "清除短按按键"),
+                            onReset: {
+                                model.capturingShortcut = nil
+                                model.shortcutErrorMessage = nil
+                                onResetToggle()
+                                model.toggleShortcut = HotkeyShortcut.defaultShortcut
+                                model.toggleShortcutName = HotkeyShortcut.defaultShortcut.settingsDisplayName
+                                onEndCapture()
+                            },
+                            onClear: {
+                                model.capturingShortcut = nil
+                                model.shortcutErrorMessage = nil
+                                onClearToggle()
+                                model.toggleShortcut = nil
+                                model.toggleShortcutName = L10n.text(en: "Not Set", zh: "未设置")
+                                onEndCapture()
+                            }
+                        )
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 180, alignment: .trailing)
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Hold", zh: "按住说话")) {
+                        shortcutButtons(
+                            slot: .hold,
+                            name: model.holdShortcutName,
+                            resetHelp: L10n.text(en: "Reset hold-to-talk key", zh: "重置按住说话按键"),
+                            clearHelp: L10n.text(en: "Clear hold-to-talk key", zh: "清除按住说话按键"),
+                            onReset: {
+                                model.capturingShortcut = nil
+                                model.shortcutErrorMessage = nil
+                                onResetHold()
+                                model.holdShortcut = HotkeyShortcut.defaultHoldShortcut
+                                model.holdShortcutName = HotkeyShortcut.defaultHoldShortcut.settingsDisplayName
+                                onEndCapture()
+                            },
+                            onClear: {
+                                model.capturingShortcut = nil
+                                model.shortcutErrorMessage = nil
+                                onClearHold()
+                                model.holdShortcut = nil
+                                model.holdShortcutName = L10n.text(en: "Not Set", zh: "未设置")
+                                onEndCapture()
+                            }
+                        )
+                    }
+                }
+
+                if let message = shortcutStatusText {
+                    Text(message)
+                        .font(.system(size: 12))
+                        .foregroundColor(model.shortcutErrorMessage == nil ? .secondary : .red)
+                        .padding(.horizontal, 14)
+                }
+
+                settingsTitle(L10n.text(en: "Input", zh: "输入"))
+
+                settingsSection {
+                    settingsListRow(L10n.text(en: "Microphone", zh: "麦克风")) {
+                        Picker("", selection: microphoneBinding) {
+                            Text(L10n.text(en: "System Default", zh: "系统默认")).tag(String?.none)
+                            ForEach(model.microphoneDevices) { device in
+                                Text(device.name).tag(Optional(device.uid))
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: Self.settingsRowContentWidth, alignment: .trailing)
+                    }
+                }
+
+                settingsTitle(L10n.text(en: "Appearance", zh: "外观"))
+
+                settingsSection {
+                    settingsListRow(L10n.text(en: "Language", zh: "语言")) {
+                        Picker("", selection: languageBinding) {
+                            ForEach(AppLanguage.allCases) { language in
+                                Text(language.displayName).tag(language)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 180, alignment: .trailing)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Overlay Size", zh: "浮窗尺寸")) {
+                        Picker("", selection: overlaySizeBinding) {
+                            ForEach(OverlayAppearanceStore.Size.allCases) { size in
+                                Text(size.displayName).tag(size)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 180, alignment: .trailing)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Controls", zh: "控制按钮")) {
+                        Toggle("", isOn: overlayShowsControlsBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Border Light", zh: "边框流光")) {
+                        Toggle("", isOn: overlayShowsBorderLightBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
                 }
             }
+            .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
         }
-        .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
     }
 
     private func shortcutButtons(
@@ -848,6 +895,54 @@ private struct SettingsPanelView: View {
             set: { newValue in
                 model.selectedMicrophoneUID = newValue
                 onSelectMicrophone(newValue)
+            }
+        )
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { model.launchAtLoginEnabled },
+            set: { newValue in
+                do {
+                    try LaunchAtLoginStore.setEnabled(newValue)
+                    model.launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
+                } catch {
+                    model.launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
+                    model.shortcutErrorMessage = L10n.text(
+                        en: "Launch at login failed: \(error.localizedDescription)",
+                        zh: "设置开机自启动失败：\(error.localizedDescription)"
+                    )
+                }
+            }
+        )
+    }
+
+    private var overlayShowsControlsBinding: Binding<Bool> {
+        Binding(
+            get: { model.overlayShowsControls },
+            set: { newValue in
+                model.overlayShowsControls = newValue
+                OverlayAppearanceStore.showsControls = newValue
+            }
+        )
+    }
+
+    private var overlayShowsBorderLightBinding: Binding<Bool> {
+        Binding(
+            get: { model.overlayShowsBorderLight },
+            set: { newValue in
+                model.overlayShowsBorderLight = newValue
+                OverlayAppearanceStore.showsBorderLight = newValue
+            }
+        )
+    }
+
+    private var overlaySizeBinding: Binding<OverlayAppearanceStore.Size> {
+        Binding(
+            get: { model.selectedOverlaySize },
+            set: { newValue in
+                model.selectedOverlaySize = newValue
+                OverlayAppearanceStore.size = newValue
             }
         )
     }
