@@ -10,14 +10,13 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release-${{ github.repository }}
-  cancel-in-progress: false
-
 jobs:
   release:
+    if: ${{ github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore') }}
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: macos-26
-    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'chore') }}
     steps:
       - uses: actions/checkout@v4
 
