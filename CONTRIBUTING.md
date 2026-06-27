@@ -6,10 +6,15 @@ Thanks for improving Douvo. This is a small native macOS app that touches microp
 
 Requirements:
 
-- macOS 13.0 or newer
+- macOS 14.0 or newer
 - Xcode or a compatible Swift 6 toolchain
 - Git
 - A Doubao account for end-to-end manual testing
+- A local code-signing identity for `./scripts/build-app.sh`
+- Optional Hugging Face network access for local MLX model downloads
+- Optional remote LLM credentials for remote correction testing
+
+Agent-specific workflow notes, local signing setup, prompt-change rules, and privacy guardrails live in **[AGENTS.md](./AGENTS.md)**.
 
 The repo is a Swift Package. `Package.swift` declares an executable target named `Douvo`. SPM is how the source is organized; end users run the generated `.app` bundle.
 
@@ -34,6 +39,8 @@ Build a local app bundle:
 open .build/release/Douvo.app
 ```
 
+`build-app.sh` refuses ad-hoc signing. See **[AGENTS.md](./AGENTS.md)** for local signing setup.
+
 ## Project shape
 
 - `DouvoApp.swift` — app delegate, menu bar item, Settings entry points.
@@ -43,6 +50,14 @@ open .build/release/Douvo.app
 - `TranscriptionManager.swift` — recording lifecycle and transcript completion.
 - `HotkeyManager.swift` / `HotkeyShortcut.swift` — global trigger handling.
 - `PasteHelper.swift` — pasteboard insertion and clipboard restoration.
+- `LocalLLMPostProcessor.swift` — local MLX correction, model download/delete, prompt rendering, cleanup, and fallback.
+- `LocalLLMSettingsStore.swift` — local correction settings, prompt templates, vocabulary, punctuation, and style controls.
+- `RemoteLLMPostProcessor.swift` — remote correction providers, Keychain API keys, backend selection, and remote validation.
+- `PromptLabCommand.swift` — CLI prompt evaluation runner.
+- `PromptSnapshotStore.swift` — local prompt snapshot files for diagnostics.
+- `TranscriptionTrace.swift` — local trace files, timings, and correction metadata.
+- `RecentAudioRecorder.swift` — short local audio recording diagnostics.
+- `LocalMLXRuntimeDiagnostic.swift` — MLX Metal library diagnostics.
 - `ShortcutCapturePanel.swift` — Settings UI.
 - `OverlayPanel.swift` — floating recording overlay.
 
@@ -51,7 +66,9 @@ open .build/release/Douvo.app
 - Open an issue first for large UI, ASR protocol, credential storage, release, or permission-flow changes.
 - Keep pull requests focused on one behavior or one small set of related files.
 - Include tests when changing parsing, shortcut encoding, credential serialization, state machines, or build scripts.
+- Include focused tests when changing vocabulary candidates, fallback normalization, correction cleanup, prompt rendering, or model-list behavior.
 - Update `README.md`, `README.zh.md`, or this file when user-facing setup, permissions, diagnostics, or release behavior changes.
+- Update `docs/local-llm-eval` when prompt variables, supported model raw values, or Prompt Lab config fields change.
 - Manual-test the menu bar flow before submitting UI or recording changes.
 
 ## Code style
@@ -62,6 +79,8 @@ open .build/release/Douvo.app
 - Do not log secrets, full cookies, raw credential values, transcript contents beyond short previews, or private local configuration.
 - Do not add compatibility layers or broad abstractions unless they remove real complexity in the current code.
 
+For prompt and correction changes, follow **[AGENTS.md](./AGENTS.md)**.
+
 ## Credentials and privacy boundaries
 
 Douvo stores extracted Doubao login parameters locally so the app can connect to Doubao Web ASR without keeping a WebView alive. Treat this area as security-sensitive:
@@ -71,6 +90,8 @@ Douvo stores extracted Doubao login parameters locally so the app can connect to
 - Log out should clear stored ASR parameters and Doubao WebView data.
 - Do not send diagnostics to a remote service without an explicit product decision and README update.
 - Do not add analytics by default.
+
+Remote LLM keys and correction trace handling are covered in **[AGENTS.md](./AGENTS.md)**.
 
 ## Manual test checklist
 
@@ -83,6 +104,12 @@ Before release-oriented changes, verify:
 - Trigger key starts and stops recording.
 - Escape cancels recording without inserting text.
 - Final transcript inserts into a focused text field.
+- AI Correction can be toggled on and off without blocking plain ASR insertion.
+- Local model download, selection, deletion, and local-folder model import behave as expected.
+- Remote model add/edit/delete, API-key save, and validation behave as expected.
+- Vocabulary hints, punctuation style, filler-word removal, emotion softening, and output style affect correction as expected.
+- Correction Debug writes a local trace and exposes enough timing/output information for inspection.
+- Prompt Lab smoke tests pass for the affected prompt/model changes.
 - Empty recognition shows the no-text state instead of inserting a toast-like success state.
 - `Copy Last Transcript`, `Copy Login Debug Info`, `Open Log`, and `Copy Log Path` behave as expected.
 - Clipboard restoration does not overwrite user clipboard changes made immediately after insertion.

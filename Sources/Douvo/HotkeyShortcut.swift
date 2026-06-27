@@ -20,6 +20,13 @@ struct HotkeyShortcut: Codable, Equatable {
         displayName: "Right Option"
     )
 
+    static let defaultHoldShortcut = HotkeyShortcut(
+        keyCode: 63,
+        kind: .modifier,
+        flagMask: 0x800000,
+        displayName: "Fn"
+    )
+
     var isModifier: Bool {
         kind == .modifier
     }
@@ -145,9 +152,14 @@ enum HotkeyShortcutSlot {
 
 enum HotkeyShortcutStore {
     private static let toggleKey = "triggerShortcut"
+    private static let toggleDisabledKey = "triggerShortcutDisabled"
     private static let holdKey = "holdTriggerShortcut"
 
-    static func loadToggleShortcut() -> HotkeyShortcut {
+    static func loadToggleShortcut() -> HotkeyShortcut? {
+        if UserDefaults.standard.bool(forKey: toggleDisabledKey) {
+            return nil
+        }
+
         guard let data = UserDefaults.standard.data(forKey: toggleKey),
               let shortcut = try? JSONDecoder().decode(HotkeyShortcut.self, from: data) else {
             return .defaultShortcut
@@ -155,8 +167,15 @@ enum HotkeyShortcutStore {
         return shortcut
     }
 
-    static func saveToggleShortcut(_ shortcut: HotkeyShortcut) {
+    static func saveToggleShortcut(_ shortcut: HotkeyShortcut?) {
+        guard let shortcut else {
+            UserDefaults.standard.set(true, forKey: toggleDisabledKey)
+            UserDefaults.standard.removeObject(forKey: toggleKey)
+            return
+        }
+
         guard let data = try? JSONEncoder().encode(shortcut) else { return }
+        UserDefaults.standard.set(false, forKey: toggleDisabledKey)
         UserDefaults.standard.set(data, forKey: toggleKey)
     }
 

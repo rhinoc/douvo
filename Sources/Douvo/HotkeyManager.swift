@@ -38,7 +38,7 @@ final class HotkeyManager: @unchecked Sendable {
         }
     }
 
-    private(set) var toggleShortcut: HotkeyShortcut {
+    private(set) var toggleShortcut: HotkeyShortcut? {
         didSet {
             HotkeyShortcutStore.saveToggleShortcut(toggleShortcut)
             onShortcutChanged?()
@@ -55,12 +55,12 @@ final class HotkeyManager: @unchecked Sendable {
     init() {
         toggleShortcut = HotkeyShortcutStore.loadToggleShortcut()
         holdShortcut = HotkeyShortcutStore.loadHoldShortcut()
-        if holdShortcut == toggleShortcut {
+        if let toggleShortcut, holdShortcut == toggleShortcut {
             AppLog.error("Hold shortcut duplicated toggle shortcut; clearing hold shortcut")
             holdShortcut = nil
             HotkeyShortcutStore.saveHoldShortcut(nil)
         }
-        AppLog.info("HotkeyManager init toggleShortcut=\(toggleShortcut.displayName) holdShortcut=\(holdShortcut?.displayName ?? "none")")
+        AppLog.info("HotkeyManager init toggleShortcut=\(toggleShortcut?.displayName ?? "none") holdShortcut=\(holdShortcut?.displayName ?? "none")")
         Self.requestAccessibilityPermission()
     }
 
@@ -113,7 +113,7 @@ final class HotkeyManager: @unchecked Sendable {
         CGEvent.tapEnable(tap: tap, enable: true)
         isEventTapActive = true
         lastEventTapError = nil
-        AppLog.info("Hotkey event tap active toggleShortcut=\(toggleShortcut.displayName) holdShortcut=\(holdShortcut?.displayName ?? "none")")
+        AppLog.info("Hotkey event tap active toggleShortcut=\(toggleShortcut?.displayName ?? "none") holdShortcut=\(holdShortcut?.displayName ?? "none")")
         return true
     }
 
@@ -158,6 +158,11 @@ final class HotkeyManager: @unchecked Sendable {
     }
 
     @discardableResult
+    func resetHoldShortcutToDefault() -> Bool {
+        setHoldShortcut(.defaultHoldShortcut)
+    }
+
+    @discardableResult
     func setToggleShortcut(_ shortcut: HotkeyShortcut) -> Bool {
         guard shortcut != holdShortcut else {
             AppLog.error("Rejected duplicate toggle shortcut \(shortcut.displayName)")
@@ -167,6 +172,12 @@ final class HotkeyManager: @unchecked Sendable {
         resetPressedState()
         AppLog.info("Toggle shortcut set to \(shortcut.displayName) keyCode=\(shortcut.keyCode)")
         return true
+    }
+
+    func clearToggleShortcut() {
+        toggleShortcut = nil
+        resetPressedState()
+        AppLog.info("Toggle shortcut cleared")
     }
 
     @discardableResult
@@ -217,7 +228,7 @@ final class HotkeyManager: @unchecked Sendable {
 
     private func handleKeyDown(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        if toggleTriggerDown, keyCode != toggleShortcut.keyCode {
+        if toggleTriggerDown, let toggleShortcut, keyCode != toggleShortcut.keyCode {
             toggleOtherKeyPressed = true
         }
 
@@ -235,7 +246,7 @@ final class HotkeyManager: @unchecked Sendable {
             return nil
         }
 
-        guard !toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode else {
+        guard let toggleShortcut, !toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode else {
             return Unmanaged.passRetained(event)
         }
 
@@ -256,7 +267,7 @@ final class HotkeyManager: @unchecked Sendable {
             return nil
         }
 
-        guard !toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode, toggleTriggerDown else {
+        guard let toggleShortcut, !toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode, toggleTriggerDown else {
             return Unmanaged.passRetained(event)
         }
 
@@ -287,7 +298,7 @@ final class HotkeyManager: @unchecked Sendable {
             return nil
         }
 
-        guard toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode else {
+        guard let toggleShortcut, toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode else {
             return Unmanaged.passRetained(event)
         }
 
@@ -308,12 +319,17 @@ final class HotkeyManager: @unchecked Sendable {
     }
 
     private func fireToggleIfCleanPress() {
+        guard let toggleShortcut else { return }
         guard !toggleOtherKeyPressed else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastToggleTime > debounceInterval {
             lastToggleTime = now
-            AppLog.info("Hotkey toggle fired shortcut=\(toggleShortcut.displayName)")
-            onHotkeyEvent?(.toggleRecording)
+            guard let onHotkeyEvent else {
+                AppLog.error("Hotkey toggle dropped: no handler shortcut=\(toggleShortcut.displayName)")
+                return
+            }
+            AppLog.info("Hotkey toggle fired shortcut=\(toggleShortcut.displayName) handler=true")
+            onHotkeyEvent(.toggleRecording)
         }
     }
 

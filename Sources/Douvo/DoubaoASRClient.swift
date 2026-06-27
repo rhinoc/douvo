@@ -7,9 +7,19 @@ enum DoubaoClient {
 }
 
 final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    enum State: String, Sendable {
+        case idle
+        case connecting
+        case open
+        case finishing
+        case finished
+        case disconnected
+        case failed
+    }
+
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     private var task: URLSessionWebSocketTask?
-    private var isConnected = false
+    private var state: State = .idle
     private var pendingAudio: [Data] = []
     private var queuedAudio: [Data] = []
     private var isSendingAudio = false
@@ -78,7 +88,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         completedSendCount = 0
         receivedMessageCount = 0
         openCallbackSent = false
-        isConnected = false
+        state = .connecting
         lock.unlock()
         socket.resume()
         receive()
@@ -102,7 +112,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             return
         }
 
-        if isConnected, task != nil {
+        if (state == .open || state == .finishing), task != nil {
             queuedAudio.append(data)
             sentAudioCount += 1
             let queuedCount = queuedAudio.count
@@ -115,19 +125,26 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             if shouldStartSending {
                 sendNextAudio()
             }
-        } else {
+        } else if state == .connecting {
             pendingAudio.append(data)
             let pendingCount = pendingAudio.count
             lock.unlock()
             if pendingCount == 1 || pendingCount % 50 == 0 {
                 AppLog.info("ASR audio buffered pending=\(pendingCount) bytes=\(data.count)")
             }
+        } else {
+            let currentState = state
+            lock.unlock()
+            AppLog.info("ASR audio dropped state=\(currentState.rawValue) bytes=\(data.count)")
         }
     }
 
     func finishSending() {
         lock.lock()
         finishRequested = true
+        if state == .connecting || state == .open {
+            state = .finishing
+        }
         let pendingCount = pendingAudio.count
         movePendingAudioToQueueLocked()
         let queuedCount = queuedAudio.count
@@ -141,9 +158,9 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     }
 
     func disconnect() {
-        isConnected = false
         cancelConnectionTimeout()
         lock.lock()
+        state = .disconnected
         let pendingCount = pendingAudio.count
         let queuedCount = queuedAudio.count
         pendingAudio.removeAll()
@@ -159,13 +176,16 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
 
     private func markOpen(reason: String) {
         lock.lock()
-        isConnected = true
+        if state == .connecting {
+            state = .open
+        }
+        let currentState = state
         let flushedCount = movePendingAudioToQueueLocked()
         let queuedCount = queuedAudio.count
         let shouldStartSending = !isSendingAudio
         lock.unlock()
 
-        AppLog.info("ASR flushing buffered audio count=\(flushedCount) queued=\(queuedCount)")
+        AppLog.info("ASR flushing buffered audio state=\(currentState.rawValue) count=\(flushedCount) queued=\(queuedCount)")
         if shouldStartSending {
             sendNextAudio()
         }
@@ -179,8 +199,16 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     private func startConnectionTimeout() {
         connectionTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in
-            guard let self, self.task != nil, self.completedSendCount == 0, self.receivedMessageCount == 0 else { return }
-            AppLog.error("ASR connection timeout isConnected=\(self.isConnected) completedSendCount=0 receivedMessageCount=0 sentAudioCount=\(self.sentAudioCount)")
+            guard let self else { return }
+            self.lock.lock()
+            let hasTask = self.task != nil
+            let state = self.state
+            let completedSendCount = self.completedSendCount
+            let receivedMessageCount = self.receivedMessageCount
+            let sentAudioCount = self.sentAudioCount
+            self.lock.unlock()
+            guard hasTask, completedSendCount == 0, receivedMessageCount == 0 else { return }
+            AppLog.error("ASR connection timeout state=\(state.rawValue) completedSendCount=0 receivedMessageCount=0 sentAudioCount=\(sentAudioCount)")
             self.onError?(NSError(
                 domain: "Douvo.ASR",
                 code: 1001,
@@ -213,7 +241,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             return
         }
 
-        guard isConnected, let socket = task else {
+        guard (state == .open || state == .finishing), let socket = task else {
             lock.unlock()
             return
         }
@@ -242,6 +270,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             if let error {
                 self.lock.lock()
                 self.isSendingAudio = false
+                self.state = .failed
                 self.lock.unlock()
                 AppLog.error("ASR audio send failed error=\(error.localizedDescription)")
                 self.onError?(error)
@@ -265,8 +294,9 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     private func sendFinishFrame(socket: URLSessionWebSocketTask, completedCount: Int, totalCount: Int) {
         // Tell the server we're done only after all locally queued audio frames have
         // been accepted by URLSession, so the recognizer sees the tail before finish.
-        socket.send(.string("{\"event\":\"finish\"}")) { error in
+        socket.send(.string("{\"event\":\"finish\"}")) { [weak self] error in
             if let error {
+                self?.markFailed()
                 AppLog.error("ASR finish frame send failed error=\(error.localizedDescription)")
             } else {
                 AppLog.info("ASR finish frame sent completedSendCount=\(completedCount) sentAudioCount=\(totalCount)")
@@ -279,7 +309,9 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             guard let self else { return }
             switch result {
             case .success(let message):
+                self.lock.lock()
                 self.receivedMessageCount += 1
+                self.lock.unlock()
                 self.cancelConnectionTimeout()
                 switch message {
                 case .string(let text):
@@ -295,8 +327,10 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                 }
                 self.receive()
             case .failure(let error):
-                if self.isConnected {
-                    self.isConnected = false
+                let failure = self.receiveFailureContext(for: error)
+                if failure.shouldSuppress {
+                    AppLog.info("ASR receive ended state=\(failure.state.rawValue) error=\(error.localizedDescription)")
+                } else if failure.wasOpen {
                     AppLog.error("ASR receive failed error=\(error.localizedDescription)")
                     self.onError?(error)
                 } else {
@@ -317,11 +351,14 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         let code = json["code"] as? Int ?? 0
         let event = json["event"] as? String ?? ""
         let message = (json["message"] as? String ?? "").lowercased()
-        AppLog.info("ASR message event=\(event) code=\(code)")
+        let receivedCount = receivedMessageCount
+        if event != "result" || receivedCount == 1 || receivedCount % 50 == 0 {
+            AppLog.info("ASR message count=\(receivedCount) event=\(event) code=\(code)")
+        }
 
         if code != 0 {
             if code == 709599054 || message.contains("auth") || message.contains("login") || message.contains("session") || message.contains("cookie") {
-                isConnected = false
+                markFailed()
                 AppLog.error("ASR auth-like error code=\(code) message=\(message)")
                 onAuthError?()
                 return
@@ -335,9 +372,56 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
            !text.isEmpty {
             onResult?(text)
         } else if event == "finish" {
+            markFinished()
             AppLog.info("ASR finish received")
             onFinish?()
         }
+    }
+
+    private func receiveFailureContext(for error: Error) -> (shouldSuppress: Bool, state: State, wasOpen: Bool) {
+        lock.lock()
+        let previousState = state
+        let wasOpen = state == .open || state == .finishing || state == .finished
+        if state != .disconnected && state != .finished {
+            state = .failed
+        }
+        lock.unlock()
+
+        return (
+            shouldSuppress: Self.isExpectedCloseState(previousState) && Self.isExpectedCloseError(error),
+            state: previousState,
+            wasOpen: wasOpen
+        )
+    }
+
+    private func markFinished() {
+        lock.lock()
+        state = .finished
+        lock.unlock()
+    }
+
+    private func markFailed() {
+        lock.lock()
+        state = .failed
+        lock.unlock()
+    }
+
+    private static func isExpectedCloseState(_ state: State) -> Bool {
+        state == .finishing || state == .finished || state == .disconnected
+    }
+
+    private static func isExpectedCloseError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain, nsError.code == 57 { return true } // ENOTCONN
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorCancelled, NSURLErrorNetworkConnectionLost:
+                return true
+            default:
+                break
+            }
+        }
+        return nsError.localizedDescription.localizedCaseInsensitiveContains("socket is not connected")
     }
 
     func urlSession(
@@ -357,6 +441,10 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     ) {
         let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         AppLog.info("ASR URLSession didClose code=\(closeCode.rawValue) reasonBytes=\(reason?.count ?? 0) reason=\"\(reasonText)\"")
-        isConnected = false
+        lock.lock()
+        if state != .finished && state != .disconnected {
+            state = .disconnected
+        }
+        lock.unlock()
     }
 }

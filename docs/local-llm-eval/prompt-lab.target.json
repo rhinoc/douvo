@@ -1,0 +1,26 @@
+{
+  "name": "target-correction-check",
+  "model": "quality",
+  "runs": 1,
+  "outputDirectory": "/tmp/douvo-prompt-lab",
+  "punctuationStyle": "spaces",
+  "systemPromptFile": "system-prompt.txt",
+  "userPromptFile": "user-message.txt",
+  "vocabulary": [
+    "textarea",
+    "README",
+    "placeholder",
+    "Codex",
+    "scroll",
+    "优化",
+    "会话",
+    "设置页"
+  ],
+  "inputs": [
+    {
+      "id": "setting-page-placeholder",
+      "text": "软件树枝叶里面有问题， place HOLDER 显示很奇怪",
+      "expected": "软件设置页里面有问题 placeholder 显示很奇怪"
+    }
+  ]
+}

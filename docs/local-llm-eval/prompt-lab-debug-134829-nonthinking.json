@@ -1,0 +1,29 @@
+{
+  "name": "debug-134829-nonthinking",
+  "models": [
+    "qwen35EightBit08B",
+    "light",
+    "quality"
+  ],
+  "runs": 3,
+  "outputDirectory": "/tmp/douvo-prompt-lab",
+  "punctuationStyle": "spaces",
+  "reasoningMode": "disabled",
+  "vocabulary": [
+    "textarea",
+    "README",
+    "placeholder",
+    "Codex",
+    "scroll",
+    "优化",
+    "会话",
+    "设置页"
+  ],
+  "inputs": [
+    {
+      "id": "place-holder-question",
+      "text": "你觉得这个 place HOLDER 怎么样",
+      "expected": "你觉得这个 placeholder 怎么样"
+    }
+  ]
+}

@@ -10,10 +10,16 @@ private enum OverlayMetrics {
     static let containerHeight: CGFloat = 104
 }
 
+private enum OverlayAnimation {
+    static let fadeInDuration: TimeInterval = 0.14
+    static let fadeOutDuration: TimeInterval = 0.12
+}
+
 @MainActor
 final class OverlayPanel {
     private let appState: AppState
     private var panel: NSPanel?
+    private var animationGeneration = 0
 
     init(appState: AppState) {
         self.appState = appState
@@ -47,13 +53,50 @@ final class OverlayPanel {
             self.panel = panel
         }
 
-        panel?.setContentSize(NSSize(width: OverlayMetrics.containerWidth, height: OverlayMetrics.containerHeight))
+        guard let panel else { return }
+
+        animationGeneration += 1
+        panel.setContentSize(NSSize(width: OverlayMetrics.containerWidth, height: OverlayMetrics.containerHeight))
         positionPanel()
-        panel?.orderFrontRegardless()
+        guard shouldAnimate else {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            return
+        }
+
+        if !panel.isVisible {
+            panel.alphaValue = 0
+        }
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = OverlayAnimation.fadeInDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 1
+        }
     }
 
     func hide() {
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible else { return }
+
+        animationGeneration += 1
+        let generation = animationGeneration
+        guard shouldAnimate else {
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = OverlayAnimation.fadeOutDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self, weak panel] in
+            Task { @MainActor in
+                guard let self, let panel, self.panel === panel, self.animationGeneration == generation else { return }
+                panel.orderOut(nil)
+                panel.alphaValue = 1
+            }
+        }
     }
 
     private func positionPanel() {
@@ -63,6 +106,10 @@ final class OverlayPanel {
         let size = panel.frame.size
         let origin = NSPoint(x: frame.midX - size.width / 2, y: frame.minY + 28)
         panel.setFrameOrigin(origin)
+    }
+
+    private var shouldAnimate: Bool {
+        !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 }
 
@@ -105,10 +152,11 @@ private struct OverlayView: View {
             WaveformView(levels: appState.audioLevels, isActive: appState.recordingState == .recording)
                 .frame(maxWidth: .infinity)
 
-            if appState.recordingState == .starting || appState.recordingState == .stopping {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white)
+            if appState.recordingState == .starting {
+                ProcessingIndicatorView(accessibilityLabel: "准备中")
+                    .frame(width: 24, height: 24)
+            } else if appState.recordingState == .stopping {
+                ProcessingIndicatorView(accessibilityLabel: "处理中")
                     .frame(width: 24, height: 24)
             } else {
                 Button(action: { appState.onSubmitTapped?() }) {
@@ -143,6 +191,33 @@ private struct OverlayView: View {
 
     private var isMessageOnly: Bool {
         appState.recordingState == .idle && appState.errorMessage?.isEmpty == false
+    }
+}
+
+private struct ProcessingIndicatorView: View {
+    let accessibilityLabel: String
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.18), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: 0.68)
+                .stroke(
+                    Color.white.opacity(0.88),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                )
+                .rotationEffect(.degrees(rotation))
+        }
+        .padding(4)
+        .accessibilityLabel(accessibilityLabel)
+        .onAppear {
+            rotation = 0
+            withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+        }
     }
 }
 

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 swift build -c release --product Douvo
+"$ROOT/scripts/build-mlx-metallib.sh" release >/dev/null
 
 APP="$ROOT/.build/release/Douvo.app"
 CONTENTS="$APP/Contents"
@@ -20,6 +21,19 @@ mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
 cp "$BIN" "$MACOS/Douvo"
 cp "$PLIST_SRC" "$CONTENTS/Info.plist"
 cp "$ROOT/assets/Douvo.icns" "$RESOURCES/Douvo.icns"
+
+MLX_METALLIB="$(dirname "$BIN")/default.metallib"
+if [[ ! -f "$MLX_METALLIB" ]]; then
+  echo "error: MLX metallib not found (expected: $MLX_METALLIB)" >&2
+  exit 1
+fi
+cp "$MLX_METALLIB" "$MACOS/default.metallib"
+cp "$MLX_METALLIB" "$MACOS/mlx.metallib"
+cp "$MLX_METALLIB" "$RESOURCES/default.metallib"
+cp "$MLX_METALLIB" "$RESOURCES/mlx.metallib"
+mkdir -p "$RESOURCES/mlx-swift_Cmlx.bundle"
+cp "$MLX_METALLIB" "$RESOURCES/mlx-swift_Cmlx.bundle/default.metallib"
+
 RESOURCE_BUNDLE="$(dirname "$BIN")/Douvo_Douvo.bundle"
 if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
   echo "error: resource bundle not found (expected: $RESOURCE_BUNDLE)" >&2

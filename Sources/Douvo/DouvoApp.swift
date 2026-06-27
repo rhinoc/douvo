@@ -1,16 +1,30 @@
 import AppKit
 import AVFoundation
+import Dispatch
 import Sparkle
 import SwiftUI
 
 @main
 struct DouvoMain {
     static func main() {
+        if let configURL = PromptLabCommand.configURL(from: CommandLine.arguments) {
+            runPromptLabAndExit(configURL: configURL)
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         app.run()
+    }
+
+    private static func runPromptLabAndExit(configURL: URL) -> Never {
+        Task {
+            let exitCode = await PromptLabCommand.run(configURL: configURL)
+            exit(exitCode)
+        }
+
+        dispatchMain()
     }
 }
 
@@ -43,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupTranscription()
         requestMicrophonePermission()
         rebuildMenu()
+        prewarmSelectedLocalLLMModel(reason: "launch")
     }
 
     private func setupStatusItem() {
@@ -135,6 +150,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func prewarmSelectedLocalLLMModel(reason: String) {
+        guard CorrectionSettingsStore.backend == .local else {
+            AppLog.info("Local LLM prewarm skipped reason=\(reason) backend=\(CorrectionSettingsStore.backend.rawValue)")
+            return
+        }
+        guard LocalLLMPostProcessor.isCorrectionEnabled else {
+            AppLog.info("Local LLM prewarm skipped reason=\(reason) correction_disabled=true")
+            return
+        }
+
+        let model = LocalLLMPostProcessor.configuredModel
+        guard model.isDownloaded else {
+            AppLog.info("Local LLM prewarm skipped reason=\(reason) model=\(model.repositoryID) downloaded=false")
+            return
+        }
+
+        Task {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            AppLog.info("Local LLM prewarm start reason=\(reason) model=\(model.repositoryID)")
+            do {
+                try await LocalLLMPostProcessor.shared.preload(model)
+                AppLog.info("Local LLM prewarm complete reason=\(reason) model=\(model.repositoryID) ms=\(Self.milliseconds(since: startedAt))")
+            } catch {
+                AppLog.error("Local LLM prewarm failed reason=\(reason) model=\(model.repositoryID) error=\(error.localizedDescription)")
+            }
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         rebuildMenu()
     }
@@ -214,7 +257,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             isKeyboardCaptureActive: hotkeyManager.isEventTapActive,
             keyboardCaptureError: hotkeyManager.lastEventTapError,
             appVersion: appVersion,
-            logPath: AppLog.fileURL.path,
             microphoneDevices: microphoneDevices,
             selectedMicrophoneUID: selectedUID,
             onCapture: { [weak self] slot, shortcut in
@@ -241,11 +283,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onResetToggle: { [weak self] in
                 self?.resetToggleTriggerKey()
             },
+            onClearToggle: { [weak self] in
+                self?.clearToggleTriggerKey()
+            },
+            onResetHold: { [weak self] in
+                self?.resetHoldTriggerKey()
+            },
             onClearHold: { [weak self] in
                 self?.clearHoldTriggerKey()
             },
             onSelectMicrophone: { uid in
                 AudioDeviceStore.setSelectedUID(uid)
+            },
+            onDownloadLocalLLMModel: { model, onProgress in
+                try await LocalLLMPostProcessor.shared.preload(model, onProgress: onProgress)
+            },
+            onDeleteLocalLLMModel: { model in
+                AppLog.info("Local LLM delete callback entered model=\(model.repositoryID)")
+                try await LocalLLMPostProcessor.shared.deleteDownloadedModel(model)
+                AppLog.info("Local LLM delete callback returned model=\(model.repositoryID)")
             },
             onLogin: { [weak self] in
                 self?.showLogin()
@@ -297,6 +353,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             holdShortcut: hotkeyManager.holdShortcut
         )
         rebuildMenu()
+    }
+
+    private func clearToggleTriggerKey() {
+        AppLog.info("Toggle trigger clear requested")
+        hotkeyManager.clearToggleShortcut()
+        settingsPanel.refreshShortcuts(
+            toggleShortcut: hotkeyManager.toggleShortcut,
+            holdShortcut: hotkeyManager.holdShortcut
+        )
+        rebuildMenu()
+    }
+
+    private func resetHoldTriggerKey() {
+        AppLog.info("Hold trigger reset requested")
+        if hotkeyManager.resetHoldShortcutToDefault() {
+            settingsPanel.refreshShortcuts(
+                toggleShortcut: hotkeyManager.toggleShortcut,
+                holdShortcut: hotkeyManager.holdShortcut
+            )
+        } else {
+            settingsPanel.showShortcutConflict(for: .hold)
+        }
+        rebuildMenu()
+    }
+
+    private static func milliseconds(since start: TimeInterval) -> Int {
+        Int(((ProcessInfo.processInfo.systemUptime - start) * 1000).rounded())
     }
 
     private var appVersion: String {

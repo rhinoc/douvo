@@ -3,10 +3,9 @@
   <img src="./docs/assets/douvo-icon.png" alt="Douvo icon" width="96" height="96" />
   <h1>Douvo</h1>
   <p>
-    A tiny Doubao-powered voice input app for macOS.<br />
-    Press a key, speak, and drop the transcript into the app you are already using.
+    A lightweight macOS voice input app with Doubao ASR and optional AI correction.<br />
+    Press a key, speak, clean up the transcript, and insert it into the app you are already using.
   </p>
-  <img src="./docs/assets/demo.gif" alt="Douvo demo" width="760" />
   <p>
     <a href="./README.zh.md">中文</a>
     &nbsp;·&nbsp;
@@ -17,14 +16,30 @@
   <br />
 </div>
 
+## Capabilities
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="./docs/assets/demo.gif" width="380" alt="Douvo recording and inserting text into another app" />
+      <br />
+      <sub>Dictate into the current app</sub>
+    </td>
+    <td align="center">
+      <img src="./docs/assets/readme/reduce-emotion.gif" width="380" alt="Douvo reducing emotional wording in AI correction" />
+      <br />
+      <sub>Reduce emotional wording</sub>
+    </td>
+  </tr>
+</table>
+
 ## Features
 
-- 🎙️ **Speak anywhere** — Put your cursor in a text field, trigger recording, and insert the final transcript into the focused app.
-- ⌨️ **One-key trigger** — Use right Option by default, or set another single key from Settings.
-- 🪶 **Small menu bar app** — No main window, no heavy workspace, just a compact menu bar utility and a floating recording overlay.
-- 🧩 **Native macOS pipeline** — `AVAudioEngine` captures audio, `URLSessionWebSocketTask` streams ASR traffic, and AppKit handles the menu bar shell.
-- 🛠️ **Practical Settings** — Configure trigger key, microphone, account login, diagnostics, logs, and app version in one place.
-- 📋 **Clipboard-aware insertion** — Inserts through pasteboard + Command-V and restores the previous text clipboard when it is still safe.
+- 🎙️ **Dictate into any app** — Press one key, speak, and insert the transcript at the current cursor.
+- 🧠 **Clean up before paste** — Optional AI correction can fix wording, punctuation, filler words, tone, and style.
+- 🗂️ **Use your own vocabulary** — Add project terms, paths, names, and product words so corrections match your work.
+- ⚙️ **Choose local or remote AI** — Run MLX models on device, use a local model folder, or connect a remote LLM provider.
+- 🪶 **Keep the workflow lightweight** — Menu bar UI, floating recording overlay, clipboard-aware insertion, and local diagnostics.
 
 ## Disclaimer
 
@@ -34,19 +49,34 @@ This project depends on Doubao's web product behavior. It is **not** an official
 - Doubao may change its website, authentication flow, WebSocket protocol, ASR payload format, rate limits, or access policy at any time.
 - Audio sent for recognition is processed by Doubao's service. Review Doubao's own terms and privacy policy before using this app.
 - Extracted login parameters are stored locally so the app can connect to the ASR WebSocket without keeping a browser window open.
+- If remote AI correction is enabled, transcript text is sent to the provider and endpoint you configure.
+- Local AI correction uses MLX models downloaded from Hugging Face or loaded from a local model folder.
 - Use this project at your own risk. The maintainers are not responsible for service availability, account issues, data loss, policy violations, or other consequences.
 - This project is not affiliated with, endorsed by, or sponsored by Doubao or ByteDance.
 
 ## How it works
 
-Douvo uses Doubao's web product as the authentication and ASR source, but keeps the app itself native and lightweight:
+Douvo uses Doubao's web product for authentication and ASR, then optionally post-processes the final transcript before insertion.
 
-1. **Log in** through an embedded `WKWebView` opened to `https://www.doubao.com/chat`.
-2. **Extract local credentials** from the WebView session: Doubao cookies plus browser identifiers needed by the ASR WebSocket.
-3. **Close the WebView** after login so the app does not need to keep a browser view alive while dictating.
-4. **Stream microphone audio** as 16 kHz PCM chunks to Doubao's streaming ASR endpoint.
-5. **Show partial transcripts** in the floating overlay while recording.
-6. **Insert the final transcript** into the focused app when recording ends.
+```mermaid
+flowchart TD
+    A[Log in with embedded WKWebView] --> B[Store Doubao cookies and browser identifiers locally]
+    B --> C[Trigger recording from the menu bar app]
+    C --> D[Capture microphone audio with AVAudioEngine]
+    D --> E[Stream 16 kHz PCM chunks to Doubao Web ASR]
+    E --> F[Show partial transcript in the floating overlay]
+    F --> G[Receive final ASR transcript]
+    G --> H{AI Correction enabled?}
+    H -- No --> L[Apply deterministic punctuation and vocabulary fallback]
+    H -- Local --> I[Run local MLX model on device]
+    H -- Remote --> J[Send transcript to the configured remote LLM provider]
+    I --> K[Clean, validate, and normalize corrected text]
+    J --> K
+    K --> L
+    L --> M[Insert final text with pasteboard and Command-V]
+    M --> N[Restore clipboard when safe]
+    G --> O[Write local traces, timings, and logs for diagnostics]
+```
 
 ## Install
 
@@ -79,7 +109,13 @@ xattr -dr com.apple.quarantine /Applications/Douvo.app
 
 ### Build locally
 
-For development or local testing, build the app bundle yourself:
+For a quick development run:
+
+```bash
+swift run Douvo
+```
+
+For local app-bundle testing, build the app yourself:
 
 ```bash
 ./scripts/build-app.sh
@@ -92,6 +128,8 @@ The build script creates and signs a local `.app` bundle at:
 .build/release/Douvo.app
 ```
 
+Local bundle builds require a code-signing identity. Set `CODESIGN_IDENTITY`, or install a local identity named `Douvo Local Code Signing`. The script also builds and packages the MLX Metal library required by local AI correction.
+
 For development setup, tests, and release boundaries, see **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
 
 ## Permissions
@@ -102,6 +140,8 @@ macOS needs two permissions before the app can work end to end:
 2. **Accessibility** — required for the global trigger key and Command-V insertion.
 
 If the trigger key does not work after granting Accessibility, quit and reopen the built `.app`. If macOS still ignores the trigger, remove the old Douvo entry from **System Settings -> Privacy & Security -> Accessibility**, add the current app bundle again, then restart the app.
+
+Local AI correction runs on device. Remote AI correction sends transcript text to the configured remote provider and stores that provider's API key in Keychain.
 
 ## Usage
 
@@ -114,6 +154,16 @@ If the trigger key does not work after granting Accessibility, quit and reopen t
 7. Press **Escape** while recording to cancel.
 
 Use **Settings...** from the menu bar to change the trigger key, choose a microphone, refresh credentials, copy diagnostics, or open the app log.
+
+### AI Correction
+
+Open **Settings... -> Correction** to configure transcript post-processing:
+
+- Choose **Local** to download a built-in MLX model or add a local MLX model folder.
+- Choose **Remote** to add a provider, base URL, model name, and API key.
+- Add vocabulary hints for project terms, file paths, product names, and common ASR mistakes.
+- Tune punctuation, filler-word removal, emotion softening, and output style.
+- Use Correction Debug to test a sample input and inspect the local trace.
 
 ## References
 

@@ -31,12 +31,14 @@ final class AudioCaptureManager {
     private var converter: AVAudioConverter?
     private var isCapturing = false
     private var chunkCount = 0
+    private var levelSampleCount = 0
 
     // Align outbound packets to the doubao web client: 2048 samples @16kHz ≈ 128ms.
     private static let packetSampleCount = 2048
     private static let packetByteCount = packetSampleCount * 2
     private static let tailSilencePacketCount = 2
     private var pcmAccumulator = Data()
+    private var debugAudioRecorder: RecentAudioRecorder?
 
     var onAudioData: ((Data) -> Void)?
     var onLevel: ((Float) -> Void)?
@@ -62,14 +64,22 @@ final class AudioCaptureManager {
         }
         self.converter = converter
         chunkCount = 0
+        levelSampleCount = 0
         pcmAccumulator.removeAll(keepingCapacity: true)
+        debugAudioRecorder = RecentAudioRecorder.start()
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.process(buffer)
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            debugAudioRecorder?.finish()
+            debugAudioRecorder = nil
+            throw error
+        }
         audioEngine = engine
         isCapturing = true
         AppLog.info("Audio engine started")
@@ -86,6 +96,8 @@ final class AudioCaptureManager {
         chunkCount = 0
 
         flushTailAudio()
+        debugAudioRecorder?.finish()
+        debugAudioRecorder = nil
     }
 
     private func applySelectedInputDevice(to inputNode: AVAudioInputNode) {
@@ -150,6 +162,10 @@ final class AudioCaptureManager {
             let rms = sqrtf(sumSquares / Float(count))
             // Map RMS to a 0...1 level with a perceptual curve so quiet speech stays visible.
             let level = min(1, sqrtf(rms) * 2.6)
+            levelSampleCount += 1
+            if levelSampleCount == 1 || levelSampleCount % 50 == 0 {
+                AppLog.info("Audio level sample count=\(levelSampleCount) rms=\(rms) level=\(level)")
+            }
             onLevel(level)
         }
 
@@ -170,7 +186,7 @@ final class AudioCaptureManager {
             if chunkCount == 1 || chunkCount % 50 == 0 {
                 AppLog.info("Audio chunk ready count=\(chunkCount) bytes=\(packet.count)")
             }
-            onAudioData(Data(packet))
+            emitAudioPacket(Data(packet), onAudioData: onAudioData)
         }
     }
 
@@ -189,14 +205,19 @@ final class AudioCaptureManager {
             while !pcmAccumulator.isEmpty {
                 let packet = pcmAccumulator.prefix(Self.packetByteCount)
                 pcmAccumulator.removeFirst(min(Self.packetByteCount, pcmAccumulator.count))
-                onAudioData(Data(packet))
+                emitAudioPacket(Data(packet), onAudioData: onAudioData)
             }
         }
 
         let silencePacket = Data(count: Self.packetByteCount)
         for _ in 0..<Self.tailSilencePacketCount {
-            onAudioData(silencePacket)
+            emitAudioPacket(silencePacket, onAudioData: onAudioData)
         }
         AppLog.info("Audio tail flushed remainderBytes=\(flushedRemainderBytes) silencePackets=\(Self.tailSilencePacketCount)")
+    }
+
+    private func emitAudioPacket(_ data: Data, onAudioData: (Data) -> Void) {
+        debugAudioRecorder?.append(data)
+        onAudioData(data)
     }
 }

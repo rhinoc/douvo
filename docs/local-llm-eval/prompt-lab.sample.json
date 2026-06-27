@@ -1,0 +1,54 @@
+{
+  "name": "vocabulary-and-prompt-check",
+  "model": "light",
+  "runs": 1,
+  "punctuationStyle": "spaces",
+  "softenEmotionalLanguage": false,
+  "outputStyle": "original",
+  "outputStyleStrength": "medium",
+  "reasoningMode": "disabled",
+  "systemPromptFile": "system-prompt.txt",
+  "userPromptFile": "user-message.txt",
+  "vocabulary": [
+    "textarea",
+    "README",
+    "placeholder",
+    "Codex",
+    "scroll",
+    "优化",
+    "会话"
+  ],
+  "inputs": [
+    {
+      "id": "placeholder-space-case",
+      "text": "place HOLDER",
+      "expected": "placeholder",
+      "mustContain": "placeholder",
+      "mustNotContain": "place HOLDER",
+      "shouldChange": true,
+      "allowFallback": true
+    },
+    {
+      "id": "placeholder-snake-case",
+      "text": "place_holder",
+      "expected": "placeholder",
+      "mustContain": "placeholder",
+      "mustNotContain": "place_holder",
+      "shouldChange": true
+    },
+    {
+      "id": "textarea-split",
+      "text": "text area 里面 place holder 好像有问题",
+      "expected": "textarea 里面 placeholder 好像有问题",
+      "mustContain": [
+        "textarea",
+        "placeholder"
+      ],
+      "mustNotContain": [
+        "text area",
+        "place holder"
+      ],
+      "shouldChange": true
+    }
+  ]
+}
