@@ -449,7 +449,7 @@ private struct SettingsPanelView: View {
                 onBeginCapture()
             } label: {
                 Text(name)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundColor(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -639,7 +639,7 @@ private struct SettingsPanelView: View {
     ) -> some View {
         HStack(alignment: .center, spacing: 12) {
             Text(label)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12, weight: .regular))
                 .foregroundColor(.secondary)
                 .frame(width: 100, alignment: .trailing)
 
