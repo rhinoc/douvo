@@ -141,9 +141,9 @@ private struct OverlayView: View {
     private var pill: some View {
         ZStack {
             Capsule()
-                .stroke(Color.white.opacity(0.1), lineWidth: 4)
+                .stroke(Color.white.opacity(0.045), lineWidth: 3)
                 .frame(width: OverlayMetrics.pillWidth + 4, height: OverlayMetrics.pillHeight + 4)
-                .blur(radius: 3)
+                .blur(radius: 2.5)
 
             HStack(spacing: 8) {
                 Button(action: { appState.onCancelTapped?() }) {
@@ -189,9 +189,9 @@ private struct OverlayView: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.34),
-                                Color.white.opacity(0.12),
-                                Color.white.opacity(0.22)
+                                Color.white.opacity(0.18),
+                                Color.white.opacity(0.055),
+                                Color.white.opacity(0.1)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -199,12 +199,30 @@ private struct OverlayView: View {
                         lineWidth: 1
                     )
             )
+
+            Group {
+                if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    BorderFlowLightView(phase: 0.18)
+                } else {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                        BorderFlowLightView(phase: borderLightPhase(at: timeline.date))
+                    }
+                }
+            }
+            .frame(width: OverlayMetrics.pillWidth + 4, height: OverlayMetrics.pillHeight + 4)
+            .allowsHitTesting(false)
         }
         .frame(
             width: OverlayMetrics.pillWidth + OverlayMetrics.pillGlowPadding * 2,
             height: OverlayMetrics.pillHeight + OverlayMetrics.pillGlowPadding * 2
         )
-        .shadow(color: Color.white.opacity(0.08), radius: 6, x: 0, y: 0)
+        .shadow(color: Color.white.opacity(0.03), radius: 4, x: 0, y: 0)
+    }
+
+    private func borderLightPhase(at date: Date) -> CGFloat {
+        let duration: TimeInterval = 4.2
+        let progress = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: duration) / duration
+        return CGFloat(progress)
     }
 
     private var subtitleText: String? {
@@ -217,6 +235,135 @@ private struct OverlayView: View {
 
     private var isMessageOnly: Bool {
         appState.recordingState == .idle && appState.errorMessage?.isEmpty == false
+    }
+}
+
+private struct BorderFlowLightView: View {
+    let phase: CGFloat
+
+    var body: some View {
+        Canvas { context, size in
+            drawGlow(in: &context, size: size)
+            drawCore(in: &context, size: size)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func drawGlow(in context: inout GraphicsContext, size: CGSize) {
+        context.drawLayer { layer in
+            layer.addFilter(.blur(radius: 1.2))
+            drawSamples(
+                in: &layer,
+                size: size,
+                sampleCount: 96,
+                bandLength: 0.46,
+                segmentLength: 0.012,
+                baseLineWidth: 1.8,
+                lineWidthBoost: 1.8,
+                baseOpacity: 0.006,
+                opacityBoost: 0.13,
+                color: Color.cyan,
+                falloff: 4.0
+            )
+        }
+    }
+
+    private func drawCore(in context: inout GraphicsContext, size: CGSize) {
+        drawSamples(
+            in: &context,
+            size: size,
+            sampleCount: 112,
+            bandLength: 0.38,
+            segmentLength: 0.01,
+            baseLineWidth: 1.1,
+            lineWidthBoost: 1.0,
+            baseOpacity: 0.004,
+            opacityBoost: 0.26,
+            color: Color.white,
+            falloff: 5.6
+        )
+    }
+
+    private func drawSamples(
+        in context: inout GraphicsContext,
+        size: CGSize,
+        sampleCount: Int,
+        bandLength: CGFloat,
+        segmentLength: CGFloat,
+        baseLineWidth: CGFloat,
+        lineWidthBoost: CGFloat,
+        baseOpacity: Double,
+        opacityBoost: Double,
+        color: Color,
+        falloff: Double
+    ) {
+        let middle = CGFloat(sampleCount - 1) / 2
+
+        for index in 0..<sampleCount {
+            let relative = (CGFloat(index) - middle) / middle
+            let gaussian = exp(-Double(relative * relative) * falloff)
+            let center = normalizedPhase(phase + relative * bandLength / 2)
+            let startPoint = borderPoint(at: center - segmentLength / 2, size: size)
+            let endPoint = borderPoint(at: center + segmentLength / 2, size: size)
+            var path = Path()
+            path.move(to: startPoint)
+            path.addLine(to: endPoint)
+
+            context.stroke(
+                path,
+                with: .color(color.opacity(baseOpacity + opacityBoost * gaussian)),
+                style: StrokeStyle(
+                    lineWidth: baseLineWidth + lineWidthBoost * CGFloat(gaussian),
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+        }
+    }
+
+    private func borderPoint(at phase: CGFloat, size: CGSize) -> CGPoint {
+        let normalized = normalizedPhase(phase)
+        let inset: CGFloat = 1
+        let radius = max(1, (size.height - inset * 2) / 2)
+        let top = inset
+        let bottom = size.height - inset
+        let centerY = size.height / 2
+        let leftCenterX = inset + radius
+        let rightCenterX = size.width - inset - radius
+        let straightLength = max(0, rightCenterX - leftCenterX)
+        let arcLength = CGFloat.pi * radius
+        let perimeter = straightLength * 2 + arcLength * 2
+        var distance = normalized * perimeter
+
+        if distance <= straightLength {
+            return CGPoint(x: rightCenterX - distance, y: top)
+        }
+        distance -= straightLength
+
+        if distance <= arcLength {
+            let angle = -CGFloat.pi / 2 - distance / radius
+            return CGPoint(
+                x: leftCenterX + cos(angle) * radius,
+                y: centerY + sin(angle) * radius
+            )
+        }
+        distance -= arcLength
+
+        if distance <= straightLength {
+            return CGPoint(x: leftCenterX + distance, y: bottom)
+        }
+        distance -= straightLength
+
+        let angle = CGFloat.pi / 2 - distance / radius
+        return CGPoint(
+            x: rightCenterX + cos(angle) * radius,
+            y: centerY + sin(angle) * radius
+        )
+    }
+
+    private func normalizedPhase(_ value: CGFloat) -> CGFloat {
+        let wrapped = value.truncatingRemainder(dividingBy: 1)
+        return wrapped >= 0 ? wrapped : wrapped + 1
     }
 }
 
