@@ -2,7 +2,7 @@
 
 Douvo supports three Doubao ASR recognition paths: `Web`, `Android`, and `Mix`. Choose the path in **Settings... -> Account -> ASR Provider**. The default provider is `Web`.
 
-Both paths are based on observed Doubao client behavior, not an official public Doubao API. Either path may break if Doubao changes authentication, risk controls, WebSocket protocols, audio formats, or response payloads.
+All paths are based on observed Doubao client behavior, not an official public Doubao API. Any path may break if Doubao changes authentication, risk controls, WebSocket protocols, audio formats, or response payloads.
 
 ## Web Provider
 

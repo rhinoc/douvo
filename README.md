@@ -43,12 +43,12 @@
 
 ## Disclaimer
 
-This project depends on Doubao's web product behavior. It is **not** an official Doubao API, SDK, or integration.
+This project depends on observed Doubao web and IME client behavior. It is **not** an official Doubao API, SDK, or integration.
 
 - You need a valid Doubao account and must log in yourself.
-- Doubao may change its website, authentication flow, WebSocket protocol, ASR payload format, rate limits, or access policy at any time.
+- Doubao may change its website, authentication flow, device registration, WebSocket protocols, ASR payload formats, rate limits, or access policy at any time.
 - Audio sent for recognition is processed by Doubao's service. Review Doubao's own terms and privacy policy before using this app.
-- Extracted login parameters are stored locally so the app can connect to the ASR WebSocket without keeping a browser window open.
+- Web login parameters and Android ASR credentials are stored locally so the selected provider can connect without keeping a browser window open.
 - If remote AI correction is enabled, transcript text is sent to the provider and endpoint you configure.
 - Local AI correction uses MLX models downloaded from Hugging Face or loaded from a local model folder.
 - Use this project at your own risk. The maintainers are not responsible for service availability, account issues, data loss, policy violations, or other consequences.
@@ -56,26 +56,31 @@ This project depends on Doubao's web product behavior. It is **not** an official
 
 ## How it works
 
-Douvo uses Doubao's web product for authentication and ASR, then optionally post-processes the final transcript before insertion.
+Douvo supports three Doubao ASR paths: **Web**, **Android**, and **Mix**. The default is **Web**. The Android path follows observed Doubao IME client behavior, and Mix runs Web and Android together before merging the recognition results with AI Correction. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
 
 ```mermaid
 flowchart TD
-    A[Log in with embedded WKWebView] --> B[Store Doubao cookies and browser identifiers locally]
+    A[Choose Web, Android, or Mix ASR provider] --> B[Prepare credentials required by the selected provider]
     B --> C[Trigger recording from the menu bar app]
     C --> D[Capture microphone audio with AVAudioEngine]
-    D --> E[Stream 16 kHz PCM chunks to Doubao Web ASR]
-    E --> F[Show partial transcript in the floating overlay]
-    F --> G[Receive final ASR transcript]
-    G --> H{AI Correction enabled?}
-    H -- No --> L[Apply deterministic punctuation and vocabulary fallback]
-    H -- Local --> I[Run local MLX model on device]
-    H -- Remote --> J[Send transcript to the configured remote LLM provider]
-    I --> K[Clean, validate, and normalize corrected text]
-    J --> K
-    K --> L
-    L --> M[Insert final text with pasteboard and Command-V]
-    M --> N[Restore clipboard when safe]
-    G --> O[Write local traces, timings, and logs for diagnostics]
+    D --> E{Selected ASR path}
+    E -- Web --> F[Stream 16 kHz PCM chunks to Doubao Web ASR]
+    E -- Android --> G[Encode 16 kHz Opus and send Protobuf frames to Doubao Android ASR]
+    E -- Mix --> H[Send PCM to Web ASR and Opus Protobuf frames to Android ASR]
+    F --> I[Show partial transcript in the floating overlay]
+    G --> I
+    H --> I
+    I --> J[Receive final ASR transcript or paired Web and Android transcripts]
+    J --> K{AI Correction enabled?}
+    K -- No --> O[Apply deterministic punctuation and vocabulary fallback]
+    K -- Local --> L[Run local MLX model on device]
+    K -- Remote --> M[Send transcript to the configured remote LLM provider]
+    L --> N[Clean, validate, and normalize corrected text]
+    M --> N
+    N --> O
+    O --> P[Insert final text with pasteboard and Command-V]
+    P --> Q[Restore clipboard when safe]
+    J --> R[Write local traces, timings, and logs for diagnostics]
 ```
 
 ## Requirements
@@ -139,7 +144,7 @@ Local AI correction runs on device. Remote AI correction sends transcript text t
 6. Press the trigger key again to stop and insert the transcript.
 7. Press **Escape** while recording to cancel.
 
-Use **Settings...** from the menu bar to change the trigger key, choose a microphone, refresh credentials, copy diagnostics, or open the app log.
+Use **Settings...** from the menu bar to change the trigger key, choose a microphone, choose the ASR provider, refresh credentials, copy diagnostics, or open the app log.
 
 ### AI Correction
 

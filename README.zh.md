@@ -43,12 +43,12 @@
 
 ## 免责声明
 
-本项目依赖豆包 Web 产品的现有行为，**不是**豆包官方 API、SDK 或官方集成。
+本项目依赖观察到的豆包 Web 和输入法客户端行为，**不是**豆包官方 API、SDK 或官方集成。
 
 - 你需要拥有有效的豆包账号，并自行完成登录。
-- 豆包可能随时调整网页、登录流程、WebSocket 协议、ASR 数据格式、限流规则或访问策略。
+- 豆包可能随时调整网页、登录流程、设备注册、WebSocket 协议、ASR 数据格式、限流规则或访问策略。
 - 语音识别由豆包服务端处理。使用前请自行确认豆包的服务条款和隐私政策。
-- 应用会把提取到的登录参数保存在本机，以便在不常驻浏览器窗口的情况下连接 ASR WebSocket。
+- 应用会把 Web 登录参数和 Android ASR 凭据保存在本机，以便所选 provider 在不常驻浏览器窗口的情况下连接。
 - 如果启用远端 AI 纠错，转写文本会发送到你配置的 provider 和 endpoint。
 - 本地 AI 纠错使用从 Hugging Face 下载或从本地文件夹加载的 MLX 模型。
 - 使用风险由使用者自行承担。维护者不对服务可用性、账号问题、数据损失、违反第三方规则或其他使用后果负责。
@@ -56,26 +56,31 @@
 
 ## 大概原理
 
-Douvo 使用豆包 Web 产品完成登录和语音识别，然后可选使用本地或远端大模型整理最终文本。
+Douvo 支持三种豆包 ASR 路径：**Web**、**Android** 和 **Mix**。默认是 **Web**。Android 路径参考观察到的豆包输入法客户端行为；Mix 会同时运行 Web 和 Android，再用 AI Correction 合并两路识别结果。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
 
 ```mermaid
 flowchart TD
-    A[内嵌 WKWebView 登录豆包] --> B[本地保存豆包 cookies 和浏览器标识]
+    A[选择 Web、Android 或 Mix ASR provider] --> B[准备所选 provider 需要的凭据]
     B --> C[通过菜单栏应用触发录音]
     C --> D[AVAudioEngine 采集麦克风音频]
-    D --> E[发送 16 kHz PCM 分片到豆包 Web ASR]
-    E --> F[悬浮窗显示实时识别结果]
-    F --> G[收到最终 ASR 文本]
-    G --> H{是否开启 AI Correction?}
-    H -- 否 --> L[应用确定性的标点和词库 fallback]
-    H -- 本地 --> I[在设备上运行本地 MLX 模型]
-    H -- 远端 --> J[把文本发送到用户配置的远端 LLM provider]
-    I --> K[清洗、校验并归一化纠错结果]
-    J --> K
-    K --> L
-    L --> M[通过 pasteboard 和 Command-V 插入最终文本]
-    M --> N[安全时恢复原剪贴板文本]
-    G --> O[写入本地 trace、耗时和日志用于诊断]
+    D --> E{所选 ASR 路径}
+    E -- Web --> F[发送 16 kHz PCM 分片到豆包 Web ASR]
+    E -- Android --> G[编码 16 kHz Opus 并用 Protobuf 帧发送到豆包 Android ASR]
+    E -- Mix --> H[同时向 Web ASR 发送 PCM 并向 Android ASR 发送 Opus Protobuf 帧]
+    F --> I[悬浮窗显示实时识别结果]
+    G --> I
+    H --> I
+    I --> J[收到最终 ASR 文本或 Web 与 Android 两路文本]
+    J --> K{是否开启 AI Correction?}
+    K -- 否 --> O[应用确定性的标点和词库 fallback]
+    K -- 本地 --> L[在设备上运行本地 MLX 模型]
+    K -- 远端 --> M[把文本发送到用户配置的远端 LLM provider]
+    L --> N[清洗、校验并归一化纠错结果]
+    M --> N
+    N --> O
+    O --> P[通过 pasteboard 和 Command-V 插入最终文本]
+    P --> Q[安全时恢复原剪贴板文本]
+    J --> R[写入本地 trace、耗时和日志用于诊断]
 ```
 
 ## 系统要求
@@ -139,7 +144,7 @@ open /Applications/Douvo.app
 6. 再按一次触发键，停止录音并插入文本。
 7. 录音过程中按 **Escape** 可以取消。
 
-菜单栏里的 **Settings...** 可以修改触发键、选择麦克风、刷新登录凭据、复制诊断信息或打开日志。
+菜单栏里的 **Settings...** 可以修改触发键、选择麦克风、选择 ASR provider、刷新登录凭据、复制诊断信息或打开日志。
 
 ### AI Correction
 
