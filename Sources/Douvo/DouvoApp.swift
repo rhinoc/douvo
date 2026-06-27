@@ -203,32 +203,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .web:
             switch appState.loginStatus {
             case .checking:
-                menu.addItem(disabledItem("Checking login..."))
+                menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
             case .loggedIn:
-                menu.addItem(disabledItem("Web ASR logged in"))
+                menu.addItem(disabledItem(L10n.text(en: "Web ASR logged in", zh: "Web ASR 已登录")))
             case .notLoggedIn:
-                menu.addItem(NSMenuItem(title: "Log In", action: #selector(showLogin), keyEquivalent: "l"))
+                menu.addItem(NSMenuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l"))
             }
         case .android:
-            menu.addItem(disabledItem("Android ASR"))
+            menu.addItem(disabledItem(L10n.text(en: "Android ASR", zh: "Android ASR")))
         case .mix:
             switch appState.loginStatus {
             case .checking:
-                menu.addItem(disabledItem("Checking login..."))
+                menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
             case .loggedIn:
-                menu.addItem(disabledItem("Mix ASR ready"))
+                menu.addItem(disabledItem(L10n.text(en: "Mix ASR ready", zh: "Mix ASR 已就绪")))
             case .notLoggedIn:
-                menu.addItem(NSMenuItem(title: "Log In", action: #selector(showLogin), keyEquivalent: "l"))
+                menu.addItem(NSMenuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l"))
             }
         }
-        let copyItem = NSMenuItem(title: "Copy Last Transcript", action: #selector(copyLastTranscript), keyEquivalent: "c")
+        let copyItem = NSMenuItem(title: L10n.text(en: "Copy Last Transcript", zh: "复制上一段转写"), action: #selector(copyLastTranscript), keyEquivalent: "c")
         copyItem.isEnabled = !appState.lastTranscript.isEmpty
         menu.addItem(copyItem)
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
-        let updateItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+        menu.addItem(NSMenuItem(title: L10n.text(en: "Settings...", zh: "设置..."), action: #selector(showSettings), keyEquivalent: ","))
+        let updateItem = NSMenuItem(title: L10n.text(en: "Check for Updates...", zh: "检查更新..."), action: #selector(checkForUpdates), keyEquivalent: "")
         updateItem.isEnabled = updaterController.updater.canCheckForUpdates
         menu.addItem(updateItem)
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: L10n.text(en: "Quit", zh: "退出"), action: #selector(quit), keyEquivalent: "q"))
     }
 
     private func disabledItem(_ title: String) -> NSMenuItem {
@@ -326,6 +326,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onSelectASRProvider: { [weak self] provider in
                 ASRProviderStore.selected = provider
                 self?.settingsPanel.refreshLoginStatus(self?.appState.loginStatus ?? .notLoggedIn)
+                self?.rebuildMenu()
+            },
+            onSelectLanguage: { [weak self] language in
+                AppLanguageStore.selected = language
+                self?.settingsPanel.refreshLanguage(language)
                 self?.rebuildMenu()
             },
             onDownloadLocalLLMModel: { model, onProgress in

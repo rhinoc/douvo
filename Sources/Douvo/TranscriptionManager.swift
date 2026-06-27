@@ -2,9 +2,17 @@ import Foundation
 
 @MainActor
 final class TranscriptionManager {
-    private static let noRecognizedTextMessage = "没有识别到文字"
-    private static let noRecognizedSpeechMessage = "没有识别到语音"
-    private static let authExpiredMessage = "登录已过期，请重新登录"
+    private static var noRecognizedTextMessage: String {
+        L10n.text(en: "No text recognized", zh: "没有识别到文字")
+    }
+
+    private static var noRecognizedSpeechMessage: String {
+        L10n.text(en: "No speech recognized", zh: "没有识别到语音")
+    }
+
+    private static var authExpiredMessage: String {
+        L10n.text(en: "Login expired. Please log in again.", zh: "登录已过期，请重新登录")
+    }
 
     private let appState: AppState
     private let webViewManager: WebViewManager
@@ -251,7 +259,7 @@ final class TranscriptionManager {
         } else if Self.isBenignDisconnect(error) {
             completeWithoutRecognizedText()
         } else {
-            appState.errorMessage = "网络连接中断，请重试"
+            appState.errorMessage = L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
             logASRResultSummary(reason: "connection_error")
             finishCurrentTrace(outcome: "failed", metadata: [
                 "reason": "asr_connection_error",
@@ -324,7 +332,7 @@ final class TranscriptionManager {
         var webParams: DoubaoASRParams?
         if provider == .mix, !LocalLLMPostProcessor.isCorrectionEnabled {
             AppLog.error("Start blocked: Mix ASR requires AI Correction")
-            appState.errorMessage = "Mix ASR 需要先开启 AI Correction"
+            appState.errorMessage = L10n.text(en: "Mix ASR requires AI Correction.", zh: "Mix ASR 需要先开启 AI Correction")
             finishCurrentTrace(outcome: "blocked", metadata: ["reason": "mix_requires_ai_correction"])
             resetToIdle(after: 1.8)
             return
@@ -333,7 +341,7 @@ final class TranscriptionManager {
         if provider.usesWebASR {
             guard appState.loginStatus == .loggedIn else {
                 AppLog.error("Start blocked: not logged in")
-                appState.errorMessage = "请先登录豆包"
+                appState.errorMessage = L10n.text(en: "Please log in to Doubao first.", zh: "请先登录豆包")
                 webViewManager.showLoginWindow()
                 finishCurrentTrace(outcome: "blocked", metadata: ["reason": "not_logged_in"])
                 resetToIdle(after: 1.5)
@@ -344,7 +352,7 @@ final class TranscriptionManager {
             guard let params = ASRParamsStore.load() else {
                 transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "missing"])
                 AppLog.error("Start blocked: ASR params missing")
-                appState.errorMessage = "登录参数缺失，请重新登录"
+                appState.errorMessage = L10n.text(en: "Login parameters are missing. Please log in again.", zh: "登录参数缺失，请重新登录")
                 appState.loginStatus = .notLoggedIn
                 webViewManager.showLoginWindow()
                 finishCurrentTrace(outcome: "blocked", metadata: ["reason": "asr_params_missing"])
@@ -649,7 +657,9 @@ final class TranscriptionManager {
         usingCachedParams = false
         cancelActiveSession()
         appState.transcript = ""
-        appState.errorMessage = failedProvider == "web" ? Self.authExpiredMessage : "Android ASR 凭据失效，将在下次录音时重新创建"
+        appState.errorMessage = failedProvider == "web"
+            ? Self.authExpiredMessage
+            : L10n.text(en: "Android ASR credentials expired and will be recreated on the next recording.", zh: "Android ASR 凭据失效，将在下次录音时重新创建")
         logASRResultSummary(reason: "auth_failure")
         finishCurrentTrace(outcome: "failed", metadata: ["reason": "auth_expired"])
         resetToIdle(after: 1.5)

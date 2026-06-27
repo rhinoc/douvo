@@ -29,6 +29,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onClearHold: @escaping () -> Void,
         onSelectMicrophone: @escaping (String?) -> Void,
         onSelectASRProvider: @escaping (ASRProvider) -> Void,
+        onSelectLanguage: @escaping (AppLanguage) -> Void,
         onDownloadLocalLLMModel: @escaping (LocalLLMModel, @escaping @Sendable (Double) -> Void) async throws -> Void,
         onDeleteLocalLLMModel: @escaping (LocalLLMModel) async throws -> Void,
         onLogin: @escaping () -> Void,
@@ -57,7 +58,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             appVersion: appVersion,
             microphoneDevices: microphoneDevices,
             selectedMicrophoneUID: selectedMicrophoneUID,
-            selectedASRProvider: selectedASRProvider
+            selectedASRProvider: selectedASRProvider,
+            selectedLanguage: AppLanguageStore.selected
         )
         model.canCheckForUpdates = canCheckForUpdates
         self.model = model
@@ -77,6 +79,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onClearHold: onClearHold,
             onSelectMicrophone: onSelectMicrophone,
             onSelectASRProvider: onSelectASRProvider,
+            onSelectLanguage: onSelectLanguage,
             onDownloadLocalLLMModel: onDownloadLocalLLMModel,
             onDeleteLocalLLMModel: onDeleteLocalLLMModel,
             onLogin: onLogin,
@@ -98,7 +101,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "Settings"
+            panel.title = L10n.text(en: "Settings", zh: "设置")
             panel.backgroundColor = NSColor.windowBackgroundColor
             panel.isOpaque = true
             panel.hasShadow = true
@@ -110,6 +113,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         }
 
         panel?.contentView = hosting
+        panel?.title = L10n.text(en: "Settings", zh: "设置")
         panel?.setContentSize(hosting.frame.size)
         panel?.center()
         panel?.makeKeyAndOrderFront(nil)
@@ -134,9 +138,9 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         model?.capturingShortcut = nil
         switch slot {
         case .toggle:
-            model?.shortcutErrorMessage = "Short press and hold-to-talk must use different keys."
+            model?.shortcutErrorMessage = L10n.text(en: "Short press and hold-to-talk must use different keys.", zh: "短按和按住说话必须使用不同按键。")
         case .hold:
-            model?.shortcutErrorMessage = "Hold-to-talk and short press must use different keys."
+            model?.shortcutErrorMessage = L10n.text(en: "Hold-to-talk and short press must use different keys.", zh: "按住说话和短按必须使用不同按键。")
         }
         clearFocus()
     }
@@ -155,6 +159,11 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
     func refreshKeyboardCaptureState(isActive: Bool, error: String?) {
         model?.isKeyboardCaptureActive = isActive
         model?.keyboardCaptureError = error
+    }
+
+    func refreshLanguage(_ language: AppLanguage) {
+        model?.selectedLanguage = language
+        panel?.title = L10n.text(en: "Settings", zh: "设置")
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -219,7 +228,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
     }
 
     private static func shortcutName(_ shortcut: HotkeyShortcut?) -> String {
-        shortcut?.settingsDisplayName ?? "Not Set"
+        shortcut?.settingsDisplayName ?? L10n.text(en: "Not Set", zh: "未设置")
     }
 
     private static func holdShortcutName(_ shortcut: HotkeyShortcut?) -> String {
@@ -286,6 +295,7 @@ private final class SettingsPanelModel: ObservableObject {
     let microphoneDevices: [AudioInputDevice]
     @Published var selectedMicrophoneUID: String?
     @Published var selectedASRProvider: ASRProvider
+    @Published var selectedLanguage: AppLanguage
     @Published var localPostProcessingEnabled = LocalLLMSettingsStore.postProcessingEnabled
     @Published var correctionBackend = CorrectionSettingsStore.backend
     @Published var selectedLocalLLMModel = LocalLLMSettingsStore.selectedModel
@@ -314,7 +324,8 @@ private final class SettingsPanelModel: ObservableObject {
         appVersion: String,
         microphoneDevices: [AudioInputDevice],
         selectedMicrophoneUID: String?,
-        selectedASRProvider: ASRProvider
+        selectedASRProvider: ASRProvider,
+        selectedLanguage: AppLanguage
     ) {
         self.toggleShortcutName = toggleShortcutName
         self.holdShortcutName = holdShortcutName
@@ -327,6 +338,7 @@ private final class SettingsPanelModel: ObservableObject {
         self.microphoneDevices = microphoneDevices
         self.selectedMicrophoneUID = selectedMicrophoneUID
         self.selectedASRProvider = selectedASRProvider
+        self.selectedLanguage = selectedLanguage
     }
 
     var isLoggedIn: Bool {
@@ -348,7 +360,9 @@ private final class SettingsPanelModel: ObservableObject {
     }
 
     var selectedLocalModelStatusText: String {
-        canEnableLocalPostProcessing ? "Ready" : "Not Downloaded"
+        canEnableLocalPostProcessing
+            ? L10n.text(en: "Ready", zh: "已就绪")
+            : L10n.text(en: "Not Downloaded", zh: "未下载")
     }
 
     var selectedLocalModelStatusIsHealthy: Bool {
@@ -369,13 +383,28 @@ private final class SettingsPanelModel: ObservableObject {
 }
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general = "General"
-    case account = "Account"
-    case advanced = "Correction"
-    case diagnose = "Diagnose"
-    case about = "About"
+    case general
+    case account
+    case advanced
+    case diagnose
+    case about
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general:
+            L10n.text(en: "General", zh: "通用")
+        case .account:
+            L10n.text(en: "Account", zh: "账号")
+        case .advanced:
+            L10n.text(en: "Correction", zh: "纠错")
+        case .diagnose:
+            L10n.text(en: "Diagnose", zh: "诊断")
+        case .about:
+            L10n.text(en: "About", zh: "关于")
+        }
+    }
 
     var iconName: String {
         switch self {
@@ -466,18 +495,18 @@ private extension HotkeyShortcutSlot {
     var accessibilityName: String {
         switch self {
         case .toggle:
-            return "Short press"
+            return L10n.text(en: "Short press", zh: "短按")
         case .hold:
-            return "Hold-to-talk"
+            return L10n.text(en: "Hold-to-talk", zh: "按住说话")
         }
     }
 
     var helpName: String {
         switch self {
         case .toggle:
-            return "short press"
+            return L10n.text(en: "short press", zh: "短按")
         case .hold:
-            return "hold-to-talk"
+            return L10n.text(en: "hold-to-talk", zh: "按住说话")
         }
     }
 }
@@ -492,6 +521,7 @@ private struct SettingsPanelView: View {
     let onClearHold: () -> Void
     let onSelectMicrophone: (String?) -> Void
     let onSelectASRProvider: (ASRProvider) -> Void
+    let onSelectLanguage: (AppLanguage) -> Void
     let onDownloadLocalLLMModel: (LocalLLMModel, @escaping @Sendable (Double) -> Void) async throws -> Void
     let onDeleteLocalLLMModel: (LocalLLMModel) async throws -> Void
     let onLogin: () -> Void
@@ -569,7 +599,7 @@ private struct SettingsPanelView: View {
                 Image(systemName: tab.iconName)
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: 20, height: 18, alignment: .center)
-                Text(tab.rawValue)
+                Text(tab.title)
                     .font(.system(size: 11, weight: .semibold))
                     .frame(height: 13, alignment: .center)
             }
@@ -604,15 +634,15 @@ private struct SettingsPanelView: View {
 
     private var generalTab: some View {
         VStack(alignment: .leading, spacing: 10) {
-            settingsTitle("Shortcuts")
+            settingsTitle(L10n.text(en: "Shortcuts", zh: "快捷键"))
 
             settingsSection {
-                settingsListRow("Short Press") {
+                settingsListRow(L10n.text(en: "Short Press", zh: "短按")) {
                     shortcutButtons(
                         slot: .toggle,
                         name: model.toggleShortcutName,
-                        resetHelp: "Reset short press key",
-                        clearHelp: "Clear short press key",
+                        resetHelp: L10n.text(en: "Reset short press key", zh: "重置短按按键"),
+                        clearHelp: L10n.text(en: "Clear short press key", zh: "清除短按按键"),
                         onReset: {
                             model.capturingShortcut = nil
                             model.shortcutErrorMessage = nil
@@ -624,7 +654,7 @@ private struct SettingsPanelView: View {
                             model.capturingShortcut = nil
                             model.shortcutErrorMessage = nil
                             onClearToggle()
-                            model.toggleShortcutName = "Not Set"
+                            model.toggleShortcutName = L10n.text(en: "Not Set", zh: "未设置")
                             onEndCapture()
                         }
                     )
@@ -632,12 +662,12 @@ private struct SettingsPanelView: View {
 
                 settingsDivider()
 
-                settingsListRow("Hold") {
+                settingsListRow(L10n.text(en: "Hold", zh: "按住说话")) {
                     shortcutButtons(
                         slot: .hold,
                         name: model.holdShortcutName,
-                        resetHelp: "Reset hold-to-talk key",
-                        clearHelp: "Clear hold-to-talk key",
+                        resetHelp: L10n.text(en: "Reset hold-to-talk key", zh: "重置按住说话按键"),
+                        clearHelp: L10n.text(en: "Clear hold-to-talk key", zh: "清除按住说话按键"),
                         onReset: {
                             model.capturingShortcut = nil
                             model.shortcutErrorMessage = nil
@@ -649,7 +679,7 @@ private struct SettingsPanelView: View {
                             model.capturingShortcut = nil
                             model.shortcutErrorMessage = nil
                             onClearHold()
-                            model.holdShortcutName = "Not Set"
+                            model.holdShortcutName = L10n.text(en: "Not Set", zh: "未设置")
                             onEndCapture()
                         }
                     )
@@ -664,12 +694,12 @@ private struct SettingsPanelView: View {
                     .padding(.horizontal, 14)
             }
 
-            settingsTitle("Input")
+            settingsTitle(L10n.text(en: "Input", zh: "输入"))
 
             settingsSection {
-                settingsListRow("Microphone") {
+                settingsListRow(L10n.text(en: "Microphone", zh: "麦克风")) {
                     Picker("", selection: microphoneBinding) {
-                        Text("System Default").tag(String?.none)
+                        Text(L10n.text(en: "System Default", zh: "系统默认")).tag(String?.none)
                         ForEach(model.microphoneDevices) { device in
                             Text(device.name).tag(Optional(device.uid))
                         }
@@ -677,6 +707,19 @@ private struct SettingsPanelView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 240, alignment: .leading)
+                }
+
+                settingsDivider()
+
+                settingsListRow(L10n.text(en: "Language", zh: "语言")) {
+                    Picker("", selection: languageBinding) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.displayName).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 180, alignment: .trailing)
                 }
             }
         }
@@ -708,11 +751,11 @@ private struct SettingsPanelView: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(shortcutBorder(for: slot), lineWidth: 1)
                     )
-                    .accessibilityLabel("\(slot.accessibilityName) key \(name)")
+                    .accessibilityLabel(L10n.text(en: "\(slot.accessibilityName) key \(name)", zh: "\(slot.accessibilityName)按键 \(name)"))
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help("Click to set \(slot.helpName) key")
+            .help(L10n.text(en: "Click to set \(slot.helpName) key", zh: "点击设置\(slot.helpName)按键"))
 
             shortcutIconButton(
                 systemName: "arrow.counterclockwise",
@@ -758,7 +801,7 @@ private struct SettingsPanelView: View {
     }
 
     private func shortcutForeground(for name: String) -> Color {
-        name == "Not Set" ? .secondary : .primary
+        name == L10n.text(en: "Not Set", zh: "未设置") || name == "Not Set" || name == "未设置" ? .secondary : .primary
     }
 
     private var shortcutStatusText: String? {
@@ -769,7 +812,20 @@ private struct SettingsPanelView: View {
         guard let capturingShortcut = model.capturingShortcut else {
             return nil
         }
-        return "Press any key to update \(capturingShortcut.helpName)."
+        return L10n.text(
+            en: "Press any key to update \(capturingShortcut.helpName).",
+            zh: "按任意键更新\(capturingShortcut.helpName)。"
+        )
+    }
+
+    private var languageBinding: Binding<AppLanguage> {
+        Binding(
+            get: { model.selectedLanguage },
+            set: { newValue in
+                model.selectedLanguage = newValue
+                onSelectLanguage(newValue)
+            }
+        )
     }
 
     private var microphoneBinding: Binding<String?> {
@@ -797,7 +853,7 @@ private struct SettingsPanelView: View {
             settingsTitle("Doubao")
 
             settingsSection {
-                settingsListRow("ASR Provider") {
+                settingsListRow(L10n.text(en: "ASR Provider", zh: "ASR Provider")) {
                     Picker("", selection: asrProviderBinding) {
                         ForEach(ASRProvider.allCases) { provider in
                             Text(provider.displayName).tag(provider)
@@ -810,72 +866,72 @@ private struct SettingsPanelView: View {
 
                 settingsDivider()
 
-                settingsListRow("Status") {
+                settingsListRow(L10n.text(en: "Status", zh: "状态")) {
                     switch model.selectedASRProvider {
                     case .web:
-                        statusText(model.loginStatus == .loggedIn ? "Logged in" : "Not logged in", isHealthy: model.loginStatus == .loggedIn)
+                        statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Logged in", zh: "已登录") : L10n.text(en: "Not logged in", zh: "未登录"), isHealthy: model.loginStatus == .loggedIn)
                     case .android:
-                        statusText("Automatic", isHealthy: true)
+                        statusText(L10n.text(en: "Automatic", zh: "自动"), isHealthy: true)
                     case .mix:
-                        statusText(model.loginStatus == .loggedIn ? "Web logged in + Android automatic" : "Web not logged in", isHealthy: model.loginStatus == .loggedIn)
+                        statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Web logged in + Android automatic", zh: "Web 已登录 + Android 自动") : L10n.text(en: "Web not logged in", zh: "Web 未登录"), isHealthy: model.loginStatus == .loggedIn)
                     }
                 }
 
                 settingsDivider()
 
-                settingsListRow("Account") {
+                settingsListRow(L10n.text(en: "Account", zh: "账号")) {
                     if model.selectedASRProvider == .android {
-                        Button("Reset Android Credentials") {
+                        Button(L10n.text(en: "Reset Android Credentials", zh: "重置 Android 凭据")) {
                             DoubaoAndroidCredentialStore.clear()
                         }
                         .focusable(false)
-                        .help("Clear cached Android IME credentials. They will be recreated on the next recording.")
+                        .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
                     } else if model.selectedASRProvider == .mix {
                         HStack(spacing: 8) {
                             if model.loginStatus == .loggedIn {
-                                Button("Refresh Web", action: onRepairLogin)
+                                Button(L10n.text(en: "Refresh Web", zh: "刷新 Web"), action: onRepairLogin)
                                     .focusable(false)
 
-                                Button("Log Out") {
+                                Button(L10n.text(en: "Log Out", zh: "退出登录")) {
                                     onLogout()
                                     model.loginStatus = .notLoggedIn
                                 }
                                 .focusable(false)
                             } else {
-                                Button("Log In", action: onLogin)
+                                Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
                                     .focusable(false)
                             }
 
-                            Button("Reset Android") {
+                            Button(L10n.text(en: "Reset Android", zh: "重置 Android")) {
                                 DoubaoAndroidCredentialStore.clear()
                             }
                             .focusable(false)
-                            .help("Clear cached Android IME credentials. They will be recreated on the next recording.")
+                            .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
                         }
                     } else if model.loginStatus == .loggedIn {
                         HStack(spacing: 8) {
-                            Button("Refresh Credentials", action: onRepairLogin)
+                            Button(L10n.text(en: "Refresh Credentials", zh: "刷新凭据"), action: onRepairLogin)
                                 .focusable(false)
 
-                            Button("Log Out") {
+                            Button(L10n.text(en: "Log Out", zh: "退出登录")) {
                                 onLogout()
                                 model.loginStatus = .notLoggedIn
                             }
                             .focusable(false)
                         }
                     } else {
-                        Button("Log In", action: onLogin)
+                        Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
                             .focusable(false)
                     }
                 }
 
                 settingsDivider()
 
-                settingsListRow("Debug") {
-                    Button("Copy Login Debug Info", action: onCopyLoginDebugInfo)
+                settingsListRow(L10n.text(en: "Debug", zh: "调试")) {
+                    Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: onCopyLoginDebugInfo)
                         .focusable(false)
                         .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
-                        .help("Copy redacted login state, cookie names, and local credential paths.")
+                        .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
                 }
             }
         }
@@ -885,10 +941,10 @@ private struct SettingsPanelView: View {
     private var advancedTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                settingsTitle("Basic")
+                settingsTitle(L10n.text(en: "Basic", zh: "基础"))
 
                 settingsSection {
-                    correctionListRow("Punctuation", contentAlignment: .trailing) {
+                    correctionListRow(L10n.text(en: "Punctuation", zh: "标点"), contentAlignment: .trailing) {
                         Picker("", selection: punctuationStyleBinding) {
                             ForEach(PunctuationStyle.allCases) { style in
                                 Text(style.displayName).tag(style)
@@ -901,7 +957,7 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    correctionListRow("Vocabularies", height: nil) {
+                    correctionListRow(L10n.text(en: "Vocabularies", zh: "词库"), height: nil) {
                         vocabularyChipEditor
                     }
                 }
@@ -909,18 +965,18 @@ private struct SettingsPanelView: View {
                 settingsTitle("AI")
 
                 settingsSection {
-                    correctionListRow("Enable", contentAlignment: .trailing) {
+                    correctionListRow(L10n.text(en: "Enable", zh: "启用"), contentAlignment: .trailing) {
                         Toggle("", isOn: localPostProcessingBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
                             .disabled(!model.canEnablePostProcessing)
-                            .help("Use the selected correction backend for transcript correction. Punctuation style still applies when this is off.")
+                            .help(L10n.text(en: "Use the selected correction backend for transcript correction. Punctuation style still applies when this is off.", zh: "使用所选纠错后端整理转写。关闭时仍会应用标点样式。"))
                     }
 
                     settingsDivider()
 
-                    correctionListRow("Backend", contentAlignment: .trailing) {
+                    correctionListRow(L10n.text(en: "Backend", zh: "后端"), contentAlignment: .trailing) {
                         Picker("", selection: correctionBackendBinding) {
                             ForEach(CorrectionBackend.allCases) { backend in
                                 Text(backend.displayName).tag(backend)
@@ -942,7 +998,7 @@ private struct SettingsPanelView: View {
                     settingsDivider()
 
                     correctionListRow(
-                        "Remove Filler Words",
+                        L10n.text(en: "Remove Filler Words", zh: "去水词"),
                         labelWidth: 132,
                         contentAlignment: .trailing
                     ) {
@@ -951,13 +1007,13 @@ private struct SettingsPanelView: View {
                             .toggleStyle(.switch)
                             .controlSize(.small)
                             .disabled(!model.localPostProcessingEnabled)
-                            .help("Remove filler words and brief hesitations while preserving meaning.")
+                            .help(L10n.text(en: "Remove filler words and brief hesitations while preserving meaning.", zh: "在保留语义的同时移除水词和短暂停顿。"))
                     }
 
                     settingsDivider()
 
                     correctionListRow(
-                        "Soften Emotion",
+                        L10n.text(en: "Soften Emotion", zh: "弱化情绪"),
                         labelWidth: 132,
                         contentAlignment: .trailing
                     ) {
@@ -966,12 +1022,12 @@ private struct SettingsPanelView: View {
                             .toggleStyle(.switch)
                             .controlSize(.small)
                             .disabled(!model.localPostProcessingEnabled)
-                            .help("Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.")
+                            .help(L10n.text(en: "Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.", zh: "在不改变核心含义的前提下，把攻击性或情绪化表达改得更克制。"))
                     }
 
                     settingsDivider()
 
-                    correctionListRow("Output Style", contentAlignment: .trailing) {
+                    correctionListRow(L10n.text(en: "Output Style", zh: "输出风格"), contentAlignment: .trailing) {
                         Picker("", selection: outputStyleBinding) {
                             ForEach(LocalLLMOutputStyle.allCases) { style in
                                 Text(style.displayName).tag(style)
@@ -985,7 +1041,7 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    correctionListRow("Style Strength", contentAlignment: .trailing) {
+                    correctionListRow(L10n.text(en: "Style Strength", zh: "风格强度"), contentAlignment: .trailing) {
                         Picker("", selection: outputStyleStrengthBinding) {
                             ForEach(LocalLLMOutputStyleStrength.allCases) { strength in
                                 Text(strength.displayName).tag(strength)
@@ -999,7 +1055,7 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    correctionListRow("System Prompt", height: nil) {
+                    correctionListRow(L10n.text(en: "System Prompt", zh: "系统提示词"), height: nil) {
                         promptTextEditor(
                             text: localSystemPromptBinding,
                             height: $systemPromptEditorHeight,
@@ -1009,7 +1065,7 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    correctionListRow("User Message", height: nil) {
+                    correctionListRow(L10n.text(en: "User Message", zh: "用户消息"), height: nil) {
                         promptTextEditor(
                             text: localUserPromptTemplateBinding,
                             height: $userMessageEditorHeight,
@@ -1050,7 +1106,7 @@ private struct SettingsPanelView: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help("Use \(localModel.displayName) for final processing")
+            .help(L10n.text(en: "Use \(localModel.displayName) for final processing", zh: "使用 \(localModel.displayName) 进行最终处理"))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(localModel.displayName)
@@ -1059,7 +1115,7 @@ private struct SettingsPanelView: View {
                     .lineLimit(1)
                     .help(localModel.displayName)
 
-                Text("\(localModel.detailText) · \(localModel.downloadSizeText)")
+                Text("\(localModelDetailText(localModel)) · \(localModelDownloadSizeText(localModel))")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -1086,7 +1142,7 @@ private struct SettingsPanelView: View {
                 .buttonStyle(.plain)
                 .focusable(false)
                 .frame(width: Self.localModelSingleAccessoryWidth, alignment: .leading)
-                .help("Download \(localModel.displayName)")
+                .help(L10n.text(en: "Download \(localModel.displayName)", zh: "下载 \(localModel.displayName)"))
             }
         }
         .padding(.horizontal, 10)
@@ -1094,11 +1150,34 @@ private struct SettingsPanelView: View {
         .contentShape(Rectangle())
     }
 
+    private func localModelDetailText(_ localModel: LocalLLMModel) -> String {
+        switch localModel.detailText {
+        case "Fast correction":
+            L10n.text(en: "Fast correction", zh: "快速纠错")
+        case "Fast 8bit correction":
+            L10n.text(en: "Fast 8bit correction", zh: "快速 8bit 纠错")
+        case "Balanced correction":
+            L10n.text(en: "Balanced correction", zh: "平衡纠错")
+        case "Quality correction":
+            L10n.text(en: "Quality correction", zh: "高质量纠错")
+        case "Local MLX model":
+            L10n.text(en: "Local MLX model", zh: "本地 MLX 模型")
+        default:
+            localModel.detailText
+        }
+    }
+
+    private func localModelDownloadSizeText(_ localModel: LocalLLMModel) -> String {
+        localModel.downloadSizeText == "Local Folder"
+            ? L10n.text(en: "Local Folder", zh: "本地文件夹")
+            : localModel.downloadSizeText
+    }
+
     private var localModelList: some View {
         let localModels = LocalLLMModel.allCases
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Models")
+                Text(L10n.text(en: "Models", zh: "模型"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.primary)
                     .lineLimit(1)
@@ -1121,7 +1200,7 @@ private struct SettingsPanelView: View {
                 .buttonStyle(.plain)
                 .focusable(false)
                 .disabled(isAddingLocalModel)
-                .help("Add a local MLX model folder")
+                .help(L10n.text(en: "Add a local MLX model folder", zh: "添加本地 MLX 模型文件夹"))
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -1155,8 +1234,8 @@ private struct SettingsPanelView: View {
 
     private var remoteModelEditor: some View {
         VStack(alignment: .leading, spacing: 0) {
-            correctionListRow("Name") {
-                TextField("Remote model", text: remoteLLMProfileNameBinding)
+            correctionListRow(L10n.text(en: "Name", zh: "名称")) {
+                TextField(L10n.text(en: "Remote model", zh: "远端模型"), text: remoteLLMProfileNameBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
                     .frame(width: Self.correctionContentWidth)
@@ -1164,7 +1243,7 @@ private struct SettingsPanelView: View {
 
             settingsDivider()
 
-            correctionListRow("Provider", contentAlignment: .trailing) {
+            correctionListRow(L10n.text(en: "Provider", zh: "Provider"), contentAlignment: .trailing) {
                 Picker("", selection: remoteLLMProviderBinding) {
                     ForEach(RemoteLLMProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
@@ -1186,7 +1265,7 @@ private struct SettingsPanelView: View {
 
             settingsDivider()
 
-            correctionListRow("Model") {
+            correctionListRow(L10n.text(en: "Model", zh: "模型")) {
                 TextField("model-id", text: remoteLLMModelBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
@@ -1196,7 +1275,7 @@ private struct SettingsPanelView: View {
             settingsDivider()
 
             correctionListRow("API Key") {
-                SecureCredentialField(text: remoteLLMAPIKeyBinding, placeholder: "Paste key to replace saved key")
+                SecureCredentialField(text: remoteLLMAPIKeyBinding, placeholder: L10n.text(en: "Paste key to replace saved key", zh: "粘贴新 key 以替换已保存的 key"))
                     .frame(width: Self.correctionContentWidth)
             }
 
@@ -1222,7 +1301,7 @@ private struct SettingsPanelView: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help("Cancel")
+            .help(L10n.text(en: "Cancel", zh: "取消"))
 
             Button(action: saveRemoteModelProfile) {
                 Image(systemName: isAddingRemoteModelProfile ? "plus" : "checkmark")
@@ -1232,7 +1311,7 @@ private struct SettingsPanelView: View {
             .buttonStyle(.plain)
             .focusable(false)
             .disabled(!canSaveEditingRemoteModelProfile)
-            .help(isAddingRemoteModelProfile ? "Add remote model" : "Save remote model")
+            .help(isAddingRemoteModelProfile ? L10n.text(en: "Add remote model", zh: "添加远端模型") : L10n.text(en: "Save remote model", zh: "保存远端模型"))
         }
         .padding(.horizontal, 14)
         .frame(height: 44)
@@ -1242,7 +1321,7 @@ private struct SettingsPanelView: View {
         let profiles = model.remoteLLMProfiles
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Models")
+                Text(L10n.text(en: "Models", zh: "模型"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.primary)
                     .lineLimit(1)
@@ -1259,7 +1338,7 @@ private struct SettingsPanelView: View {
                 .buttonStyle(.plain)
                 .focusable(false)
                 .disabled(editingRemoteModelProfile != nil)
-                .help("Add a remote model")
+                .help(L10n.text(en: "Add a remote model", zh: "添加远端模型"))
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -1267,7 +1346,7 @@ private struct SettingsPanelView: View {
 
             VStack(spacing: 0) {
                 if profiles.isEmpty, editingRemoteModelProfile == nil {
-                    Text("No Models")
+                    Text(L10n.text(en: "No Models", zh: "没有模型"))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1303,7 +1382,7 @@ private struct SettingsPanelView: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help("Use \(profile.displayName) for final processing")
+            .help(L10n.text(en: "Use \(profile.displayName) for final processing", zh: "使用 \(profile.displayName) 进行最终处理"))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.displayName)
@@ -1336,7 +1415,7 @@ private struct SettingsPanelView: View {
                     .buttonStyle(.plain)
                     .focusable(false)
                     .disabled(validatingRemoteModelIDs.contains(profile.id) || !profile.hasModelConfiguration)
-                    .help("Validate \(profile.displayName)")
+                    .help(L10n.text(en: "Validate \(profile.displayName)", zh: "验证 \(profile.displayName)"))
                 }
 
                 Button {
@@ -1349,7 +1428,7 @@ private struct SettingsPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .help("Edit \(profile.displayName)")
+                .help(L10n.text(en: "Edit \(profile.displayName)", zh: "编辑 \(profile.displayName)"))
 
                 Button {
                     removeRemoteModelProfile(profile)
@@ -1361,7 +1440,7 @@ private struct SettingsPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .help("Remove \(profile.displayName) from the model list")
+                .help(L10n.text(en: "Remove \(profile.displayName) from the model list", zh: "从模型列表中移除 \(profile.displayName)"))
             }
             .frame(width: 88, alignment: .trailing)
         }
@@ -1501,14 +1580,14 @@ private struct SettingsPanelView: View {
                 await MainActor.run {
                     validatingRemoteModelIDs.remove(profile.id)
                     presentSettingsToast(
-                        "Remote model validated in \(Self.milliseconds(since: startedAt)) ms.",
+                        L10n.text(en: "Remote model validated in \(Self.milliseconds(since: startedAt)) ms.", zh: "远端模型验证通过，耗时 \(Self.milliseconds(since: startedAt)) ms。"),
                         kind: .success
                     )
                 }
             } catch {
                 await MainActor.run {
                     validatingRemoteModelIDs.remove(profile.id)
-                    presentSettingsToast("Remote validation failed: \(error.localizedDescription)", kind: .error)
+                    presentSettingsToast(L10n.text(en: "Remote validation failed: \(error.localizedDescription)", zh: "远端验证失败：\(error.localizedDescription)"), kind: .error)
                 }
             }
         }
@@ -1572,9 +1651,9 @@ private struct SettingsPanelView: View {
             let wasAdding = isAddingRemoteModelProfile
             isAddingRemoteModelProfile = false
             model.remoteLLMAPIKey = ""
-            presentSettingsToast(wasAdding ? "Remote model added." : "Remote model saved.", kind: .success)
+            presentSettingsToast(wasAdding ? L10n.text(en: "Remote model added.", zh: "远端模型已添加。") : L10n.text(en: "Remote model saved.", zh: "远端模型已保存。"), kind: .success)
         } catch {
-            presentSettingsToast("Saving remote API key failed: \(error.localizedDescription)", kind: .error)
+            presentSettingsToast(L10n.text(en: "Saving remote API key failed: \(error.localizedDescription)", zh: "保存远端 API key 失败：\(error.localizedDescription)"), kind: .error)
         }
     }
 
@@ -1587,7 +1666,7 @@ private struct SettingsPanelView: View {
             isAddingRemoteModelProfile = false
         }
         model.remoteLLMAPIKey = ""
-        presentSettingsToast("Removed remote model from the list.", kind: .info)
+        presentSettingsToast(L10n.text(en: "Removed remote model from the list.", zh: "已从列表移除远端模型。"), kind: .info)
         if model.localPostProcessingEnabled, !model.canEnablePostProcessing {
             model.localPostProcessingEnabled = false
             CorrectionSettingsStore.postProcessingEnabled = false
@@ -1683,7 +1762,7 @@ private struct SettingsPanelView: View {
                     }
                 }
 
-                TextField("Add term", text: $vocabularyDraft)
+                TextField(L10n.text(en: "Add term", zh: "添加词条"), text: $vocabularyDraft)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundColor(.primary)
@@ -1803,8 +1882,8 @@ private struct SettingsPanelView: View {
         guard !isAddingLocalModel else { return }
 
         let panel = NSOpenPanel()
-        panel.title = "Choose Local MLX Model Folder"
-        panel.prompt = "Add Model"
+        panel.title = L10n.text(en: "Choose Local MLX Model Folder", zh: "选择本地 MLX 模型文件夹")
+        panel.prompt = L10n.text(en: "Add Model", zh: "添加模型")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -1833,10 +1912,10 @@ private struct SettingsPanelView: View {
                 if let localModel = result.model {
                     model.selectedLocalLLMModel = localModel
                     LocalLLMSettingsStore.selectedModel = localModel
-                    presentSettingsToast("Added local model: \(localModel.displayName)", kind: .success)
+                    presentSettingsToast(L10n.text(en: "Added local model: \(localModel.displayName)", zh: "已添加本地模型：\(localModel.displayName)"), kind: .success)
                     model.refreshLocalModelStatus()
                 } else {
-                    presentSettingsToast("Add local model failed: \(result.errorMessage ?? "Unknown error")", kind: .error)
+                    presentSettingsToast(L10n.text(en: "Add local model failed: \(result.errorMessage ?? "Unknown error")", zh: "添加本地模型失败：\(result.errorMessage ?? "未知错误")"), kind: .error)
                 }
             }
         }
@@ -1848,7 +1927,7 @@ private struct SettingsPanelView: View {
         if wasSelected {
             model.selectedLocalLLMModel = LocalLLMSettingsStore.selectedModel
         }
-        presentSettingsToast("Removed local model from the list.", kind: .info)
+        presentSettingsToast(L10n.text(en: "Removed local model from the list.", zh: "已从列表移除本地模型。"), kind: .info)
         model.refreshLocalModelStatus()
     }
 
@@ -1880,7 +1959,7 @@ private struct SettingsPanelView: View {
                 await MainActor.run {
                     downloadingLocalModels.remove(selectedModel)
                     localModelDownloadProgress[selectedModel] = 0
-                    presentSettingsToast("Download failed: \(error.localizedDescription)", kind: .error)
+                    presentSettingsToast(L10n.text(en: "Download failed: \(error.localizedDescription)", zh: "下载失败：\(error.localizedDescription)"), kind: .error)
                     model.refreshLocalModelStatus()
                 }
             }
@@ -1903,7 +1982,7 @@ private struct SettingsPanelView: View {
         AppLog.info("Local LLM delete button pressed model=\(selectedModel.repositoryID) downloaded=\(selectedIsDownloaded) downloading=\(isDownloading) deleting=\(isDeleting) enabled=\(model.localPostProcessingEnabled) downloadedCount=\(downloadedCount) canDelete=\(canDelete)")
         guard canDelete else {
             AppLog.info("Local LLM delete button ignored model=\(selectedModel.repositoryID)")
-            presentSettingsToast("AI Correction needs at least one downloaded model.", kind: .error)
+            presentSettingsToast(L10n.text(en: "AI Correction needs at least one downloaded model.", zh: "AI 纠错至少需要一个已下载模型。"), kind: .error)
             return
         }
 
@@ -1926,7 +2005,7 @@ private struct SettingsPanelView: View {
                 AppLog.error("Local LLM delete task failed model=\(selectedModel.repositoryID) error=\(error.localizedDescription)")
                 await MainActor.run {
                     deletingLocalModels.remove(selectedModel)
-                    presentSettingsToast("Delete failed: \(error.localizedDescription)", kind: .error)
+                    presentSettingsToast(L10n.text(en: "Delete failed: \(error.localizedDescription)", zh: "删除失败：\(error.localizedDescription)"), kind: .error)
                     model.refreshLocalModelStatus()
                 }
             }
@@ -1975,11 +2054,11 @@ private struct SettingsPanelView: View {
                 await MainActor.run {
                     validatingLocalModels.remove(selectedModel)
                     if Self.isFailedLocalValidationOutcome(result.metadata["outcome"]) {
-                        let reason = result.metadata["error"] ?? result.metadata["reason"] ?? "Model response was not usable."
-                        presentSettingsToast("Local validation failed: \(reason)", kind: .error)
+                        let reason = result.metadata["error"] ?? result.metadata["reason"] ?? L10n.text(en: "Model response was not usable.", zh: "模型响应不可用。")
+                        presentSettingsToast(L10n.text(en: "Local validation failed: \(reason)", zh: "本地验证失败：\(reason)"), kind: .error)
                     } else {
                         presentSettingsToast(
-                            "Local model validated in \(Self.milliseconds(since: startedAt)) ms.",
+                            L10n.text(en: "Local model validated in \(Self.milliseconds(since: startedAt)) ms.", zh: "本地模型验证通过，耗时 \(Self.milliseconds(since: startedAt)) ms。"),
                             kind: .success
                         )
                     }
@@ -1988,7 +2067,7 @@ private struct SettingsPanelView: View {
             } catch {
                 await MainActor.run {
                     validatingLocalModels.remove(selectedModel)
-                    presentSettingsToast("Local validation failed: \(error.localizedDescription)", kind: .error)
+                    presentSettingsToast(L10n.text(en: "Local validation failed: \(error.localizedDescription)", zh: "本地验证失败：\(error.localizedDescription)"), kind: .error)
                     model.refreshLocalModelStatus()
                 }
             }
@@ -2069,12 +2148,12 @@ private struct SettingsPanelView: View {
 
     private func deleteHelpText(for selectedModel: LocalLLMModel) -> String {
         guard selectedModel.isHuggingFaceModel else {
-            return "Local folders are only removed from this list; files are not deleted."
+            return L10n.text(en: "Local folders are only removed from this list; files are not deleted.", zh: "本地文件夹只会从列表移除，不会删除文件。")
         }
         if model.correctionBackend == .local, model.localPostProcessingEnabled, downloadedLocalModels.count <= 1 {
-            return "Turn off AI Correction or download another model before deleting this one."
+            return L10n.text(en: "Turn off AI Correction or download another model before deleting this one.", zh: "删除前请先关闭 AI 纠错或下载另一个模型。")
         }
-        return "Delete \(selectedModel.displayName) from the local Hugging Face cache."
+        return L10n.text(en: "Delete \(selectedModel.displayName) from the local Hugging Face cache.", zh: "从本地 Hugging Face 缓存删除 \(selectedModel.displayName)。")
     }
 
     private func downloadedModelAccessory(_ selectedModel: LocalLLMModel) -> some View {
@@ -2104,7 +2183,7 @@ private struct SettingsPanelView: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(.orange)
                     .frame(width: 28, height: 28)
-                    .help("Local model folder is missing required files")
+                    .help(L10n.text(en: "Local model folder is missing required files", zh: "本地模型文件夹缺少必要文件"))
             } else {
                 localModelValidationAccessory(selectedModel)
             }
@@ -2119,7 +2198,7 @@ private struct SettingsPanelView: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help("Remove \(selectedModel.displayName) from the model list")
+            .help(L10n.text(en: "Remove \(selectedModel.displayName) from the model list", zh: "从模型列表中移除 \(selectedModel.displayName)"))
         }
         .frame(width: selectedModel.isDownloaded ? Self.localModelPairAccessoryWidth : Self.localModelDirectoryAccessoryWidth, alignment: .leading)
     }
@@ -2142,7 +2221,7 @@ private struct SettingsPanelView: View {
             .buttonStyle(.plain)
             .focusable(false)
             .disabled(!selectedModel.isDownloaded || validatingLocalModels.contains(selectedModel))
-            .help("Validate \(selectedModel.displayName)")
+            .help(L10n.text(en: "Validate \(selectedModel.displayName)", zh: "验证 \(selectedModel.displayName)"))
         }
     }
 
@@ -2153,7 +2232,7 @@ private struct SettingsPanelView: View {
                 .controlSize(.small)
                 .frame(width: 28, height: 28)
 
-            Text("Deleting")
+            Text(L10n.text(en: "Deleting", zh: "删除中"))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -2248,7 +2327,7 @@ private struct SettingsPanelView: View {
 
     private var correctionDebugRemoteTitle: String {
         guard let profile = model.selectedRemoteLLMProfile else {
-            return "Remote"
+            return L10n.text(en: "Remote", zh: "远端")
         }
         let remoteModel = profile.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !remoteModel.isEmpty else {
@@ -2291,18 +2370,18 @@ private struct SettingsPanelView: View {
     private var diagnoseTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                settingsTitle("System")
+                settingsTitle(L10n.text(en: "System", zh: "系统"))
 
                 settingsSection {
-                    settingsListRow("Accessibility", height: 44) {
-                        statusText(model.isKeyboardCaptureActive ? "Active" : "Needs Permission", isHealthy: model.isKeyboardCaptureActive)
+                    settingsListRow(L10n.text(en: "Accessibility", zh: "辅助功能"), height: 44) {
+                        statusText(model.isKeyboardCaptureActive ? L10n.text(en: "Active", zh: "已启用") : L10n.text(en: "Needs Permission", zh: "需要授权"), isHealthy: model.isKeyboardCaptureActive)
                     }
 
                     if !model.isKeyboardCaptureActive {
                         settingsDivider()
 
-                        settingsListRow("Access", height: 44) {
-                            Button("Request Permission", action: onRequestAccessibility)
+                        settingsListRow(L10n.text(en: "Access", zh: "权限"), height: 44) {
+                            Button(L10n.text(en: "Request Permission", zh: "请求权限"), action: onRequestAccessibility)
                                 .focusable(false)
                         }
                     }
@@ -2318,12 +2397,12 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow("Log", height: 44) {
+                    settingsListRow(L10n.text(en: "Log", zh: "日志"), height: 44) {
                         HStack(spacing: 8) {
-                            Button("Open Log", action: onOpenLog)
+                            Button(L10n.text(en: "Open Log", zh: "打开日志"), action: onOpenLog)
                                 .focusable(false)
 
-                            Button("Copy Log Path", action: onCopyLogPath)
+                            Button(L10n.text(en: "Copy Log Path", zh: "复制日志路径"), action: onCopyLogPath)
                                 .focusable(false)
                         }
                     }
@@ -2338,7 +2417,7 @@ private struct SettingsPanelView: View {
                 }
 
                 HStack(spacing: 8) {
-                    settingsTitle("Debug Model")
+                    settingsTitle(L10n.text(en: "Debug Model", zh: "调试模型"))
 
                     Spacer(minLength: 8)
 
@@ -2352,7 +2431,7 @@ private struct SettingsPanelView: View {
                 settingsSection {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
-                            Text("Backend")
+                            Text(L10n.text(en: "Backend", zh: "后端"))
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(.secondary)
 
@@ -2360,22 +2439,22 @@ private struct SettingsPanelView: View {
 
                             Spacer(minLength: 8)
 
-                            Button("Run", action: runCorrectionDebug)
+                            Button(L10n.text(en: "Run", zh: "运行"), action: runCorrectionDebug)
                                 .focusable(false)
                                 .disabled(isRunningCorrectionDebug || correctionDebugInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                            Button("Show in Finder", action: locateCorrectionDebugTrace)
+                            Button(L10n.text(en: "Show in Finder", zh: "在 Finder 中显示"), action: locateCorrectionDebugTrace)
                                 .focusable(false)
                                 .disabled(correctionDebugTraceURL == nil)
-                                .help("Show the latest debug model trace in Finder.")
+                                .help(L10n.text(en: "Show the latest debug model trace in Finder.", zh: "在 Finder 中显示最新调试模型 trace。"))
                         }
 
-                        debugTextLabel("Input")
+                        debugTextLabel(L10n.text(en: "Input", zh: "输入"))
                         debugInputEditor
 
                         if !correctionDebugOutput.isEmpty {
                             HStack(spacing: 8) {
-                                debugTextLabel("Corrected Output")
+                                debugTextLabel(L10n.text(en: "Corrected Output", zh: "纠错输出"))
 
                                 Spacer(minLength: 8)
 
@@ -2409,7 +2488,7 @@ private struct SettingsPanelView: View {
                 .frame(height: 58)
 
             if correctionDebugInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Type to test correction")
+                Text(L10n.text(en: "Type to test correction", zh: "输入文本测试纠错"))
                     .font(.system(size: 12))
                     .foregroundColor(.secondary.opacity(0.65))
                     .padding(.horizontal, 6)
@@ -2426,7 +2505,7 @@ private struct SettingsPanelView: View {
 
     private var debugOutputView: some View {
         ScrollView {
-            Text(correctionDebugOutput.isEmpty ? "No output yet." : correctionDebugOutput)
+            Text(correctionDebugOutput.isEmpty ? L10n.text(en: "No output yet.", zh: "还没有输出。") : correctionDebugOutput)
                 .font(.system(size: 12))
                 .foregroundColor(correctionDebugOutput.isEmpty ? .secondary : .primary)
                 .textSelection(.enabled)
@@ -2482,7 +2561,7 @@ private struct SettingsPanelView: View {
             await MainActor.run {
                 isRunningCorrectionDebug = false
                 guard let result else {
-                    correctionDebugError = "Correction failed without a usable result."
+                    correctionDebugError = L10n.text(en: "Correction failed without a usable result.", zh: "纠错失败，没有可用结果。")
                     return
                 }
 
@@ -2490,7 +2569,7 @@ private struct SettingsPanelView: View {
                 correctionDebugDurationText = Self.formattedDebugDuration(result.timings)
                 correctionDebugTraceURL = traceURL
                 if traceURL == nil {
-                    correctionDebugError = "Correction completed, but trace file could not be written."
+                    correctionDebugError = L10n.text(en: "Correction completed, but trace file could not be written.", zh: "纠错已完成，但 trace 文件写入失败。")
                 }
             }
         }
@@ -2506,7 +2585,7 @@ private struct SettingsPanelView: View {
         let totalMilliseconds = timings.first { $0.name == "correction.total" }?.milliseconds
             ?? timings.map(\.milliseconds).reduce(0, +)
         guard totalMilliseconds > 0 else { return "" }
-        return "Total \(totalMilliseconds) ms"
+        return L10n.text(en: "Total \(totalMilliseconds) ms", zh: "总计 \(totalMilliseconds) ms")
     }
 
     private static func writeCorrectionDebugTrace(
@@ -2577,11 +2656,11 @@ private struct SettingsPanelView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(.primary)
 
-            Text("Version \(model.appVersion)")
+            Text(L10n.text(en: "Version \(model.appVersion)", zh: "版本 \(model.appVersion)"))
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
 
-            Button("Check for Updates...", action: onCheckForUpdates)
+            Button(L10n.text(en: "Check for Updates...", zh: "检查更新..."), action: onCheckForUpdates)
                 .focusable(false)
                 .disabled(!model.canCheckForUpdates)
                 .padding(.top, 8)
@@ -3119,7 +3198,7 @@ private struct VocabularyChip: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help("Remove vocabulary")
+            .help(L10n.text(en: "Remove vocabulary", zh: "移除词条"))
         }
         .padding(.leading, 8)
         .padding(.trailing, 5)
@@ -3201,7 +3280,7 @@ private struct ResizablePromptTextEditor: View {
                     isResizing = false
                 }
         )
-        .help("Drag to resize")
+        .help(L10n.text(en: "Drag to resize", zh: "拖动调整大小"))
     }
 
     private static func clampedHeight(_ value: CGFloat) -> CGFloat {

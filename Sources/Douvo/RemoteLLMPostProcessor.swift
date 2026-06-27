@@ -10,9 +10,9 @@ enum CorrectionBackend: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .local:
-            "Local"
+            L10n.text(en: "Local", zh: "本地")
         case .remote:
-            "Remote"
+            L10n.text(en: "Remote", zh: "远端")
         }
     }
 }
@@ -52,7 +52,7 @@ enum RemoteLLMProvider: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codingPlanX:
             "CodingPlanX"
         case .custom:
-            "Custom"
+            L10n.text(en: "Custom", zh: "自定义")
         }
     }
 
@@ -143,7 +143,7 @@ struct RemoteLLMModelProfile: Codable, Hashable, Identifiable, Sendable {
         RemoteLLMModelProfile(
             id: "custom:\(UUID().uuidString)",
             provider: provider,
-            displayName: provider == .custom ? "Custom Remote Model" : provider.displayName,
+            displayName: provider == .custom ? L10n.text(en: "Custom Remote Model", zh: "自定义远端模型") : provider.displayName,
             baseURL: provider.defaultBaseURL,
             model: provider.defaultModel
         )

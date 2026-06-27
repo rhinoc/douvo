@@ -11,13 +11,13 @@ enum PunctuationStyle: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .complete:
-            "Complete Punctuation"
+            L10n.text(en: "Complete Punctuation", zh: "完整标点")
         case .omitFinal:
-            "Omit Final Punctuation"
+            L10n.text(en: "Omit Final Punctuation", zh: "省略句末标点")
         case .spaces:
-            "Use Spaces Instead"
+            L10n.text(en: "Use Spaces Instead", zh: "用空格代替")
         case .questionMarksOnly:
-            "Question Marks Only"
+            L10n.text(en: "Question Marks Only", zh: "仅保留问号")
         }
     }
 
@@ -58,11 +58,11 @@ enum LocalLLMOutputStyle: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .original:
-            "Original"
+            L10n.text(en: "Original", zh: "原样")
         case .natural:
-            "Natural"
+            L10n.text(en: "Natural", zh: "自然")
         case .concise:
-            "Concise"
+            L10n.text(en: "Concise", zh: "简洁")
         }
     }
 
@@ -102,11 +102,11 @@ enum LocalLLMOutputStyleStrength: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .light:
-            "Light"
+            L10n.text(en: "Light", zh: "轻")
         case .medium:
-            "Medium"
+            L10n.text(en: "Medium", zh: "中")
         case .strong:
-            "Strong"
+            L10n.text(en: "Strong", zh: "强")
         }
     }
 }
@@ -428,7 +428,7 @@ enum CustomModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidDirectory:
-            "Choose an MLX model folder containing config.json, tokenizer files, and .safetensors weights."
+            L10n.text(en: "Choose an MLX model folder containing config.json, tokenizer files, and .safetensors weights.", zh: "请选择包含 config.json、tokenizer 文件和 .safetensors 权重的 MLX 模型文件夹。")
         }
     }
 }

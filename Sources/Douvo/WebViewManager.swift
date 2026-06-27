@@ -61,7 +61,7 @@ final class WebViewManager: NSObject {
             backing: .buffered,
             defer: false
         )
-        window.title = "Login to Doubao"
+        window.title = L10n.text(en: "Login to Doubao", zh: "登录豆包")
         window.contentView = webView
         window.isReleasedWhenClosed = false
         self.window = window

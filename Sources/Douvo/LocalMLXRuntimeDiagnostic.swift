@@ -10,15 +10,15 @@ struct LocalMLXRuntimeDiagnostic: Sendable {
         if let existingURL = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             return LocalMLXRuntimeDiagnostic(
                 isAvailable: true,
-                message: "Ready",
+                message: L10n.text(en: "Ready", zh: "已就绪"),
                 detail: existingURL.path
             )
         }
 
         return LocalMLXRuntimeDiagnostic(
             isAvailable: false,
-            message: "Missing Metal Library",
-            detail: "Checked \(candidates.count) expected locations for default.metallib or mlx.metallib."
+            message: L10n.text(en: "Missing Metal Library", zh: "缺少 Metal Library"),
+            detail: L10n.text(en: "Checked \(candidates.count) expected locations for default.metallib or mlx.metallib.", zh: "已检查 \(candidates.count) 个 default.metallib 或 mlx.metallib 可能位置。")
         )
     }
 

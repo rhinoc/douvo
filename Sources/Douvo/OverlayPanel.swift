@@ -147,16 +147,16 @@ private struct OverlayView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("取消 (Esc)")
+            .help(L10n.text(en: "Cancel (Esc)", zh: "取消 (Esc)"))
 
             WaveformView(levels: appState.audioLevels, isActive: appState.recordingState == .recording)
                 .frame(maxWidth: .infinity)
 
             if appState.recordingState == .starting {
-                ProcessingIndicatorView(accessibilityLabel: "准备中")
+                ProcessingIndicatorView(accessibilityLabel: L10n.text(en: "Starting", zh: "准备中"))
                     .frame(width: 24, height: 24)
             } else if appState.recordingState == .stopping {
-                ProcessingIndicatorView(accessibilityLabel: "处理中")
+                ProcessingIndicatorView(accessibilityLabel: L10n.text(en: "Processing", zh: "处理中"))
                     .frame(width: 24, height: 24)
             } else {
                 Button(action: { appState.onSubmitTapped?() }) {
@@ -170,7 +170,7 @@ private struct OverlayView: View {
                     .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help("提交 (Enter)")
+                .help(L10n.text(en: "Submit (Enter)", zh: "提交 (Enter)"))
             }
         }
         .padding(.horizontal, 10)
