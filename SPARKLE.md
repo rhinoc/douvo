@@ -66,7 +66,7 @@ Douvo's release workflow can publish the same GitHub Release DMG to a Homebrew
 tap. By default it targets:
 
 ```text
-rhinoc/homebrew-douvo
+rhinoc/homebrew-tap
 ```
 
 Create that repository with a `Casks/` directory, then add a repository secret
@@ -80,7 +80,7 @@ The token must be able to push to the tap repository. If the tap lives somewhere
 else, set this repository variable:
 
 ```text
-HOMEBREW_TAP_REPOSITORY=owner/homebrew-douvo
+HOMEBREW_TAP_REPOSITORY=owner/homebrew-tap
 ```
 
 When the secret is missing, the release workflow leaves the Homebrew step

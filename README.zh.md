@@ -53,7 +53,7 @@ Douvo 使用豆包 Web 产品完成登录和语音识别，但应用本身尽量
 使用 Homebrew：
 
 ```bash
-brew tap rhinoc/douvo
+brew tap rhinoc/tap
 brew install --cask douvo
 ```
 

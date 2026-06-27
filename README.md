@@ -53,7 +53,7 @@ Douvo uses Doubao's web product as the authentication and ASR source, but keeps 
 With Homebrew:
 
 ```bash
-brew tap rhinoc/douvo
+brew tap rhinoc/tap
 brew install --cask douvo
 ```
 
