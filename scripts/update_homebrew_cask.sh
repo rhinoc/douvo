@@ -14,7 +14,7 @@ APP_NAME="${APP_NAME:-Douvo}"
 DESC="${DESC:-Menu bar speech-to-text app}"
 HOMEPAGE="${HOMEPAGE:-https://github.com/${GITHUB_REPOSITORY}}"
 DMG_NAME="${DMG_NAME:-douvo-${VERSION}-macos.dmg}"
-MIN_MACOS="${MIN_MACOS:-ventura}"
+MIN_MACOS="${MIN_MACOS:-sonoma}"
 CASK_VERSION_INTERPOLATION='#{version}'
 DMG_NAME_TEMPLATE="${DMG_NAME//$VERSION/__VERSION__}"
 DMG_NAME_TEMPLATE="${DMG_NAME_TEMPLATE//__VERSION__/$CASK_VERSION_INTERPOLATION}"
@@ -36,6 +36,7 @@ cask "${CASK_NAME}" do
   homepage "${HOMEPAGE}"
 
   depends_on macos: :${MIN_MACOS}
+  depends_on arch: :arm64
 
   app "${APP_NAME}.app"
 

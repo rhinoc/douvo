@@ -6,6 +6,7 @@ Thanks for improving Douvo. This is a small native macOS app that touches microp
 
 Requirements:
 
+- Apple Silicon Mac
 - macOS 14.0 or newer
 - Xcode or a compatible Swift 6 toolchain
 - Git

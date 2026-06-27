@@ -85,6 +85,8 @@ HOMEBREW_TAP_REPOSITORY=owner/homebrew-tap
 
 When the secret is missing, the release workflow leaves the Homebrew step
 disabled and continues publishing the GitHub Release and Sparkle appcast.
+Generated casks require Apple Silicon and macOS 14 or newer, matching the app's
+MLX dependency and `Package.swift` platform.
 
 ## Signing and Gatekeeper
 

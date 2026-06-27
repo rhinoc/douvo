@@ -824,67 +824,12 @@ private struct SettingsPanelView: View {
                         .pickerStyle(.menu)
                         .frame(width: Self.correctionContentWidth, alignment: .trailing)
                     }
-
-                    settingsDivider()
-
-                    correctionListRow(
-                        "Remove Filler Words",
-                        labelWidth: 132,
-                        contentAlignment: .trailing
-                    ) {
-                        Toggle("", isOn: removeFillerWordsBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .help("Remove filler words and brief hesitations while preserving meaning.")
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow(
-                        "Soften Emotion",
-                        labelWidth: 132,
-                        contentAlignment: .trailing
-                    ) {
-                        Toggle("", isOn: softenEmotionalLanguageBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .help("Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.")
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow("Output Style", contentAlignment: .trailing) {
-                        Picker("", selection: outputStyleBinding) {
-                            ForEach(LocalLLMOutputStyle.allCases) { style in
-                                Text(style.displayName).tag(style)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: Self.correctionContentWidth, alignment: .trailing)
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow("Style Strength", contentAlignment: .trailing) {
-                        Picker("", selection: outputStyleStrengthBinding) {
-                            ForEach(LocalLLMOutputStyleStrength.allCases) { strength in
-                                Text(strength.displayName).tag(strength)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(width: 168, alignment: .trailing)
-                        .disabled(model.localOutputStyle == .original)
-                    }
                 }
 
                 settingsTitle("AI Correction")
 
                 settingsSection {
-                    correctionListRow("Use Model", contentAlignment: .trailing) {
+                    correctionListRow("Enable", contentAlignment: .trailing) {
                         Toggle("", isOn: localPostProcessingBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
@@ -918,6 +863,64 @@ private struct SettingsPanelView: View {
 
                     correctionListRow("Vocabularies", height: nil) {
                         vocabularyChipEditor
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        "Remove Filler Words",
+                        labelWidth: 132,
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: removeFillerWordsBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!model.localPostProcessingEnabled)
+                            .help("Remove filler words and brief hesitations while preserving meaning.")
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        "Soften Emotion",
+                        labelWidth: 132,
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: softenEmotionalLanguageBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!model.localPostProcessingEnabled)
+                            .help("Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.")
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow("Output Style", contentAlignment: .trailing) {
+                        Picker("", selection: outputStyleBinding) {
+                            ForEach(LocalLLMOutputStyle.allCases) { style in
+                                Text(style.displayName).tag(style)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: Self.correctionContentWidth, alignment: .trailing)
+                        .disabled(!model.localPostProcessingEnabled)
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow("Style Strength", contentAlignment: .trailing) {
+                        Picker("", selection: outputStyleStrengthBinding) {
+                            ForEach(LocalLLMOutputStyleStrength.allCases) { strength in
+                                Text(strength.displayName).tag(strength)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 168, alignment: .trailing)
+                        .disabled(!model.localPostProcessingEnabled || model.localOutputStyle == .original)
                     }
 
                     settingsDivider()

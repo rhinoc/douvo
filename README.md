@@ -78,22 +78,29 @@ flowchart TD
     G --> O[Write local traces, timings, and logs for diagnostics]
 ```
 
+## Requirements
+
+- Apple Silicon Mac.
+- macOS 14.0 or newer.
+
 ## Install
 
-With Homebrew:
+Recommended: download the latest **`douvo-<version>-macos.dmg`** from **[GitHub Releases](https://github.com/rhinoc/douvo/releases)**.
+
+1. Open the DMG.
+2. Drag **`Douvo.app`** onto the **Applications** shortcut.
+3. Eject the disk image, then launch **Douvo** from **Applications** or Spotlight.
+
+The DMG contains `Douvo.app` and an **Applications** shortcut only. Current release builds are not notarized, so macOS may ask you to confirm first launch or remove quarantine manually.
+
+Homebrew is also available if you prefer tap-based installs:
 
 ```bash
 brew tap rhinoc/tap
 brew install --cask douvo
 ```
 
-Douvo ships as a macOS disk image. Download the latest **`douvo-<version>-macos.dmg`** from **[GitHub Releases](https://github.com/rhinoc/douvo/releases)**.
-
-1. Open the DMG.
-2. Drag **`Douvo.app`** onto the **Applications** shortcut.
-3. Eject the disk image, then launch **Douvo** from **Applications** or Spotlight.
-
-The DMG contains `Douvo.app` and an **Applications** shortcut only. Homebrew Cask installs the same DMG artifact.
+Homebrew Cask installs the same DMG artifact from GitHub Releases, not a separately signed package.
 
 In-app updates are handled by Sparkle and use the same DMG artifact published on GitHub Releases.
 
@@ -106,31 +113,6 @@ Remove quarantine from the installed app:
 ```bash
 xattr -dr com.apple.quarantine /Applications/Douvo.app
 ```
-
-### Build locally
-
-For a quick development run:
-
-```bash
-swift run Douvo
-```
-
-For local app-bundle testing, build the app yourself:
-
-```bash
-./scripts/build-app.sh
-open .build/release/Douvo.app
-```
-
-The build script creates and signs a local `.app` bundle at:
-
-```text
-.build/release/Douvo.app
-```
-
-Local bundle builds require a code-signing identity. Set `CODESIGN_IDENTITY`, or install a local identity named `Douvo Local Code Signing`. The script also builds and packages the MLX Metal library required by local AI correction.
-
-For development setup, tests, and release boundaries, see **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
 
 ## Permissions
 
