@@ -683,7 +683,6 @@ actor LocalLLMPostProcessor {
             let task = Task {
                 try Task.checkCancellation()
                 AppLog.info("Loading local LLM model=\(model.repositoryID)")
-                _ = Bundle.module.bundleURL
                 let container = try await #huggingFaceLoadModelContainer(
                     configuration: model.configuration,
                     progressHandler: { progress in

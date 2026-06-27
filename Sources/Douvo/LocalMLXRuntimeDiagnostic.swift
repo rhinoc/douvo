@@ -38,11 +38,6 @@ struct LocalMLXRuntimeDiagnostic: Sendable {
             urls.append(resourceURL.appendingPathComponent("mlx-swift_Cmlx.bundle/default.metallib"))
         }
 
-        if let moduleResourceURL = Bundle.module.resourceURL {
-            urls.append(moduleResourceURL.appendingPathComponent("mlx-swift_Cmlx.bundle/default.metallib"))
-        }
-        urls.append(Bundle.module.bundleURL.appendingPathComponent("mlx-swift_Cmlx.bundle/default.metallib"))
-
         urls.append(Bundle.main.bundleURL.appendingPathComponent("mlx-swift_Cmlx.bundle/default.metallib"))
 
         for bundle in Bundle.allBundles {
