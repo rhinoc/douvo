@@ -124,6 +124,28 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
         hasModelFiles(in: url)
     }
 
+    static func hubRepoID(from repositoryID: String) -> Repo.ID? {
+        let components = repositoryID.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard components.count == 2,
+              !components[0].isEmpty,
+              !components[1].isEmpty
+        else {
+            return nil
+        }
+        return Repo.ID(namespace: String(components[0]), name: String(components[1]))
+    }
+
+    static let downloadSnapshotFilePatterns = [
+        "*.safetensors",
+        "*.json",
+        "*.jinja",
+        "*.txt",
+        "*.model",
+        "tokenizer.model",
+        "merges.txt",
+        "vocab.txt"
+    ]
+
     private init(
         rawValue: String,
         displayName: String,
@@ -665,6 +687,25 @@ actor LocalLLMPostProcessor {
         onProgress: ProgressHandler? = nil
     ) async throws {
         _ = try await modelContainer(for: model, onProgress: onProgress)
+    }
+
+    func downloadModel(_ model: LocalLLMModel) async throws {
+        guard case .huggingFace(let repositoryID) = model.source else {
+            return
+        }
+        guard let repoID = LocalLLMModel.hubRepoID(from: repositoryID) else {
+            throw HuggingFaceDownloaderError.invalidRepositoryID(repositoryID)
+        }
+
+        try Task.checkCancellation()
+        AppLog.info("Local LLM model download start model=\(repositoryID)")
+        _ = try await HubClient().downloadSnapshot(
+            of: repoID,
+            revision: "main",
+            matching: LocalLLMModel.downloadSnapshotFilePatterns
+        )
+        try Task.checkCancellation()
+        AppLog.info("Local LLM model download complete model=\(repositoryID)")
     }
 
     func deleteDownloadedModel(_ model: LocalLLMModel) async throws {
