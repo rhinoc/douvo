@@ -487,6 +487,7 @@ actor RemoteLLMPostProcessor {
         metadata["soften_emotional_language"] = String(promptConfiguration.softenEmotionalLanguage)
         metadata["output_style"] = promptConfiguration.outputStyle.rawValue
         metadata["output_style_strength"] = promptConfiguration.outputStyleStrength.rawValue
+        metadata["translation_language"] = promptConfiguration.translationLanguage
         metadata["reasoning_mode"] = generationProfile.reasoningMode.rawValue
         metadata["model_enable_thinking"] = String(generationProfile.reasoningMode.modelEnableThinking)
 
@@ -603,7 +604,8 @@ actor RemoteLLMPostProcessor {
                 rawResponse: response,
                 cleanedResponse: cleaned
             )
-            guard LocalLLMPostProcessor.isUsableCorrection(cleaned, original: input) else {
+            let validationOriginal = fallbackRawText.count > input.count ? fallbackRawText : input
+            guard LocalLLMPostProcessor.isUsableCorrection(cleaned, original: validationOriginal) else {
                 let finalText = LocalLLMPostProcessor.fallbackCorrectionText(
                     for: fallbackRawText,
                     vocabulary: promptConfiguration.vocabulary,

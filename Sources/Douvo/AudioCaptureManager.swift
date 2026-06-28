@@ -59,6 +59,30 @@ struct AudioInputConditioner {
     }
 }
 
+struct AudioLevelVisualizer {
+    private static let minimumDecibels: Float = -60
+    private static let maximumDecibels: Float = -18
+    private static let minimumRMS: Float = 0.000_001
+
+    static func level(fromRMS rms: Float) -> Float {
+        guard rms.isFinite, rms > 0 else { return 0 }
+
+        let decibels = 20 * log10f(max(rms, minimumRMS))
+        let normalized = (decibels - minimumDecibels) / (maximumDecibels - minimumDecibels)
+        let clamped = max(0, min(1, normalized))
+        return pow(clamped, 0.68)
+    }
+
+    static func normalizedVoiceLevel(from level: Float, noiseFloor: Float) -> Float {
+        let clampedLevel = max(0, min(1, level))
+        let clampedNoiseFloor = max(0, min(0.95, noiseFloor))
+        guard clampedLevel > clampedNoiseFloor else { return 0 }
+
+        let normalized = (clampedLevel - clampedNoiseFloor) / (1 - clampedNoiseFloor)
+        return max(0, min(1, normalized))
+    }
+}
+
 final class AudioCaptureManager {
     enum CaptureMode {
         case webPCM
@@ -87,6 +111,7 @@ final class AudioCaptureManager {
     // Align outbound packets to the doubao web client: 2048 samples @16kHz ≈ 128ms.
     private static let packetSampleCount = 2048
     private static let packetByteCount = packetSampleCount * 2
+    private static let levelBufferSampleCount: AVAudioFrameCount = 512
     private static let tailSilencePacketCount = 2
     private static let opusFrameSampleCount = 320
     private static let androidOpusTailSilenceFrameCount = 25
@@ -129,7 +154,7 @@ final class AudioCaptureManager {
         inputConditioner.reset()
         debugAudioRecorder = RecentAudioRecorder.start()
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: Self.levelBufferSampleCount, format: inputFormat) { [weak self] buffer, _ in
             self?.process(buffer)
         }
 
@@ -269,8 +294,7 @@ final class AudioCaptureManager {
                 sumSquares += sample * sample
             }
             let rms = sqrtf(sumSquares / Float(count))
-            // Map RMS to a 0...1 level with a perceptual curve so quiet speech stays visible.
-            let level = min(1, sqrtf(rms) * 2.6)
+            let level = AudioLevelVisualizer.level(fromRMS: rms)
             levelSampleCount += 1
             levelMin = min(levelMin, level)
             levelMax = max(levelMax, level)

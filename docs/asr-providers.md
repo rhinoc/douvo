@@ -173,13 +173,13 @@ Trace metadata records the Android segment shape (`android_result_segments`, `an
 
 ## Mix Provider
 
-The Mix provider runs the Web and Android providers at the same time, then asks AI Correction to merge the two recognition results into one final text.
+The Mix provider runs the Web and Android providers at the same time, then asks AI post-processing to merge the two recognition results into one final text.
 
 Mix mode requires:
 
 - Web ASR login to be valid.
 - Android ASR credentials to be available or creatable.
-- AI Correction to be enabled.
+- AI post-processing to be enabled.
 
 During recording, the same microphone capture is converted into both required audio formats:
 
@@ -202,7 +202,7 @@ The model is instructed to combine overlapping content, use either path to fill 
 | --- | --- | --- | --- |
 | Entry point | Doubao Web ASR | Doubao IME Android ASR | Web + Android |
 | Requires WebView login | Yes | No | Yes |
-| Requires AI Correction | No | No | Yes |
+| Requires AI post-processing | No | No | Yes |
 | Local identity | Doubao cookies, `device_id`, `web_id` | `cdid`, `openudid`, `clientudid`, `deviceId`, `installId`, ASR token | Both |
 | Local credential file | `asr_params.json` | `android_asr_credentials.json` | Both |
 | ASR host | `ws-samantha.doubao.com` | `frontier-audio-ime-ws.doubao.com` | Both |

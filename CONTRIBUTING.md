@@ -115,7 +115,7 @@ Before release-oriented changes, verify:
 - Trigger key starts and stops recording.
 - Escape cancels recording without inserting text.
 - Final transcript inserts into a focused text field.
-- AI Correction can be toggled on and off without blocking plain ASR insertion.
+- AI post-processing can be toggled on and off without blocking plain ASR insertion.
 - Local model download, selection, deletion, and local-folder model import behave as expected.
 - Remote model add/edit/delete, API-key save, and validation behave as expected.
 - Vocabulary hints, punctuation style, filler-word removal, emotion softening, and output style affect correction as expected.

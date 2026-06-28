@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 
 @MainActor
@@ -6,14 +7,22 @@ enum PasteHelper {
     private static var nextRestoreID: UInt64 = 1
     private static var pendingRestoreID: UInt64?
     private static let restoreDelay: TimeInterval = 0.75
+    private static let pasteKeyDelay: TimeInterval = 0.05
 
     static func copyAndPaste(_ text: String) {
         guard !text.isEmpty else { return }
         AppLog.info("PasteHelper copyAndPaste chars=\(text.count)")
+        let insertionCheck = TextInsertionSettingsStore.copyResultWhenInsertionFails
+            ? TextInsertionFailureCheck.capture()
+            : nil
         let restorePlan = copyForPaste(text)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + pasteKeyDelay) {
             postCommandV()
-            scheduleRestore(restorePlan)
+            if let insertionCheck {
+                scheduleRestoreAfterInsertionCheck(restorePlan, insertionCheck: insertionCheck)
+            } else {
+                scheduleRestore(restorePlan)
+            }
         }
     }
 
@@ -58,6 +67,21 @@ enum PasteHelper {
         }
     }
 
+    private static func scheduleRestoreAfterInsertionCheck(
+        _ plan: ClipboardRestorePlan,
+        insertionCheck: TextInsertionFailureCheck
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) {
+            if insertionCheck.didInsertionFail() {
+                pendingRestoreID = nil
+                AppLog.info("PasteHelper detected insertion failure; keeping inserted text on clipboard")
+                return
+            }
+
+            restoreClipboardIfUnchanged(plan)
+        }
+    }
+
     private static func restoreClipboardIfUnchanged(_ plan: ClipboardRestorePlan) {
         guard pendingRestoreID == plan.id else { return }
 
@@ -87,6 +111,186 @@ enum PasteHelper {
 
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
+    }
+}
+
+enum TextInsertionSettingsStore {
+    private enum Key {
+        static let copyResultWhenInsertionFails = "textInsertion.copyResultWhenInsertionFails"
+    }
+
+    static var copyResultWhenInsertionFails: Bool {
+        get {
+            UserDefaults.standard.bool(forKey: Key.copyResultWhenInsertionFails)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.copyResultWhenInsertionFails)
+        }
+    }
+}
+
+private enum TextInsertionFailureCheck {
+    case unavailable(reason: String)
+    case nonTextInput(role: String, subrole: String)
+    case textValue(pid: pid_t, element: AXUIElement, previousValue: String, role: String, subrole: String)
+
+    static func capture() -> TextInsertionFailureCheck {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            AppLog.info("PasteHelper insertion check unavailable reason=no_frontmost_app")
+            return .unavailable(reason: "no_frontmost_app")
+        }
+
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var focusedValue: CFTypeRef?
+        let focusedResult = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        )
+        guard focusedResult == .success,
+              let focusedValue,
+              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+            AppLog.info("PasteHelper insertion check unavailable reason=focused_element_unavailable ax=\(axErrorDescription(focusedResult))")
+            return .unavailable(reason: "focused_element_unavailable")
+        }
+
+        let element = focusedValue as! AXUIElement
+        let role = attributeString(kAXRoleAttribute, in: element) ?? "unknown"
+        let subrole = attributeString(kAXSubroleAttribute, in: element) ?? "unknown"
+        if let value = attributeString(kAXValueAttribute, in: element) {
+            AppLog.info(
+                "PasteHelper insertion check captured text value chars=\(value.count) role=\(logValue(role)) subrole=\(logValue(subrole))"
+            )
+            return .textValue(
+                pid: app.processIdentifier,
+                element: element,
+                previousValue: value,
+                role: role,
+                subrole: subrole
+            )
+        }
+
+        if isKnownTextInput(role: role) || hasTextSelectionAttribute(in: element) {
+            AppLog.info(
+                "PasteHelper insertion check unavailable reason=text_value_unavailable role=\(logValue(role)) subrole=\(logValue(subrole))"
+            )
+            return .unavailable(reason: "text_value_unavailable")
+        }
+
+        AppLog.info(
+            "PasteHelper insertion check captured non-text input role=\(logValue(role)) subrole=\(logValue(subrole))"
+        )
+        return .nonTextInput(role: role, subrole: subrole)
+    }
+
+    func didInsertionFail() -> Bool {
+        switch self {
+        case .unavailable(let reason):
+            AppLog.info("PasteHelper insertion check skipped reason=\(reason)")
+            return false
+        case .nonTextInput(let role, let subrole):
+            AppLog.info(
+                "PasteHelper insertion check failed reason=non_text_input role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
+            )
+            return true
+        case .textValue(let pid, let element, let previousValue, let role, let subrole):
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                AppLog.info("PasteHelper insertion check skipped reason=frontmost_app_changed")
+                return false
+            }
+            guard let currentValue = Self.attributeString(kAXValueAttribute, in: element) else {
+                AppLog.info(
+                    "PasteHelper insertion check skipped reason=current_text_value_unavailable role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
+                )
+                return false
+            }
+            let failed = currentValue == previousValue
+            AppLog.info(
+                "PasteHelper insertion check result=\(failed ? "failed" : "changed") previousChars=\(previousValue.count) currentChars=\(currentValue.count) role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
+            )
+            return failed
+        }
+    }
+
+    private static func isKnownTextInput(role: String) -> Bool {
+        switch role {
+        case "AXTextArea", "AXTextField", "AXComboBox":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func hasTextSelectionAttribute(in element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        let selectedTextResult = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &value
+        )
+        if selectedTextResult == .success {
+            return true
+        }
+
+        let selectedRangeResult = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &value
+        )
+        return selectedRangeResult == .success
+    }
+
+    private static func attributeString(_ attribute: String, in element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success else { return nil }
+        return value as? String
+    }
+
+    private static func axErrorDescription(_ error: AXError) -> String {
+        switch error {
+        case .success:
+            return "success"
+        case .failure:
+            return "failure"
+        case .illegalArgument:
+            return "illegalArgument"
+        case .invalidUIElement:
+            return "invalidUIElement"
+        case .invalidUIElementObserver:
+            return "invalidUIElementObserver"
+        case .cannotComplete:
+            return "cannotComplete"
+        case .attributeUnsupported:
+            return "attributeUnsupported"
+        case .actionUnsupported:
+            return "actionUnsupported"
+        case .notificationUnsupported:
+            return "notificationUnsupported"
+        case .notImplemented:
+            return "notImplemented"
+        case .notificationAlreadyRegistered:
+            return "notificationAlreadyRegistered"
+        case .notificationNotRegistered:
+            return "notificationNotRegistered"
+        case .apiDisabled:
+            return "apiDisabled"
+        case .noValue:
+            return "noValue"
+        case .parameterizedAttributeUnsupported:
+            return "parameterizedAttributeUnsupported"
+        case .notEnoughPrecision:
+            return "notEnoughPrecision"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private static func logValue(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 }
 

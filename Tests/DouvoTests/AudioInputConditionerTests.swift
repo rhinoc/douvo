@@ -34,6 +34,31 @@ final class AudioInputConditionerTests: XCTestCase {
         })
     }
 
+    func testDecibelLevelMappingKeepsQuietSpeechVisible() {
+        let quietSpeech = AudioLevelVisualizer.level(fromRMS: 0.003_162_277)
+        let moderateSpeech = AudioLevelVisualizer.level(fromRMS: 0.031_622_77)
+
+        XCTAssertGreaterThan(quietSpeech, 0.3)
+        XCTAssertGreaterThan(moderateSpeech, quietSpeech)
+        XCTAssertLessThanOrEqual(moderateSpeech, 1)
+        XCTAssertEqual(AudioLevelVisualizer.level(fromRMS: 0), 0)
+        XCTAssertEqual(AudioLevelVisualizer.level(fromRMS: .nan), 0)
+    }
+
+    func testNoiseGateRemapsVisibleRangeAboveFloor() {
+        let noiseFloor: Float = 0.2
+        let belowFloor = AudioLevelVisualizer.normalizedVoiceLevel(from: 0.16, noiseFloor: noiseFloor)
+        let atFloor = AudioLevelVisualizer.normalizedVoiceLevel(from: noiseFloor, noiseFloor: noiseFloor)
+        let aboveFloor = AudioLevelVisualizer.normalizedVoiceLevel(from: 0.24, noiseFloor: noiseFloor)
+        let highLevel = AudioLevelVisualizer.normalizedVoiceLevel(from: 1, noiseFloor: noiseFloor)
+
+        XCTAssertEqual(belowFloor, 0)
+        XCTAssertEqual(atFloor, 0)
+        XCTAssertGreaterThan(aboveFloor, 0)
+        XCTAssertEqual(aboveFloor, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(highLevel, 1)
+    }
+
     private func averageMagnitude<S: Sequence>(_ samples: S) -> Float where S.Element == Float {
         let values = Array(samples)
         guard !values.isEmpty else { return 0 }

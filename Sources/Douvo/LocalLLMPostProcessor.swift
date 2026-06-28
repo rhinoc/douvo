@@ -77,28 +77,28 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
     static let light = builtIn(
         rawValue: "light",
         displayName: "Qwen3.5 0.8B 4bit",
-        detailText: "Fast correction",
+        detailText: "Fastest · smallest",
         downloadSizeText: "622 MB",
         repositoryID: "mlx-community/Qwen3.5-0.8B-MLX-4bit"
     )
     static let qwen35EightBit08B = builtIn(
         rawValue: "qwen35EightBit08B",
         displayName: "Qwen3.5 0.8B 8bit",
-        detailText: "Fast 8bit correction",
+        detailText: "Fast · sharper",
         downloadSizeText: "1.0 GB",
         repositoryID: "mlx-community/Qwen3.5-0.8B-8bit"
     )
     static let qwen35EightBit2B = builtIn(
         rawValue: "qwen35EightBit2B",
         displayName: "Qwen3.5 2B 8bit",
-        detailText: "Balanced correction",
+        detailText: "Balanced quality",
         downloadSizeText: "2.7 GB",
         repositoryID: "mlx-community/Qwen3.5-2B-8bit"
     )
     static let quality = builtIn(
         rawValue: "quality",
         displayName: "Qwen3.5 4B 4bit",
-        detailText: "Quality correction",
+        detailText: "Best quality",
         downloadSizeText: "3.1 GB",
         repositoryID: "mlx-community/Qwen3.5-4B-MLX-4bit"
     )
@@ -210,9 +210,47 @@ struct LocalLLMPromptConfiguration: Sendable {
     let softenEmotionalLanguage: Bool
     let outputStyle: LocalLLMOutputStyle
     let outputStyleStrength: LocalLLMOutputStyleStrength
+    let customOutputStyleInstruction: String
+    let environmentContext: String
+    let userIdentity: String
+    let selectedText: String
+    let translationLanguage: String
 
     var outputStyleInstruction: String {
-        outputStyle.instruction(strength: outputStyleStrength)
+        outputStyle.instruction(
+            strength: outputStyleStrength,
+            customInstruction: customOutputStyleInstruction
+        )
+    }
+
+    init(
+        systemPromptTemplate: String,
+        userPromptTemplate: String,
+        vocabulary: String,
+        punctuationStyle: PunctuationStyle,
+        removeFillerWords: Bool,
+        softenEmotionalLanguage: Bool,
+        outputStyle: LocalLLMOutputStyle,
+        outputStyleStrength: LocalLLMOutputStyleStrength,
+        customOutputStyleInstruction: String,
+        environmentContext: String,
+        userIdentity: String,
+        selectedText: String,
+        translationLanguage: String = ""
+    ) {
+        self.systemPromptTemplate = systemPromptTemplate
+        self.userPromptTemplate = userPromptTemplate
+        self.vocabulary = vocabulary
+        self.punctuationStyle = punctuationStyle
+        self.removeFillerWords = removeFillerWords
+        self.softenEmotionalLanguage = softenEmotionalLanguage
+        self.outputStyle = outputStyle
+        self.outputStyleStrength = outputStyleStrength
+        self.customOutputStyleInstruction = customOutputStyleInstruction
+        self.environmentContext = environmentContext
+        self.userIdentity = userIdentity
+        self.selectedText = selectedText
+        self.translationLanguage = translationLanguage
     }
 
     static var current: LocalLLMPromptConfiguration {
@@ -224,7 +262,12 @@ struct LocalLLMPromptConfiguration: Sendable {
             removeFillerWords: LocalLLMSettingsStore.removeFillerWords,
             softenEmotionalLanguage: LocalLLMSettingsStore.softenEmotionalLanguage,
             outputStyle: LocalLLMSettingsStore.outputStyle,
-            outputStyleStrength: LocalLLMSettingsStore.outputStyleStrength
+            outputStyleStrength: LocalLLMSettingsStore.outputStyleStrength,
+            customOutputStyleInstruction: LocalLLMSettingsStore.customOutputStyleInstruction,
+            environmentContext: PromptEnvironmentContext.current(),
+            userIdentity: LocalLLMSettingsStore.userIdentity,
+            selectedText: "",
+            translationLanguage: ""
         )
     }
 }
@@ -375,6 +418,7 @@ actor LocalLLMPostProcessor {
         traceMetadata["soften_emotional_language"] = String(promptConfiguration.softenEmotionalLanguage)
         traceMetadata["output_style"] = promptConfiguration.outputStyle.rawValue
         traceMetadata["output_style_strength"] = promptConfiguration.outputStyleStrength.rawValue
+        traceMetadata["translation_language"] = promptConfiguration.translationLanguage
         traceMetadata["reasoning_mode"] = generationProfile.reasoningMode.rawValue
         traceMetadata["model_enable_thinking"] = String(generationProfile.reasoningMode.modelEnableThinking)
 
@@ -511,6 +555,7 @@ actor LocalLLMPostProcessor {
                     "soften_emotional_language": String(promptConfiguration.softenEmotionalLanguage),
                     "output_style": promptConfiguration.outputStyle.rawValue,
                     "output_style_strength": promptConfiguration.outputStyleStrength.rawValue,
+                    "translation_language": promptConfiguration.translationLanguage,
                     "reasoning_mode": generationProfile.reasoningMode.rawValue,
                     "model_enable_thinking": String(generationProfile.reasoningMode.modelEnableThinking),
                     "max_tokens": generationProfile.maxTokens.map(String.init) ?? "unlimited"
@@ -540,7 +585,7 @@ actor LocalLLMPostProcessor {
                 rawResponse: response,
                 cleanedResponse: cleaned
             )
-            guard Self.isUsableCorrection(cleaned, original: input) else {
+            guard Self.isUsableCorrection(cleaned, original: Self.validationOriginal(input: input, fallbackRawText: fallbackRawText)) else {
                 let finalText = Self.fallbackText(
                     for: fallbackRawText,
                     vocabulary: promptConfiguration.vocabulary,
@@ -874,22 +919,21 @@ actor LocalLLMPostProcessor {
         for text: String,
         configuration: LocalLLMPromptConfiguration
     ) -> String {
-        let template = configuration.systemPromptTemplate
         let formattedVocabulary = formatVocabularyForPrompt(configuration.vocabulary, in: text)
         let punctuationStyle = configuration.punctuationStyle
-        let rendered = renderPromptTemplate(
-            template,
+        return renderPromptTemplate(
+            configuration.systemPromptTemplate,
             original: text,
             formattedVocabulary: formattedVocabulary,
             punctuationStyle: punctuationStyle,
             removeFillerWords: configuration.removeFillerWords,
             softenEmotionalLanguage: configuration.softenEmotionalLanguage,
-            outputStyleInstruction: configuration.outputStyleInstruction
+            outputStyleInstruction: configuration.outputStyleInstruction,
+            environmentContext: configuration.environmentContext,
+            userIdentity: configuration.userIdentity,
+            selectedText: configuration.selectedText,
+            translationLanguage: configuration.translationLanguage
         )
-        guard !formattedVocabulary.isEmpty, !templateReferencesVocabulary(template) else {
-            return rendered
-        }
-        return "\(rendered)\n\n\(vocabularyInstructionBlock(formattedVocabulary))"
     }
 
     private static func prompt(
@@ -904,7 +948,11 @@ actor LocalLLMPostProcessor {
             punctuationStyle: punctuationStyle,
             removeFillerWords: configuration.removeFillerWords,
             softenEmotionalLanguage: configuration.softenEmotionalLanguage,
-            outputStyleInstruction: configuration.outputStyleInstruction
+            outputStyleInstruction: configuration.outputStyleInstruction,
+            environmentContext: configuration.environmentContext,
+            userIdentity: configuration.userIdentity,
+            selectedText: configuration.selectedText,
+            translationLanguage: configuration.translationLanguage
         )
     }
 
@@ -915,20 +963,32 @@ actor LocalLLMPostProcessor {
         punctuationStyle: PunctuationStyle,
         removeFillerWords: Bool,
         softenEmotionalLanguage: Bool,
-        outputStyleInstruction: String
+        outputStyleInstruction: String,
+        environmentContext: String,
+        userIdentity: String,
+        selectedText: String,
+        translationLanguage: String
     ) -> String {
         return PromptTemplateRenderer.render(
             template,
             values: [
                 "original": original,
+                "selected_text": selectedText,
                 "vocabularies": formattedVocabulary,
                 "punctuation_style": punctuationStyle.promptValue,
                 "punctuation_instruction": punctuationStyle.instruction,
                 "remove_filler_words": removeFillerWords ? "true" : "",
                 "soften_emotional_language": softenEmotionalLanguage ? "true" : "",
-                "output_style_instruction": outputStyleInstruction
+                "output_style_instruction": outputStyleInstruction,
+                "environment_context": environmentContext,
+                "user_identity": userIdentity,
+                "translation_language": translationLanguage
             ]
         )
+    }
+
+    private static func validationOriginal(input: String, fallbackRawText: String) -> String {
+        fallbackRawText.count > input.count ? fallbackRawText : input
     }
 
     private static func formatVocabularyForPrompt(_ vocabulary: String, in text: String) -> String {
@@ -937,19 +997,6 @@ actor LocalLLMPostProcessor {
         return candidates
             .map { "- \($0.source) => \($0.target)" }
             .joined(separator: "\n")
-    }
-
-    private static func templateReferencesVocabulary(_ template: String) -> Bool {
-        template.contains("vocabularies")
-    }
-
-    private static func vocabularyInstructionBlock(_ formattedVocabulary: String) -> String {
-        """
-        # 可能的识别错误候选
-        以下映射只是候选，不一定全部正确；请结合上下文判断是否采用。采用时只替换左侧实际出现的片段，不要联想其它词库项。
-
-        \(formattedVocabulary)
-        """
     }
 
     private static func fallbackText(
@@ -1000,7 +1047,7 @@ actor LocalLLMPostProcessor {
                 matches = []
             }
 
-            for match in matches where match != phrase {
+            for match in matches where match != phrase && !isInsideExactVocabularyPhrase(match, phrase: phrase, text: text) {
                 let key = VocabularyCandidateKey(source: match, target: phrase)
                 guard !seen.contains(key) else { continue }
                 seen.insert(key)
@@ -1010,6 +1057,24 @@ actor LocalLLMPostProcessor {
         }
 
         return candidates
+    }
+
+    private static func isInsideExactVocabularyPhrase(_ match: String, phrase: String, text: String) -> Bool {
+        guard !match.isEmpty, !phrase.isEmpty, match != phrase else { return false }
+        var phraseSearchStart = text.startIndex
+
+        while let phraseRange = text.range(of: phrase, range: phraseSearchStart..<text.endIndex) {
+            var matchSearchStart = phraseRange.lowerBound
+            while let matchRange = text.range(of: match, range: matchSearchStart..<phraseRange.upperBound) {
+                if phraseRange.lowerBound <= matchRange.lowerBound && matchRange.upperBound <= phraseRange.upperBound {
+                    return true
+                }
+                matchSearchStart = matchRange.upperBound
+            }
+            phraseSearchStart = phraseRange.upperBound
+        }
+
+        return false
     }
 
     private static func hintVocabularyCandidates(in text: String, vocabulary: String) -> [VocabularyCandidate] {

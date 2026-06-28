@@ -1,7 +1,7 @@
 {
   "name": "vocabulary-and-prompt-check",
-  "model": "light",
-  "runs": 1,
+  "model": "quality",
+  "runs": 10,
   "punctuationStyle": "spaces",
   "softenEmotionalLanguage": false,
   "outputStyle": "original",
@@ -47,6 +47,35 @@
       "mustNotContain": [
         "text area",
         "place holder"
+      ],
+      "shouldChange": true
+    },
+    {
+      "id": "meeting-time-correction",
+      "text": "会议先放到下午三点哦不四点",
+      "mustContain": "下午四点",
+      "mustNotContain": [
+        "下午三点",
+        "哦不"
+      ],
+      "shouldChange": true
+    },
+    {
+      "id": "quantity-number-correction",
+      "text": "这份商品库存还有六份",
+      "expected": "这份商品库存还有 6 份",
+      "mustContain": "6 份",
+      "mustNotContain": "六份",
+      "shouldChange": true
+    },
+    {
+      "id": "readme-dot-md-correction",
+      "text": "帮我更新下 readmi 点 MD",
+      "expected": "帮我更新下 README.md",
+      "mustContain": "README.md",
+      "mustNotContain": [
+        "readmi",
+        "点 MD"
       ],
       "shouldChange": true
     }

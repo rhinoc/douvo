@@ -6,6 +6,7 @@ final class HotkeyManager: @unchecked Sendable {
         case toggleRecording
         case holdRecordingStarted
         case holdRecordingEnded
+        case translationRequested
         case cancel
     }
 
@@ -20,8 +21,10 @@ final class HotkeyManager: @unchecked Sendable {
     private let maxRetryCount = 30
     private var toggleTriggerDown = false
     private var holdTriggerDown = false
+    private var translationTriggerDown = false
     private var toggleOtherKeyPressed = false
     private var lastToggleTime: TimeInterval = 0
+    private var lastTranslationTime: TimeInterval = 0
     private let debounceInterval: TimeInterval = 0.25
     private var shouldConsumeEscape = false
     private var isShortcutHandlingSuspended = false
@@ -52,15 +55,28 @@ final class HotkeyManager: @unchecked Sendable {
         }
     }
 
+    private(set) var translationShortcut: HotkeyShortcut? {
+        didSet {
+            HotkeyShortcutStore.saveTranslationShortcut(translationShortcut)
+            onShortcutChanged?()
+        }
+    }
+
     init() {
         toggleShortcut = HotkeyShortcutStore.loadToggleShortcut()
         holdShortcut = HotkeyShortcutStore.loadHoldShortcut()
+        translationShortcut = HotkeyShortcutStore.loadTranslationShortcut()
         if let toggleShortcut, holdShortcut == toggleShortcut {
             AppLog.error("Hold shortcut duplicated toggle shortcut; clearing hold shortcut")
             holdShortcut = nil
             HotkeyShortcutStore.saveHoldShortcut(nil)
         }
-        AppLog.info("HotkeyManager init toggleShortcut=\(toggleShortcut?.displayName ?? "none") holdShortcut=\(holdShortcut?.displayName ?? "none")")
+        if let translationShortcut, translationShortcut == toggleShortcut || translationShortcut == holdShortcut {
+            AppLog.error("Translation shortcut duplicated another shortcut; clearing translation shortcut")
+            self.translationShortcut = nil
+            HotkeyShortcutStore.saveTranslationShortcut(nil)
+        }
+        AppLog.info("HotkeyManager init toggleShortcut=\(toggleShortcut?.displayName ?? "none") holdShortcut=\(holdShortcut?.displayName ?? "none") translationShortcut=\(translationShortcut?.displayName ?? "none")")
         Self.requestAccessibilityPermission()
     }
 
@@ -113,7 +129,7 @@ final class HotkeyManager: @unchecked Sendable {
         CGEvent.tapEnable(tap: tap, enable: true)
         isEventTapActive = true
         lastEventTapError = nil
-        AppLog.info("Hotkey event tap active toggleShortcut=\(toggleShortcut?.displayName ?? "none") holdShortcut=\(holdShortcut?.displayName ?? "none")")
+        AppLog.info("Hotkey event tap active toggleShortcut=\(toggleShortcut?.displayName ?? "none") holdShortcut=\(holdShortcut?.displayName ?? "none") translationShortcut=\(translationShortcut?.displayName ?? "none")")
         return true
     }
 
@@ -164,7 +180,7 @@ final class HotkeyManager: @unchecked Sendable {
 
     @discardableResult
     func setToggleShortcut(_ shortcut: HotkeyShortcut) -> Bool {
-        guard shortcut != holdShortcut else {
+        guard shortcut != holdShortcut, shortcut != translationShortcut else {
             AppLog.error("Rejected duplicate toggle shortcut \(shortcut.displayName)")
             return false
         }
@@ -182,7 +198,7 @@ final class HotkeyManager: @unchecked Sendable {
 
     @discardableResult
     func setHoldShortcut(_ shortcut: HotkeyShortcut) -> Bool {
-        guard shortcut != toggleShortcut else {
+        guard shortcut != toggleShortcut, shortcut != translationShortcut else {
             AppLog.error("Rejected duplicate hold shortcut \(shortcut.displayName)")
             return false
         }
@@ -196,6 +212,24 @@ final class HotkeyManager: @unchecked Sendable {
         holdShortcut = nil
         resetPressedState()
         AppLog.info("Hold shortcut cleared")
+    }
+
+    @discardableResult
+    func setTranslationShortcut(_ shortcut: HotkeyShortcut) -> Bool {
+        guard shortcut != toggleShortcut, shortcut != holdShortcut else {
+            AppLog.error("Rejected duplicate translation shortcut \(shortcut.displayName)")
+            return false
+        }
+        translationShortcut = shortcut
+        resetPressedState()
+        AppLog.info("Translation shortcut set to \(shortcut.displayName) keyCode=\(shortcut.keyCode)")
+        return true
+    }
+
+    func clearTranslationShortcut() {
+        translationShortcut = nil
+        resetPressedState()
+        AppLog.info("Translation shortcut cleared")
     }
 
     fileprivate func handleEvent(_ proxy: CGEventTapProxy, _ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -231,7 +265,6 @@ final class HotkeyManager: @unchecked Sendable {
         if toggleTriggerDown, let toggleShortcut, keyCode != toggleShortcut.keyCode {
             toggleOtherKeyPressed = true
         }
-
         if keyCode == 53, shouldConsumeEscape {
             onHotkeyEvent?(.cancel)
             return nil
@@ -242,6 +275,14 @@ final class HotkeyManager: @unchecked Sendable {
                 holdTriggerDown = true
                 AppLog.info("Hold shortcut down shortcut=\(holdShortcut.displayName)")
                 onHotkeyEvent?(.holdRecordingStarted)
+            }
+            return nil
+        }
+
+        if let translationShortcut, !translationShortcut.isModifier, keyCode == translationShortcut.keyCode {
+            if !translationTriggerDown {
+                translationTriggerDown = true
+                fireTranslationPressed()
             }
             return nil
         }
@@ -264,6 +305,11 @@ final class HotkeyManager: @unchecked Sendable {
             holdTriggerDown = false
             AppLog.info("Hold shortcut up shortcut=\(holdShortcut.displayName)")
             onHotkeyEvent?(.holdRecordingEnded)
+            return nil
+        }
+
+        if let translationShortcut, !translationShortcut.isModifier, keyCode == translationShortcut.keyCode, translationTriggerDown {
+            translationTriggerDown = false
             return nil
         }
 
@@ -292,6 +338,22 @@ final class HotkeyManager: @unchecked Sendable {
                 holdTriggerDown = false
                 AppLog.info("Hold shortcut up shortcut=\(holdShortcut.displayName)")
                 onHotkeyEvent?(.holdRecordingEnded)
+                return nil
+            }
+
+            return nil
+        }
+
+        if let translationShortcut, translationShortcut.isModifier, keyCode == translationShortcut.keyCode {
+            let isDown = translationShortcut.flagIsDown(in: event.flags)
+            if isDown, !translationTriggerDown {
+                translationTriggerDown = true
+                fireTranslationPressed()
+                return nil
+            }
+
+            if !isDown, translationTriggerDown {
+                translationTriggerDown = false
                 return nil
             }
 
@@ -333,9 +395,24 @@ final class HotkeyManager: @unchecked Sendable {
         }
     }
 
+    private func fireTranslationPressed() {
+        guard let translationShortcut else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastTranslationTime > debounceInterval {
+            lastTranslationTime = now
+            guard let onHotkeyEvent else {
+                AppLog.error("Hotkey translation dropped: no handler shortcut=\(translationShortcut.displayName)")
+                return
+            }
+            AppLog.info("Hotkey translation requested shortcut=\(translationShortcut.displayName) handler=true")
+            onHotkeyEvent(.translationRequested)
+        }
+    }
+
     private func resetPressedState() {
         toggleTriggerDown = false
         holdTriggerDown = false
+        translationTriggerDown = false
         toggleOtherKeyPressed = false
     }
 }

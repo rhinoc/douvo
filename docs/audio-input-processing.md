@@ -8,6 +8,8 @@ This document describes the audio conditioning currently applied before Douvo se
 
 For the Web ASR path, packets are 2048 samples at 16 kHz, about 128 ms per packet. On stop, Douvo flushes any partial packet and sends two silence packets so the server can finalize.
 
+The microphone tap uses a smaller 512-frame input buffer so overlay levels can update more promptly than ASR packets are emitted.
+
 For the Android ASR path, Douvo encodes the conditioned 16 kHz mono samples to Opus for the WebSocket request. Debug recordings are still written from the pre-Opus PCM samples, so saved files under `Recordings/` remain valid WAV files.
 
 ## Conditioning
@@ -24,7 +26,7 @@ Before float samples are converted to `Int16`, `AudioInputConditioner` applies t
   This reduces DC offset and very low-frequency rumble without using a speech/noise threshold.
 - Clamp output samples to `[-1, 1]` before scaling to `Int16`.
 
-The audio level shown in the overlay and logged as RMS is calculated from conditioned samples.
+The audio level shown in the overlay is calculated from conditioned samples. Douvo computes RMS for each converted buffer, converts it to dBFS, then maps the `-60 dB...-18 dB` range to a `0...1` visual level so quiet speech has more visible movement.
 
 ## Converter Tail Drain
 
@@ -50,8 +52,8 @@ Whispers should still pass through the pipeline. The high-pass filter can reduce
 
 Relevant logs:
 
-- `Audio level sample count=... rms=... level=...`
-  - Existing periodic level log, now based on conditioned samples.
+- `Audio capture summary ... levelRange=...`
+  - Existing periodic level summary, now based on dB-mapped visual levels calculated from conditioned samples.
 - `Audio debug recording saved path=... bytes=...`
   - Saved local 16 kHz mono PCM WAV for the current recording.
 - `Audio converter drained frames=...`

@@ -2,6 +2,31 @@ import XCTest
 @testable import Douvo
 
 final class VocabularyCandidateTests: XCTestCase {
+    func testCustomPromptWithoutVocabularyPlaceholderDoesNotAppendVocabularyBlock() {
+        let configuration = LocalLLMPromptConfiguration(
+            systemPromptTemplate: "只输出最终正文。",
+            userPromptTemplate: LocalLLMSettingsStore.defaultUserPromptTemplate,
+            vocabulary: "placeholder",
+            punctuationStyle: .complete,
+            removeFillerWords: false,
+            softenEmotionalLanguage: false,
+            outputStyle: .original,
+            outputStyleStrength: .medium,
+            customOutputStyleInstruction: "",
+            environmentContext: "",
+            userIdentity: "",
+            selectedText: ""
+        )
+
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "place holder",
+            configuration: configuration
+        )
+
+        XCTAssertEqual(instructions, "只输出最终正文。")
+        XCTAssertFalse(instructions.contains("place holder => placeholder"))
+    }
+
     func testCodePathVocabularyMatchesSpokenPath() {
         let candidates = LocalLLMPostProcessor.correctionVocabularyCandidates(
             for: "优化 sources D OUVO APP log 点 Swift 日志改为后台写入",
@@ -56,6 +81,20 @@ final class VocabularyCandidateTests: XCTestCase {
                 candidate.source == "树枝叶" && candidate.target == "设置页"
             },
             "Expected near-pinyin Chinese ASR text to map to the user vocabulary phrase."
+        )
+    }
+
+    func testChineseVocabularyDoesNotMatchSubstringInsideExactPhrase() {
+        let candidates = LocalLLMPostProcessor.correctionVocabularyCandidates(
+            for: "合入之后的自动发版 workflow",
+            vocabulary: "自动发版"
+        )
+
+        XCTAssertFalse(
+            candidates.contains { candidate in
+                candidate.source == "自动发" && candidate.target == "自动发版"
+            },
+            "Exact vocabulary phrases should not create nested substring corrections."
         )
     }
 

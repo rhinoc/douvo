@@ -208,12 +208,14 @@ struct HotkeyShortcut: Codable, Equatable {
 enum HotkeyShortcutSlot {
     case toggle
     case hold
+    case translation
 }
 
 enum HotkeyShortcutStore {
     private static let toggleKey = "triggerShortcut"
     private static let toggleDisabledKey = "triggerShortcutDisabled"
     private static let holdKey = "holdTriggerShortcut"
+    private static let translationKey = "translationTriggerShortcut"
 
     static func loadToggleShortcut() -> HotkeyShortcut? {
         if UserDefaults.standard.bool(forKey: toggleDisabledKey) {
@@ -254,5 +256,22 @@ enum HotkeyShortcutStore {
 
         guard let data = try? JSONEncoder().encode(shortcut) else { return }
         UserDefaults.standard.set(data, forKey: holdKey)
+    }
+
+    static func loadTranslationShortcut() -> HotkeyShortcut? {
+        guard let data = UserDefaults.standard.data(forKey: translationKey) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(HotkeyShortcut.self, from: data)
+    }
+
+    static func saveTranslationShortcut(_ shortcut: HotkeyShortcut?) {
+        guard let shortcut else {
+            UserDefaults.standard.removeObject(forKey: translationKey)
+            return
+        }
+
+        guard let data = try? JSONEncoder().encode(shortcut) else { return }
+        UserDefaults.standard.set(data, forKey: translationKey)
     }
 }

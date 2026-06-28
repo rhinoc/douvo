@@ -30,6 +30,8 @@ private struct PromptLabConfig: Decodable {
     let outputDirectory: String?
     let systemPrompt: String?
     let systemPromptFile: String?
+    let incrementalSystemPrompt: String?
+    let incrementalSystemPromptFile: String?
     let userPrompt: String?
     let userPromptFile: String?
     let vocabulary: StringList
@@ -39,6 +41,11 @@ private struct PromptLabConfig: Decodable {
     let softenEmotionalLanguage: Bool?
     let outputStyle: String?
     let outputStyleStrength: String?
+    let customOutputStyleInstruction: String?
+    let environmentContext: String?
+    let userIdentity: String?
+    let userIdentityFile: String?
+    let selectedText: String?
     let reasoningMode: String?
     let maxTokens: Int?
     let inputs: [PromptLabInput]
@@ -56,6 +63,8 @@ private struct PromptLabConfig: Decodable {
         case outputDirectory
         case systemPrompt
         case systemPromptFile
+        case incrementalSystemPrompt
+        case incrementalSystemPromptFile
         case userPrompt
         case userPromptFile
         case vocabulary
@@ -65,6 +74,11 @@ private struct PromptLabConfig: Decodable {
         case softenEmotionalLanguage
         case outputStyle
         case outputStyleStrength
+        case customOutputStyleInstruction
+        case environmentContext
+        case userIdentity
+        case userIdentityFile
+        case selectedText
         case reasoningMode
         case maxTokens
         case inputs
@@ -79,6 +93,8 @@ private struct PromptLabConfig: Decodable {
         outputDirectory = try container.decodeIfPresent(String.self, forKey: .outputDirectory)
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
         systemPromptFile = try container.decodeIfPresent(String.self, forKey: .systemPromptFile)
+        incrementalSystemPrompt = try container.decodeIfPresent(String.self, forKey: .incrementalSystemPrompt)
+        incrementalSystemPromptFile = try container.decodeIfPresent(String.self, forKey: .incrementalSystemPromptFile)
         userPrompt = try container.decodeIfPresent(String.self, forKey: .userPrompt)
         userPromptFile = try container.decodeIfPresent(String.self, forKey: .userPromptFile)
         vocabulary = try container.decodeIfPresent(StringList.self, forKey: .vocabulary) ?? StringList([])
@@ -88,6 +104,11 @@ private struct PromptLabConfig: Decodable {
         softenEmotionalLanguage = try container.decodeIfPresent(Bool.self, forKey: .softenEmotionalLanguage)
         outputStyle = try container.decodeIfPresent(String.self, forKey: .outputStyle)
         outputStyleStrength = try container.decodeIfPresent(String.self, forKey: .outputStyleStrength)
+        customOutputStyleInstruction = try container.decodeIfPresent(String.self, forKey: .customOutputStyleInstruction)
+        environmentContext = try container.decodeIfPresent(String.self, forKey: .environmentContext)
+        userIdentity = try container.decodeIfPresent(String.self, forKey: .userIdentity)
+        userIdentityFile = try container.decodeIfPresent(String.self, forKey: .userIdentityFile)
+        selectedText = try container.decodeIfPresent(String.self, forKey: .selectedText)
         reasoningMode = try container.decodeIfPresent(String.self, forKey: .reasoningMode)
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
         inputs = try container.decode([PromptLabInput].self, forKey: .inputs)
@@ -279,15 +300,29 @@ private struct PromptLabRunner {
     }
 
     private func resolvedPromptConfiguration() throws -> LocalLLMPromptConfiguration {
-        let systemPrompt = try loadedText(
+        let baseSystemPrompt = try loadedText(
             inline: config.systemPrompt,
             file: config.systemPromptFile,
             fallback: LocalLLMSettingsStore.defaultSystemPrompt
+        )
+        let incrementalSystemPrompt = try loadedText(
+            inline: config.incrementalSystemPrompt,
+            file: config.incrementalSystemPromptFile,
+            fallback: LocalLLMSettingsStore.incrementalSystemPrompt
+        )
+        let systemPrompt = Self.appendingIncrementalSystemPrompt(
+            incrementalSystemPrompt,
+            to: baseSystemPrompt
         )
         let userPrompt = try loadedText(
             inline: config.userPrompt,
             file: config.userPromptFile,
             fallback: LocalLLMSettingsStore.defaultUserPromptTemplate
+        )
+        let userIdentity = try loadedText(
+            inline: config.userIdentity,
+            file: config.userIdentityFile,
+            fallback: LocalLLMSettingsStore.userIdentity
         )
         let vocabulary = try loadedVocabulary()
         let punctuationStyle = try resolvedPunctuationStyle()
@@ -301,7 +336,11 @@ private struct PromptLabRunner {
             removeFillerWords: config.removeFillerWords ?? LocalLLMSettingsStore.removeFillerWords,
             softenEmotionalLanguage: config.softenEmotionalLanguage ?? LocalLLMSettingsStore.softenEmotionalLanguage,
             outputStyle: outputStyle,
-            outputStyleStrength: outputStyleStrength
+            outputStyleStrength: outputStyleStrength,
+            customOutputStyleInstruction: config.customOutputStyleInstruction ?? LocalLLMSettingsStore.customOutputStyleInstruction,
+            environmentContext: config.environmentContext ?? "",
+            userIdentity: userIdentity,
+            selectedText: config.selectedText ?? ""
         )
     }
 
@@ -340,6 +379,19 @@ private struct PromptLabRunner {
             return try String(contentsOf: resolvedURL(file), encoding: .utf8)
         }
         return inline ?? fallback
+    }
+
+    private static func appendingIncrementalSystemPrompt(
+        _ addition: String,
+        to base: String
+    ) -> String {
+        let trimmedAddition = addition.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAddition.isEmpty else { return base }
+        return """
+        \(base.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        \(trimmedAddition)
+        """
     }
 
     private func resolvedModels() throws -> [LocalLLMModel] {

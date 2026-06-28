@@ -14,6 +14,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
     func show(
         currentToggleShortcut: HotkeyShortcut?,
         currentHoldShortcut: HotkeyShortcut?,
+        currentTranslationShortcut: HotkeyShortcut?,
         loginStatus: LoginStatus,
         isKeyboardCaptureActive: Bool,
         keyboardCaptureError: String?,
@@ -27,6 +28,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onClearToggle: @escaping () -> Void,
         onResetHold: @escaping () -> Void,
         onClearHold: @escaping () -> Void,
+        onResetTranslation: @escaping () -> Void,
+        onClearTranslation: @escaping () -> Void,
         onSelectMicrophone: @escaping (String?) -> Void,
         onSelectASRProvider: @escaping (ASRProvider) -> Void,
         onSelectLanguage: @escaping (AppLanguage) -> Void,
@@ -50,8 +53,10 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         let model = SettingsPanelModel(
             toggleShortcut: currentToggleShortcut,
             holdShortcut: currentHoldShortcut,
+            translationShortcut: currentTranslationShortcut,
             toggleShortcutName: Self.shortcutName(currentToggleShortcut),
             holdShortcutName: Self.holdShortcutName(currentHoldShortcut),
+            translationShortcutName: Self.shortcutName(currentTranslationShortcut),
             loginStatus: loginStatus,
             isKeyboardCaptureActive: isKeyboardCaptureActive,
             keyboardCaptureError: keyboardCaptureError,
@@ -77,6 +82,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onClearToggle: onClearToggle,
             onResetHold: onResetHold,
             onClearHold: onClearHold,
+            onResetTranslation: onResetTranslation,
+            onClearTranslation: onClearTranslation,
             onSelectMicrophone: onSelectMicrophone,
             onSelectASRProvider: onSelectASRProvider,
             onSelectLanguage: onSelectLanguage,
@@ -130,6 +137,9 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         case .hold:
             model?.holdShortcut = shortcut
             model?.holdShortcutName = shortcut.settingsDisplayName
+        case .translation:
+            model?.translationShortcut = shortcut
+            model?.translationShortcutName = shortcut.settingsDisplayName
         }
         model?.capturingShortcut = nil
         model?.shortcutErrorMessage = nil
@@ -140,18 +150,26 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         model?.capturingShortcut = nil
         switch slot {
         case .toggle:
-            model?.shortcutErrorMessage = L10n.text(en: "Short press and hold-to-talk must use different keys.", zh: "短按和按住说话必须使用不同按键。")
+            model?.shortcutErrorMessage = L10n.text(en: "Short press, hold-to-talk, and translation must use different keys.", zh: "短按、按住说话和翻译必须使用不同按键。")
         case .hold:
-            model?.shortcutErrorMessage = L10n.text(en: "Hold-to-talk and short press must use different keys.", zh: "按住说话和短按必须使用不同按键。")
+            model?.shortcutErrorMessage = L10n.text(en: "Hold-to-talk, short press, and translation must use different keys.", zh: "按住说话、短按和翻译必须使用不同按键。")
+        case .translation:
+            model?.shortcutErrorMessage = L10n.text(en: "Translation and recording shortcuts must use different keys.", zh: "翻译和录音快捷键必须使用不同按键。")
         }
         clearFocus()
     }
 
-    func refreshShortcuts(toggleShortcut: HotkeyShortcut?, holdShortcut: HotkeyShortcut?) {
+    func refreshShortcuts(
+        toggleShortcut: HotkeyShortcut?,
+        holdShortcut: HotkeyShortcut?,
+        translationShortcut: HotkeyShortcut?
+    ) {
         model?.toggleShortcut = toggleShortcut
         model?.holdShortcut = holdShortcut
+        model?.translationShortcut = translationShortcut
         model?.toggleShortcutName = Self.shortcutName(toggleShortcut)
         model?.holdShortcutName = Self.holdShortcutName(holdShortcut)
+        model?.translationShortcutName = Self.shortcutName(translationShortcut)
         model?.capturingShortcut = nil
         model?.shortcutErrorMessage = nil
     }
@@ -170,6 +188,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         model.selectedLanguage = language
         model.toggleShortcutName = Self.shortcutName(model.toggleShortcut)
         model.holdShortcutName = Self.holdShortcutName(model.holdShortcut)
+        model.translationShortcutName = Self.shortcutName(model.translationShortcut)
         model.refreshMLXRuntimeDiagnostic()
         panel?.title = L10n.text(en: "Settings", zh: "设置")
     }
@@ -291,8 +310,10 @@ private final class SettingsPanelWindow: NSPanel {
 private final class SettingsPanelModel: ObservableObject {
     @Published var toggleShortcut: HotkeyShortcut?
     @Published var holdShortcut: HotkeyShortcut?
+    @Published var translationShortcut: HotkeyShortcut?
     @Published var toggleShortcutName: String
     @Published var holdShortcutName: String
+    @Published var translationShortcutName: String
     @Published var loginStatus: LoginStatus
     @Published var isKeyboardCaptureActive: Bool
     @Published var keyboardCaptureError: String?
@@ -304,10 +325,14 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var selectedMicrophoneUID: String?
     @Published var selectedASRProvider: ASRProvider
     @Published var selectedLanguage: AppLanguage
+    @Published var copyResultWhenInsertionFails = TextInsertionSettingsStore.copyResultWhenInsertionFails
     @Published var launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
-    @Published var overlayShowsControls = OverlayAppearanceStore.showsControls
+    @Published var overlayShowsCancelControl = OverlayAppearanceStore.showsCancelControl
+    @Published var overlayShowsSubmitControl = OverlayAppearanceStore.showsSubmitControl
     @Published var overlayShowsBorderLight = OverlayAppearanceStore.showsBorderLight
     @Published var selectedOverlaySize = OverlayAppearanceStore.size
+    @Published var selectedWaveformStyle = OverlayAppearanceStore.waveformStyle
+    @Published var overlayWaveformNoiseFloor = OverlayAppearanceStore.waveformNoiseFloor
     @Published var localPostProcessingEnabled = LocalLLMSettingsStore.postProcessingEnabled
     @Published var correctionBackend = CorrectionSettingsStore.backend
     @Published var selectedLocalLLMModel = LocalLLMSettingsStore.selectedModel
@@ -320,6 +345,14 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var localSoftenEmotionalLanguage = LocalLLMSettingsStore.softenEmotionalLanguage
     @Published var localOutputStyle = LocalLLMSettingsStore.outputStyle
     @Published var localOutputStyleStrength = LocalLLMSettingsStore.outputStyleStrength
+    @Published var localCustomOutputStyleInstruction = LocalLLMSettingsStore.customOutputStyleInstruction
+    @Published var includeCurrentTimeContext = LocalLLMSettingsStore.includeCurrentTimeContext
+    @Published var includeFrontmostAppContext = LocalLLMSettingsStore.includeFrontmostAppContext
+    @Published var includeWindowTitleContext = LocalLLMSettingsStore.includeWindowTitleContext
+    @Published var selectionEditingEnabled = LocalLLMSettingsStore.selectionEditingEnabled
+    @Published var translationTargetLanguage = LocalLLMSettingsStore.translationTargetLanguage
+    @Published var localIncrementalSystemPrompt = LocalLLMSettingsStore.incrementalSystemPrompt
+    @Published var localUserIdentity = LocalLLMSettingsStore.userIdentity
     @Published var localSystemPrompt = LocalLLMSettingsStore.customSystemPrompt
     @Published var localUserPromptTemplate = LocalLLMSettingsStore.customUserPromptTemplate
     @Published var localModelStatusRevision = 0
@@ -328,8 +361,10 @@ private final class SettingsPanelModel: ObservableObject {
     init(
         toggleShortcut: HotkeyShortcut?,
         holdShortcut: HotkeyShortcut?,
+        translationShortcut: HotkeyShortcut?,
         toggleShortcutName: String,
         holdShortcutName: String,
+        translationShortcutName: String,
         loginStatus: LoginStatus,
         isKeyboardCaptureActive: Bool,
         keyboardCaptureError: String?,
@@ -341,8 +376,10 @@ private final class SettingsPanelModel: ObservableObject {
     ) {
         self.toggleShortcut = toggleShortcut
         self.holdShortcut = holdShortcut
+        self.translationShortcut = translationShortcut
         self.toggleShortcutName = toggleShortcutName
         self.holdShortcutName = holdShortcutName
+        self.translationShortcutName = translationShortcutName
         self.loginStatus = loginStatus
         self.isKeyboardCaptureActive = isKeyboardCaptureActive
         self.keyboardCaptureError = keyboardCaptureError
@@ -397,7 +434,8 @@ private final class SettingsPanelModel: ObservableObject {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
-    case advanced
+    case features
+    case ai
     case diagnose
     case about
 
@@ -409,8 +447,10 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
             L10n.text(en: "General", zh: "通用")
         case .account:
             L10n.text(en: "Account", zh: "账号")
-        case .advanced:
-            L10n.text(en: "Correction", zh: "纠错")
+        case .features:
+            L10n.text(en: "Features", zh: "功能")
+        case .ai:
+            "AI"
         case .diagnose:
             L10n.text(en: "Diagnose", zh: "诊断")
         case .about:
@@ -421,15 +461,34 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var iconName: String {
         switch self {
         case .general:
-            return "keyboard"
+            return "gearshape"
         case .account:
             return "person.crop.circle"
-        case .advanced:
-            return "slider.horizontal.3"
+        case .features:
+            return "xmark.triangle.circle.square"
+        case .ai:
+            return "sparkles"
         case .diagnose:
             return "wrench.and.screwdriver"
         case .about:
             return "info.circle"
+        }
+    }
+
+    var iconTint: Color {
+        switch self {
+        case .general:
+            return Color(red: 0.22, green: 0.48, blue: 0.92)
+        case .account:
+            return Color(red: 0.38, green: 0.35, blue: 0.86)
+        case .features:
+            return Color(red: 0.91, green: 0.46, blue: 0.18)
+        case .ai:
+            return Color(red: 0.68, green: 0.30, blue: 0.86)
+        case .diagnose:
+            return Color(red: 0.08, green: 0.58, blue: 0.54)
+        case .about:
+            return Color(red: 0.42, green: 0.48, blue: 0.56)
         }
     }
 }
@@ -510,6 +569,8 @@ private extension HotkeyShortcutSlot {
             return L10n.text(en: "Short press", zh: "短按")
         case .hold:
             return L10n.text(en: "Hold-to-talk", zh: "按住说话")
+        case .translation:
+            return L10n.text(en: "Translation", zh: "翻译")
         }
     }
 
@@ -519,6 +580,8 @@ private extension HotkeyShortcutSlot {
             return L10n.text(en: "short press", zh: "短按")
         case .hold:
             return L10n.text(en: "hold-to-talk", zh: "按住说话")
+        case .translation:
+            return L10n.text(en: "translation", zh: "翻译")
         }
     }
 }
@@ -531,6 +594,8 @@ private struct SettingsPanelView: View {
     let onClearToggle: () -> Void
     let onResetHold: () -> Void
     let onClearHold: () -> Void
+    let onResetTranslation: () -> Void
+    let onClearTranslation: () -> Void
     let onSelectMicrophone: (String?) -> Void
     let onSelectASRProvider: (ASRProvider) -> Void
     let onSelectLanguage: (AppLanguage) -> Void
@@ -553,6 +618,9 @@ private struct SettingsPanelView: View {
     @State private var settingsToast: SettingsToast?
     @State private var validatingRemoteModelIDs: Set<String> = []
     @State private var vocabularyDraft = ""
+    @State private var customOutputStyleEditorHeight: CGFloat = 82
+    @State private var userIdentityEditorHeight: CGFloat = 92
+    @State private var incrementalSystemPromptEditorHeight: CGFloat = 118
     @State private var systemPromptEditorHeight: CGFloat = 192
     @State private var userMessageEditorHeight: CGFloat = 118
     @State private var isResizingPromptEditor = false
@@ -610,13 +678,14 @@ private struct SettingsPanelView: View {
             VStack(spacing: 5) {
                 Image(systemName: tab.iconName)
                     .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(tabIconColor(for: tab))
                     .frame(width: 20, height: 18, alignment: .center)
                 Text(tab.title)
                     .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(selectedTab == tab ? .primary : .secondary)
                     .frame(height: 13, alignment: .center)
             }
-            .foregroundColor(selectedTab == tab ? .primary : .secondary)
-            .frame(width: 80, height: 48)
+            .frame(width: 68, height: 48)
             .background(tabBackground(for: tab), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
@@ -625,7 +694,11 @@ private struct SettingsPanelView: View {
     }
 
     private func tabBackground(for tab: SettingsTab) -> Color {
-        selectedTab == tab ? Color.secondary.opacity(0.16) : Color.clear
+        selectedTab == tab ? tab.iconTint.opacity(0.16) : Color.clear
+    }
+
+    private func tabIconColor(for tab: SettingsTab) -> Color {
+        selectedTab == tab ? tab.iconTint : tab.iconTint.opacity(0.62)
     }
 
     @ViewBuilder
@@ -635,8 +708,10 @@ private struct SettingsPanelView: View {
             generalTab
         case .account:
             accountTab
-        case .advanced:
-            advancedTab
+        case .features:
+            featuresTab
+        case .ai:
+            aiTab
         case .diagnose:
             diagnoseTab
         case .about:
@@ -712,12 +787,13 @@ private struct SettingsPanelView: View {
                             }
                         )
                     }
+
                 }
 
-                if let message = shortcutStatusText {
+                if let message = model.shortcutErrorMessage {
                     Text(message)
                         .font(.system(size: 12))
-                        .foregroundColor(model.shortcutErrorMessage == nil ? .secondary : .red)
+                        .foregroundColor(.red)
                         .padding(.horizontal, 14)
                 }
 
@@ -766,8 +842,17 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow(L10n.text(en: "Controls", zh: "控制按钮")) {
-                        Toggle("", isOn: overlayShowsControlsBinding)
+                    settingsListRow(L10n.text(en: "Cancel Button", zh: "取消按钮")) {
+                        Toggle("", isOn: overlayShowsCancelControlBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Submit Button", zh: "提交按钮")) {
+                        Toggle("", isOn: overlayShowsSubmitControlBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
@@ -780,6 +865,37 @@ private struct SettingsPanelView: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Waveform Style", zh: "波形样式")) {
+                        Picker("", selection: overlayWaveformStyleBinding) {
+                            ForEach(OverlayAppearanceStore.WaveformStyle.allCases) { style in
+                                Text(style.displayName).tag(style)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 220, alignment: .trailing)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Noise Gate", zh: "底噪门限")) {
+                        HStack(spacing: 8) {
+                            Slider(
+                                value: overlayWaveformNoiseFloorBinding,
+                                in: OverlayAppearanceStore.waveformNoiseFloorRange,
+                                step: 0.01
+                            )
+                            .controlSize(.small)
+
+                            Text(String(format: "%.2f", model.overlayWaveformNoiseFloor))
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
                     }
                 }
             }
@@ -865,20 +981,6 @@ private struct SettingsPanelView: View {
         name == L10n.text(en: "Not Set", zh: "未设置") || name == "Not Set" || name == "未设置" ? .secondary : .primary
     }
 
-    private var shortcutStatusText: String? {
-        if let shortcutErrorMessage = model.shortcutErrorMessage {
-            return shortcutErrorMessage
-        }
-
-        guard let capturingShortcut = model.capturingShortcut else {
-            return nil
-        }
-        return L10n.text(
-            en: "Press any key to update \(capturingShortcut.helpName).",
-            zh: "按任意键更新\(capturingShortcut.helpName)。"
-        )
-    }
-
     private var languageBinding: Binding<AppLanguage> {
         Binding(
             get: { model.selectedLanguage },
@@ -887,6 +989,10 @@ private struct SettingsPanelView: View {
                 onSelectLanguage(newValue)
             }
         )
+    }
+
+    private var aiDependentFeaturesEnabled: Bool {
+        model.localPostProcessingEnabled
     }
 
     private var microphoneBinding: Binding<String?> {
@@ -917,12 +1023,32 @@ private struct SettingsPanelView: View {
         )
     }
 
-    private var overlayShowsControlsBinding: Binding<Bool> {
+    private var copyResultWhenInsertionFailsBinding: Binding<Bool> {
         Binding(
-            get: { model.overlayShowsControls },
+            get: { model.copyResultWhenInsertionFails },
             set: { newValue in
-                model.overlayShowsControls = newValue
-                OverlayAppearanceStore.showsControls = newValue
+                model.copyResultWhenInsertionFails = newValue
+                TextInsertionSettingsStore.copyResultWhenInsertionFails = newValue
+            }
+        )
+    }
+
+    private var overlayShowsCancelControlBinding: Binding<Bool> {
+        Binding(
+            get: { model.overlayShowsCancelControl },
+            set: { newValue in
+                model.overlayShowsCancelControl = newValue
+                OverlayAppearanceStore.showsCancelControl = newValue
+            }
+        )
+    }
+
+    private var overlayShowsSubmitControlBinding: Binding<Bool> {
+        Binding(
+            get: { model.overlayShowsSubmitControl },
+            set: { newValue in
+                model.overlayShowsSubmitControl = newValue
+                OverlayAppearanceStore.showsSubmitControl = newValue
             }
         )
     }
@@ -947,6 +1073,26 @@ private struct SettingsPanelView: View {
         )
     }
 
+    private var overlayWaveformStyleBinding: Binding<OverlayAppearanceStore.WaveformStyle> {
+        Binding(
+            get: { model.selectedWaveformStyle },
+            set: { newValue in
+                model.selectedWaveformStyle = newValue
+                OverlayAppearanceStore.waveformStyle = newValue
+            }
+        )
+    }
+
+    private var overlayWaveformNoiseFloorBinding: Binding<Double> {
+        Binding(
+            get: { model.overlayWaveformNoiseFloor },
+            set: { newValue in
+                model.overlayWaveformNoiseFloor = newValue
+                OverlayAppearanceStore.waveformNoiseFloor = newValue
+            }
+        )
+    }
+
     private var asrProviderBinding: Binding<ASRProvider> {
         Binding(
             get: { model.selectedASRProvider },
@@ -962,7 +1108,7 @@ private struct SettingsPanelView: View {
             settingsTitle(L10n.text(en: "Doubao", zh: "豆包"))
 
             settingsSection {
-                settingsListRow(L10n.text(en: "ASR Channel", zh: "ASR 通道")) {
+                settingsListRow(L10n.text(en: "Channel", zh: "渠道")) {
                     Picker("", selection: asrProviderBinding) {
                         ForEach(ASRProvider.allCases) { provider in
                             Text(provider.displayName).tag(provider)
@@ -1034,23 +1180,15 @@ private struct SettingsPanelView: View {
                     }
                 }
 
-                settingsDivider()
-
-                settingsListRow(L10n.text(en: "Debug", zh: "调试")) {
-                    Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: onCopyLoginDebugInfo)
-                        .focusable(false)
-                        .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
-                        .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
-                }
             }
         }
         .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
     }
 
-    private var advancedTab: some View {
+    private var featuresTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
-                settingsTitle(L10n.text(en: "Basic", zh: "基础"))
+                settingsTitle(L10n.text(en: "Output", zh: "输出"))
 
                 settingsSection {
                     correctionListRow(L10n.text(en: "Punctuation", zh: "标点"), contentAlignment: .trailing) {
@@ -1069,9 +1207,223 @@ private struct SettingsPanelView: View {
                     correctionListRow(L10n.text(en: "Vocabularies", zh: "词库"), height: nil) {
                         vocabularyChipEditor
                     }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        height: 48,
+                        labelWidth: 148,
+                        contentAlignment: .trailing,
+                        label: {
+                            aiRequiredLabel(L10n.text(en: "Remove Filler Words", zh: "去水词"), isEnabled: aiDependentFeaturesEnabled)
+                        }
+                    ) {
+                        Toggle("", isOn: removeFillerWordsBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!aiDependentFeaturesEnabled)
+                            .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                            .help(L10n.text(en: "Remove filler words and brief hesitations while preserving meaning.", zh: "在保留语义的同时移除水词和短暂停顿。"))
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        height: 48,
+                        labelWidth: 148,
+                        contentAlignment: .trailing,
+                        label: {
+                            aiRequiredLabel(L10n.text(en: "Soften Emotion", zh: "弱化情绪"), isEnabled: aiDependentFeaturesEnabled)
+                        }
+                    ) {
+                        Toggle("", isOn: softenEmotionalLanguageBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!aiDependentFeaturesEnabled)
+                            .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                            .help(L10n.text(en: "Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.", zh: "在不改变核心含义的前提下，把攻击性或情绪化表达改得更克制。"))
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        height: 48,
+                        labelWidth: 148,
+                        contentAlignment: .trailing,
+                        label: {
+                            aiRequiredLabel(L10n.text(en: "Output Style", zh: "输出风格"), isEnabled: aiDependentFeaturesEnabled)
+                        }
+                    ) {
+                        Picker("", selection: outputStyleBinding) {
+                            ForEach(LocalLLMOutputStyle.allCases) { style in
+                                Text(style.displayName).tag(style)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: Self.correctionRowContentWidth(labelWidth: 148), alignment: .trailing)
+                        .disabled(!aiDependentFeaturesEnabled)
+                        .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                    }
+
+                    if model.localOutputStyle == .custom {
+                        settingsDivider()
+
+                        correctionListRow(
+                            height: nil,
+                            labelWidth: 148,
+                            label: {
+                                aiRequiredLabel(L10n.text(en: "Custom", zh: "自定义"), isEnabled: aiDependentFeaturesEnabled)
+                            }
+                        ) {
+                            promptTextEditor(
+                                text: customOutputStyleInstructionBinding,
+                                height: $customOutputStyleEditorHeight,
+                                placeholder: L10n.text(en: "Describe how AI should rewrite, translate, or format the transcript.", zh: "描述 AI 应如何改写、翻译或格式化转写文本。")
+                            )
+                            .disabled(!aiDependentFeaturesEnabled)
+                            .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                        }
+                    } else {
+                        settingsDivider()
+
+                        correctionListRow(
+                            height: 48,
+                            labelWidth: 148,
+                            contentAlignment: .trailing,
+                            label: {
+                                aiRequiredLabel(L10n.text(en: "Style Strength", zh: "风格强度"), isEnabled: aiDependentFeaturesEnabled)
+                            }
+                        ) {
+                            Picker("", selection: outputStyleStrengthBinding) {
+                                ForEach(LocalLLMOutputStyleStrength.allCases) { strength in
+                                    Text(strength.displayName).tag(strength)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .frame(width: 168, alignment: .trailing)
+                            .disabled(!aiDependentFeaturesEnabled || model.localOutputStyle == .original)
+                            .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                        }
+                    }
                 }
 
-                settingsTitle("AI")
+                settingsTitle(L10n.text(en: "Insertion", zh: "插入"))
+
+                settingsSection {
+                    correctionListRow(
+                        L10n.text(en: "Copy on Failure", zh: "失败时复制"),
+                        labelWidth: 160,
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: copyResultWhenInsertionFailsBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+                }
+
+                settingsTitle(L10n.text(en: "Editing", zh: "编辑"))
+
+                settingsSection {
+                    correctionListRow(
+                        height: 48,
+                        labelWidth: 160,
+                        contentAlignment: .trailing,
+                        label: {
+                            aiRequiredLabel(L10n.text(en: "Selection Editing", zh: "选区编辑"), isEnabled: aiDependentFeaturesEnabled)
+                        }
+                    ) {
+                        Toggle("", isOn: selectionEditingEnabledBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!aiDependentFeaturesEnabled)
+                            .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                            .help(L10n.text(en: "When selected text exists, use speech as an edit instruction instead of replacing the selection.", zh: "存在选中文本时，将语音作为编辑指令，而不是直接替换选区。"))
+                    }
+                }
+
+                settingsTitle(L10n.text(en: "Translation", zh: "翻译"))
+
+                settingsSection {
+                    correctionListRow(
+                        height: 48,
+                        labelWidth: 160,
+                        contentAlignment: .trailing,
+                        label: {
+                            aiRequiredLabel(L10n.text(en: "Shortcut", zh: "快捷键"), isEnabled: aiDependentFeaturesEnabled)
+                        }
+                    ) {
+                        shortcutButtons(
+                            slot: .translation,
+                            name: model.translationShortcutName,
+                            resetHelp: L10n.text(en: "Clear translation key", zh: "清除翻译按键"),
+                            clearHelp: L10n.text(en: "Clear translation key", zh: "清除翻译按键"),
+                            onReset: {
+                                model.capturingShortcut = nil
+                                model.shortcutErrorMessage = nil
+                                onResetTranslation()
+                                model.translationShortcut = nil
+                                model.translationShortcutName = L10n.text(en: "Not Set", zh: "未设置")
+                                onEndCapture()
+                            },
+                            onClear: {
+                                model.capturingShortcut = nil
+                                model.shortcutErrorMessage = nil
+                                onClearTranslation()
+                                model.translationShortcut = nil
+                                model.translationShortcutName = L10n.text(en: "Not Set", zh: "未设置")
+                                onEndCapture()
+                            }
+                        )
+                    }
+
+                    Text(L10n.text(
+                        en: "Press during recording to switch to translation mode.",
+                        zh: "录音过程中按下以切换为翻译模式。"
+                    ))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+                    .allowsTightening(true)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 14)
+                    .padding(.top, -4)
+                    .padding(.bottom, 10)
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        height: 48,
+                        labelWidth: 160,
+                        contentAlignment: .trailing,
+                        label: {
+                            aiRequiredLabel(L10n.text(en: "Target Language", zh: "目标语言"), isEnabled: aiDependentFeaturesEnabled)
+                        }
+                    ) {
+                        languageMenuPicker(
+                            selection: translationTargetLanguageBinding,
+                            options: TranslationTargetLanguage.allCases,
+                            width: Self.correctionRowContentWidth(labelWidth: 160)
+                        )
+                        .disabled(!aiDependentFeaturesEnabled)
+                        .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
+                    }
+                }
+            }
+            .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
+        }
+    }
+
+    private var aiTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
+                settingsTitle(L10n.text(en: "Status", zh: "状态"))
 
                 settingsSection {
                     correctionListRow(L10n.text(en: "Enable", zh: "启用"), contentAlignment: .trailing) {
@@ -1080,11 +1432,13 @@ private struct SettingsPanelView: View {
                             .toggleStyle(.switch)
                             .controlSize(.small)
                             .disabled(!model.canEnablePostProcessing)
-                            .help(L10n.text(en: "Use the selected correction backend for transcript correction. Punctuation style still applies when this is off.", zh: "使用所选纠错后端整理转写。关闭时仍会应用标点样式。"))
+                            .help(L10n.text(en: "Use AI after transcription for correction, rewriting, translation, and custom actions.", zh: "转写后使用 AI 进行纠错、改写、翻译和自定义操作。"))
                     }
+                }
 
-                    settingsDivider()
+                settingsTitle(L10n.text(en: "Model", zh: "模型"))
 
+                settingsSection {
                     correctionListRow(L10n.text(en: "Backend", zh: "后端"), contentAlignment: .trailing) {
                         Picker("", selection: correctionBackendBinding) {
                             ForEach(CorrectionBackend.allCases) { backend in
@@ -1103,68 +1457,81 @@ private struct SettingsPanelView: View {
                     } else {
                         remoteModelSettings
                     }
+                }
+
+                settingsTitle(L10n.text(en: "Context", zh: "上下文"))
+
+                settingsSection {
+                    correctionListRow(L10n.text(en: "Current Time", zh: "当前时间"), contentAlignment: .trailing) {
+                        Toggle("", isOn: includeCurrentTimeContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .help(L10n.text(en: "Send current local time, weekday, and timezone to AI.", zh: "把当前本地时间、星期和时区传给 AI。"))
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(L10n.text(en: "Frontmost App", zh: "前台应用"), contentAlignment: .trailing) {
+                        Toggle("", isOn: includeFrontmostAppContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .help(L10n.text(en: "Send the frontmost app name to AI for context.", zh: "把前台应用名称作为上下文传给 AI。"))
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(L10n.text(en: "Window Title", zh: "窗口标题"), contentAlignment: .trailing) {
+                        Toggle("", isOn: includeWindowTitleContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!model.includeFrontmostAppContext)
+                            .help(L10n.text(en: "Optionally send the active window title. This may include document, page, chat, or project names.", zh: "可选传入当前窗口标题；标题可能包含文档、网页、聊天或项目名称。"))
+                    }
+
+                }
+
+                settingsDocumentationTitle(L10n.text(en: "Advanced", zh: "高级"))
+
+                settingsSection {
+                    correctionListRow(
+                        height: nil,
+                        label: {
+                            correctionRowLabel(L10n.text(en: "User Identity", zh: "用户身份"))
+                        }
+                    ) {
+                        promptTextEditor(
+                            text: localUserIdentityBinding,
+                            height: $userIdentityEditorHeight,
+                            placeholder: L10n.text(en: "Describe your role, domain, terminology preferences, or writing context.", zh: "描述你的身份、领域、术语偏好或写作场景。")
+                        )
+                    }
 
                     settingsDivider()
 
                     correctionListRow(
-                        L10n.text(en: "Remove Filler Words", zh: "去水词"),
-                        labelWidth: 132,
-                        contentAlignment: .trailing
+                        height: nil,
+                        label: {
+                            correctionRowLabel(L10n.text(en: "Add-on Prompt", zh: "增量提示词"))
+                        }
                     ) {
-                        Toggle("", isOn: removeFillerWordsBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .disabled(!model.localPostProcessingEnabled)
-                            .help(L10n.text(en: "Remove filler words and brief hesitations while preserving meaning.", zh: "在保留语义的同时移除水词和短暂停顿。"))
+                        promptTextEditor(
+                            text: localIncrementalSystemPromptBinding,
+                            height: $incrementalSystemPromptEditorHeight,
+                            placeholder: L10n.text(en: "Append rules to the system prompt", zh: "追加系统提示词片段")
+                        )
                     }
 
                     settingsDivider()
 
                     correctionListRow(
-                        L10n.text(en: "Soften Emotion", zh: "弱化情绪"),
-                        labelWidth: 132,
-                        contentAlignment: .trailing
+                        height: nil,
+                        label: {
+                            correctionRowLabel(L10n.text(en: "System Prompt", zh: "系统提示词"))
+                        }
                     ) {
-                        Toggle("", isOn: softenEmotionalLanguageBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .disabled(!model.localPostProcessingEnabled)
-                            .help(L10n.text(en: "Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.", zh: "在不改变核心含义的前提下，把攻击性或情绪化表达改得更克制。"))
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow(L10n.text(en: "Output Style", zh: "输出风格"), contentAlignment: .trailing) {
-                        Picker("", selection: outputStyleBinding) {
-                            ForEach(LocalLLMOutputStyle.allCases) { style in
-                                Text(style.displayName).tag(style)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: Self.correctionContentWidth, alignment: .trailing)
-                        .disabled(!model.localPostProcessingEnabled)
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow(L10n.text(en: "Style Strength", zh: "风格强度"), contentAlignment: .trailing) {
-                        Picker("", selection: outputStyleStrengthBinding) {
-                            ForEach(LocalLLMOutputStyleStrength.allCases) { strength in
-                                Text(strength.displayName).tag(strength)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(width: 168, alignment: .trailing)
-                        .disabled(!model.localPostProcessingEnabled || model.localOutputStyle == .original)
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow(L10n.text(en: "System Prompt", zh: "系统提示词"), height: nil) {
                         promptTextEditor(
                             text: localSystemPromptBinding,
                             height: $systemPromptEditorHeight,
@@ -1174,7 +1541,12 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    correctionListRow(L10n.text(en: "User Message", zh: "用户消息"), height: nil) {
+                    correctionListRow(
+                        height: nil,
+                        label: {
+                            correctionRowLabel(L10n.text(en: "User Message", zh: "用户消息"))
+                        }
+                    ) {
                         promptTextEditor(
                             text: localUserPromptTemplateBinding,
                             height: $userMessageEditorHeight,
@@ -1261,14 +1633,14 @@ private struct SettingsPanelView: View {
 
     private func localModelDetailText(_ localModel: LocalLLMModel) -> String {
         switch localModel.detailText {
-        case "Fast correction":
-            L10n.text(en: "Fast correction", zh: "快速纠错")
-        case "Fast 8bit correction":
-            L10n.text(en: "Fast 8bit correction", zh: "快速 8bit 纠错")
-        case "Balanced correction":
-            L10n.text(en: "Balanced correction", zh: "平衡纠错")
-        case "Quality correction":
-            L10n.text(en: "Quality correction", zh: "高质量纠错")
+        case "Fastest · smallest":
+            L10n.text(en: "Fastest · smallest", zh: "最快 · 最小")
+        case "Fast · sharper":
+            L10n.text(en: "Fast · sharper", zh: "快速 · 更清晰")
+        case "Balanced quality":
+            L10n.text(en: "Balanced quality", zh: "质量均衡")
+        case "Best quality":
+            L10n.text(en: "Best quality", zh: "最佳质量")
         case "Local MLX model":
             L10n.text(en: "Local MLX model", zh: "本地 MLX 模型")
         default:
@@ -1309,7 +1681,10 @@ private struct SettingsPanelView: View {
                 .buttonStyle(.plain)
                 .focusable(false)
                 .disabled(isAddingLocalModel)
-                .help(L10n.text(en: "Add a local MLX model folder", zh: "添加本地 MLX 模型文件夹"))
+                .help(L10n.text(
+                    en: "Add a local MLX folder with config, tokenizer, and safetensors files.",
+                    zh: "添加包含 config、tokenizer 和 safetensors 文件的本地 MLX 文件夹。"
+                ))
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -1862,6 +2237,83 @@ private struct SettingsPanelView: View {
         )
     }
 
+    private var customOutputStyleInstructionBinding: Binding<String> {
+        Binding(
+            get: {
+                model.localCustomOutputStyleInstruction
+            },
+            set: { newValue in
+                model.localCustomOutputStyleInstruction = newValue
+                LocalLLMSettingsStore.customOutputStyleInstruction = newValue
+            }
+        )
+    }
+
+    private var includeCurrentTimeContextBinding: Binding<Bool> {
+        Binding(
+            get: {
+                model.includeCurrentTimeContext
+            },
+            set: { newValue in
+                model.includeCurrentTimeContext = newValue
+                LocalLLMSettingsStore.includeCurrentTimeContext = newValue
+            }
+        )
+    }
+
+    private var includeFrontmostAppContextBinding: Binding<Bool> {
+        Binding(
+            get: {
+                model.includeFrontmostAppContext
+            },
+            set: { newValue in
+                model.includeFrontmostAppContext = newValue
+                LocalLLMSettingsStore.includeFrontmostAppContext = newValue
+                if !newValue, model.includeWindowTitleContext {
+                    model.includeWindowTitleContext = false
+                    LocalLLMSettingsStore.includeWindowTitleContext = false
+                }
+            }
+        )
+    }
+
+    private var includeWindowTitleContextBinding: Binding<Bool> {
+        Binding(
+            get: {
+                model.includeWindowTitleContext
+            },
+            set: { newValue in
+                let enabled = newValue && model.includeFrontmostAppContext
+                model.includeWindowTitleContext = enabled
+                LocalLLMSettingsStore.includeWindowTitleContext = enabled
+            }
+        )
+    }
+
+    private var selectionEditingEnabledBinding: Binding<Bool> {
+        Binding(
+            get: {
+                model.selectionEditingEnabled
+            },
+            set: { newValue in
+                model.selectionEditingEnabled = newValue
+                LocalLLMSettingsStore.selectionEditingEnabled = newValue
+            }
+        )
+    }
+
+    private var translationTargetLanguageBinding: Binding<TranslationTargetLanguage> {
+        Binding(
+            get: {
+                model.translationTargetLanguage
+            },
+            set: { newValue in
+                model.translationTargetLanguage = newValue
+                LocalLLMSettingsStore.translationTargetLanguage = newValue
+            }
+        )
+    }
+
     private var vocabularyChipEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             FlowLayout(spacing: 6, rowSpacing: 6) {
@@ -1957,6 +2409,30 @@ private struct SettingsPanelView: View {
             set: { newValue in
                 model.localSystemPrompt = newValue
                 LocalLLMSettingsStore.customSystemPrompt = newValue
+            }
+        )
+    }
+
+    private var localIncrementalSystemPromptBinding: Binding<String> {
+        Binding(
+            get: {
+                model.localIncrementalSystemPrompt
+            },
+            set: { newValue in
+                model.localIncrementalSystemPrompt = newValue
+                LocalLLMSettingsStore.incrementalSystemPrompt = newValue
+            }
+        )
+    }
+
+    private var localUserIdentityBinding: Binding<String> {
+        Binding(
+            get: {
+                model.localUserIdentity
+            },
+            set: { newValue in
+                model.localUserIdentity = newValue
+                LocalLLMSettingsStore.userIdentity = newValue
             }
         )
     }
@@ -2091,7 +2567,7 @@ private struct SettingsPanelView: View {
         AppLog.info("Local LLM delete button pressed model=\(selectedModel.repositoryID) downloaded=\(selectedIsDownloaded) downloading=\(isDownloading) deleting=\(isDeleting) enabled=\(model.localPostProcessingEnabled) downloadedCount=\(downloadedCount) canDelete=\(canDelete)")
         guard canDelete else {
             AppLog.info("Local LLM delete button ignored model=\(selectedModel.repositoryID)")
-            presentSettingsToast(L10n.text(en: "AI Correction needs at least one downloaded model.", zh: "AI 纠错至少需要一个已下载模型。"), kind: .error)
+            presentSettingsToast(L10n.text(en: "AI Post-processing needs at least one downloaded model.", zh: "AI 后处理至少需要一个已下载模型。"), kind: .error)
             return
         }
 
@@ -2260,7 +2736,7 @@ private struct SettingsPanelView: View {
             return L10n.text(en: "Local folders are only removed from this list; files are not deleted.", zh: "本地文件夹只会从列表移除，不会删除文件。")
         }
         if model.correctionBackend == .local, model.localPostProcessingEnabled, downloadedLocalModels.count <= 1 {
-            return L10n.text(en: "Turn off AI Correction or download another model before deleting this one.", zh: "删除前请先关闭 AI 纠错或下载另一个模型。")
+            return L10n.text(en: "Turn off AI Post-processing or download another model before deleting this one.", zh: "删除前请先关闭 AI 后处理或下载另一个模型。")
         }
         return L10n.text(en: "Delete \(selectedModel.displayName) from the local Hugging Face cache.", zh: "从本地 Hugging Face 缓存删除 \(selectedModel.displayName)。")
     }
@@ -2476,6 +2952,68 @@ private struct SettingsPanelView: View {
         }
     }
 
+    private var correctionDebugSection: some View {
+        VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
+            HStack(spacing: 8) {
+                settingsTitle(L10n.text(en: "Debug Model", zh: "调试模型"))
+
+                Spacer(minLength: 8)
+
+                if isRunningCorrectionDebug {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                }
+            }
+
+            settingsSection {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        correctionDebugBackendMenu
+
+                        Spacer(minLength: 8)
+
+                        Button(L10n.text(en: "Run", zh: "运行"), action: runCorrectionDebug)
+                            .focusable(false)
+                            .disabled(isRunningCorrectionDebug || correctionDebugInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button(L10n.text(en: "Show in Finder", zh: "在 Finder 中显示"), action: locateCorrectionDebugTrace)
+                            .focusable(false)
+                            .disabled(correctionDebugTraceURL == nil)
+                            .help(L10n.text(en: "Show the latest debug model trace in Finder.", zh: "在 Finder 中显示最新调试模型 trace。"))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+
+                    debugInputEditor
+
+                    if !correctionDebugOutput.isEmpty {
+                        HStack(spacing: 8) {
+                            debugTextLabel(L10n.text(en: "AI Output", zh: "AI 输出"))
+
+                            Spacer(minLength: 8)
+
+                            if !correctionDebugDurationText.isEmpty {
+                                Text(correctionDebugDurationText)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        debugOutputView
+                    }
+
+                    if let correctionDebugError {
+                        Text(correctionDebugError)
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                            .lineLimit(3)
+                    }
+
+                }
+                .padding(12)
+            }
+        }
+    }
+
     private var diagnoseTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
@@ -2515,6 +3053,15 @@ private struct SettingsPanelView: View {
                                 .focusable(false)
                         }
                     }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Account", zh: "账号"), height: 44) {
+                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: onCopyLoginDebugInfo)
+                            .focusable(false)
+                            .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
+                            .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
+                    }
                 }
 
                 if let error = model.keyboardCaptureError, !model.isKeyboardCaptureActive {
@@ -2525,63 +3072,7 @@ private struct SettingsPanelView: View {
                         .padding(.horizontal, 14)
                 }
 
-                HStack(spacing: 8) {
-                    settingsTitle(L10n.text(en: "Debug Model", zh: "调试模型"))
-
-                    Spacer(minLength: 8)
-
-                    if isRunningCorrectionDebug {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 16, height: 16)
-                    }
-                }
-
-                settingsSection {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            correctionDebugBackendMenu
-
-                            Spacer(minLength: 8)
-
-                            Button(L10n.text(en: "Run", zh: "运行"), action: runCorrectionDebug)
-                                .focusable(false)
-                                .disabled(isRunningCorrectionDebug || correctionDebugInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                            Button(L10n.text(en: "Show in Finder", zh: "在 Finder 中显示"), action: locateCorrectionDebugTrace)
-                                .focusable(false)
-                                .disabled(correctionDebugTraceURL == nil)
-                                .help(L10n.text(en: "Show the latest debug model trace in Finder.", zh: "在 Finder 中显示最新调试模型 trace。"))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-
-                        debugInputEditor
-
-                        if !correctionDebugOutput.isEmpty {
-                            HStack(spacing: 8) {
-                                debugTextLabel(L10n.text(en: "Corrected Output", zh: "纠错输出"))
-
-                                Spacer(minLength: 8)
-
-                                if !correctionDebugDurationText.isEmpty {
-                                    Text(correctionDebugDurationText)
-                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            debugOutputView
-                        }
-
-                        if let correctionDebugError {
-                            Text(correctionDebugError)
-                                .font(.system(size: 11))
-                                .foregroundColor(.red)
-                                .lineLimit(3)
-                        }
-
-                    }
-                    .padding(12)
-                }
+                correctionDebugSection
             }
             .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
         }
@@ -2593,7 +3084,7 @@ private struct SettingsPanelView: View {
                 .frame(height: 58)
 
             if correctionDebugInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(L10n.text(en: "Type to test correction", zh: "输入文本测试纠错"))
+                Text(L10n.text(en: "Type to test AI output", zh: "输入文本测试 AI 输出"))
                     .font(.system(size: 12))
                     .foregroundColor(.secondary.opacity(0.65))
                     .padding(.horizontal, 6)
@@ -2666,7 +3157,7 @@ private struct SettingsPanelView: View {
             await MainActor.run {
                 isRunningCorrectionDebug = false
                 guard let result else {
-                    correctionDebugError = L10n.text(en: "Correction failed without a usable result.", zh: "纠错失败，没有可用结果。")
+                    correctionDebugError = L10n.text(en: "AI post-processing failed without a usable result.", zh: "AI 后处理失败，没有可用结果。")
                     return
                 }
 
@@ -2674,7 +3165,7 @@ private struct SettingsPanelView: View {
                 correctionDebugDurationText = Self.formattedDebugDuration(result.timings)
                 correctionDebugTraceURL = traceURL
                 if traceURL == nil {
-                    correctionDebugError = L10n.text(en: "Correction completed, but trace file could not be written.", zh: "纠错已完成，但 trace 文件写入失败。")
+                    correctionDebugError = L10n.text(en: "AI post-processing completed, but trace file could not be written.", zh: "AI 后处理已完成，但 trace 文件写入失败。")
                 }
             }
         }
@@ -2778,6 +3269,12 @@ private struct SettingsPanelView: View {
     }
 
     private static let repositoryURL = URL(string: "https://github.com/rhinoc/douvo")!
+    private static var promptDocumentationURL: URL {
+        URL(string: L10n.text(
+            en: "https://github.com/rhinoc/douvo/blob/main/docs/advanced-prompts.md",
+            zh: "https://github.com/rhinoc/douvo/blob/main/docs/advanced-prompts.zh.md"
+        ))!
+    }
 
     private func statusText(_ text: String, isHealthy: Bool) -> some View {
         HStack(spacing: 5) {
@@ -2789,6 +3286,26 @@ private struct SettingsPanelView: View {
                 .lineLimit(1)
         }
         .foregroundColor(isHealthy ? .green : .orange)
+    }
+
+    private func aiRequiredLabel(_ title: String, isEnabled: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text(title)
+                .lineLimit(1)
+
+            Image(systemName: "sparkles")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.secondary)
+                .frame(width: 14, height: 14)
+                .overlay {
+                    TooltipArea(text: L10n.text(en: "Requires AI to take effect.", zh: "需要启用 AI 才会生效。"))
+                }
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundColor(isEnabled ? .primary : .secondary)
+        .opacity(isEnabled ? 1 : Self.disabledFeatureOpacity)
+        .contentShape(Rectangle())
+        .help(L10n.text(en: "Requires AI to take effect.", zh: "需要启用 AI 才会生效。"))
     }
 
     private static var aboutIconImage: NSImage {
@@ -2812,6 +3329,24 @@ private struct SettingsPanelView: View {
             .foregroundColor(.secondary)
     }
 
+    private func settingsDocumentationTitle(_ title: String) -> some View {
+        HStack(spacing: 5) {
+            Text(title)
+
+            Link(destination: Self.promptDocumentationURL) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 14, height: 14)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(L10n.text(en: "Open prompt documentation on GitHub", zh: "打开 GitHub 上的提示词说明文档"))
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundColor(.secondary)
+    }
+
     private func settingsRow<Content: View>(
         _ label: String,
         @ViewBuilder content: () -> Content
@@ -2825,6 +3360,21 @@ private struct SettingsPanelView: View {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func languageMenuPicker<Option: LanguageMenuOption>(
+        selection: Binding<Option>,
+        options: [Option],
+        width: CGFloat
+    ) -> some View {
+        Picker("", selection: selection) {
+            ForEach(options) { option in
+                Text(option.menuTitle).tag(option)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(width: width, alignment: .trailing)
     }
 
     private func settingsSection<Content: View>(
@@ -2864,16 +3414,41 @@ private struct SettingsPanelView: View {
         contentAlignment: Alignment = .leading,
         @ViewBuilder trailing: () -> Content
     ) -> some View {
+        correctionListRow(
+            height: height,
+            labelWidth: labelWidth,
+            contentAlignment: contentAlignment,
+            label: {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+            },
+            trailing: trailing
+        )
+    }
+
+    private func correctionRowLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundColor(.primary)
+            .lineLimit(1)
+    }
+
+    private func correctionListRow<Label: View, Content: View>(
+        height: CGFloat? = 48,
+        labelWidth: CGFloat = Self.correctionLabelWidth,
+        contentAlignment: Alignment = .leading,
+        @ViewBuilder label: () -> Label,
+        @ViewBuilder trailing: () -> Content
+    ) -> some View {
         let contentWidth = Self.correctionRowContentWidth(labelWidth: labelWidth)
 
         let rowAlignment: VerticalAlignment = height == nil ? .top : .center
         let labelTopPadding: CGFloat = height == nil ? 4 : 0
 
         return HStack(alignment: rowAlignment, spacing: 12) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.primary)
-                .lineLimit(1)
+            label()
                 .frame(width: labelWidth, alignment: .leading)
                 .padding(.top, labelTopPadding)
 
@@ -2924,6 +3499,7 @@ private struct SettingsPanelView: View {
     private static let localModelProgressAccessoryWidth: CGFloat = 28
     private static let localModelActivityAccessoryWidth: CGFloat = 110
     private static let localModelProgressTextWidth: CGFloat = 76
+    private static let disabledFeatureOpacity: CGFloat = 0.45
 
     private static func correctionRowContentWidth(labelWidth: CGFloat) -> CGFloat {
         settingsGroupWidth - 28 - 12 - labelWidth
@@ -3047,6 +3623,20 @@ private final class FocusableSecureTextField: NSSecureTextField {
         if currentEditor() == nil {
             selectText(nil)
         }
+    }
+}
+
+private struct TooltipArea: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.toolTip = text
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.toolTip = text
     }
 }
 
@@ -3188,11 +3778,11 @@ private struct HighlightedPromptTextEditor: NSViewRepresentable {
         }
 
         private static let variablePattern = try? NSRegularExpression(
-            pattern: #"\{\{\s*(original|vocabularies|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction)\s*\}\}"#
+            pattern: #"\{\{\s*(original|selected_text|translation_language|vocabularies|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)\s*\}\}"#
         )
 
         private static let controlPattern = try? NSRegularExpression(
-            pattern: #"\{\{\s*(#if\s+(original|vocabularies|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction)|else|/if)\s*\}\}"#
+            pattern: #"\{\{\s*(#if\s+(original|selected_text|translation_language|vocabularies|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)|else|/if)\s*\}\}"#
         )
 
         private static var baseAttributes: [NSAttributedString.Key: Any] {

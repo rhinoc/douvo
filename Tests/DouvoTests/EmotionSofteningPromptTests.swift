@@ -8,7 +8,7 @@ final class EmotionSofteningPromptTests: XCTestCase {
             configuration: promptConfiguration(softenEmotionalLanguage: false)
         )
 
-        XCTAssertFalse(instructions.contains("# 情绪弱化"))
+        XCTAssertFalse(instructions.contains("不要保留辱骂词"))
         XCTAssertFalse(instructions.contains("soften_emotional_language"))
     }
 
@@ -18,7 +18,6 @@ final class EmotionSofteningPromptTests: XCTestCase {
             configuration: promptConfiguration(softenEmotionalLanguage: true)
         )
 
-        XCTAssertTrue(instructions.contains("# 情绪弱化"))
         XCTAssertTrue(instructions.contains("不要保留辱骂词"))
         XCTAssertTrue(instructions.contains("保留原本立场"))
     }
@@ -32,7 +31,11 @@ final class EmotionSofteningPromptTests: XCTestCase {
             removeFillerWords: false,
             softenEmotionalLanguage: softenEmotionalLanguage,
             outputStyle: .original,
-            outputStyleStrength: .medium
+            outputStyleStrength: .medium,
+            customOutputStyleInstruction: "",
+            environmentContext: "",
+            userIdentity: "",
+            selectedText: ""
         )
     }
 }

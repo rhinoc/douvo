@@ -14,6 +14,10 @@ final class TranscriptionManager {
         L10n.text(en: "Login expired. Please log in again.", zh: "登录已过期，请重新登录")
     }
 
+    private static var selectionTooLongMessage: String {
+        L10n.text(en: "Select 500 chars or fewer.", zh: "选中文本不超过 500 字。")
+    }
+
     private let appState: AppState
     private let webViewManager: WebViewManager
     private let overlayPanel: OverlayPanel
@@ -39,7 +43,11 @@ final class TranscriptionManager {
     private var activeASRProviders = Set<String>()
     private var openedASRProviders = Set<String>()
     private var finishedASRProviders = Set<String>()
+    private var selectionEditTarget: String?
+    private var translationSessionActive = false
+    private var holdRecordingStartedAt: TimeInterval?
     private static let maxASRResultSummarySamples = 12
+    private let minimumHoldRecordingDuration: TimeInterval = 0.45
     // After the user stops, wait this long with no new results before submitting.
     private let finalQuietInterval: TimeInterval = 1.5
     // Absolute cap on how long we keep spinning after stop, in case finish never arrives.
@@ -126,6 +134,8 @@ final class TranscriptionManager {
             startRecordingFromHold()
         case .holdRecordingEnded:
             stopRecordingFromHold()
+        case .translationRequested:
+            markTranslationRequested()
         case .cancel:
             cancelRecording()
         }
@@ -286,9 +296,43 @@ final class TranscriptionManager {
         }
     }
 
+    private func markTranslationRequested() {
+        AppLog.info("Translation requested currentState=\(appState.recordingState)")
+        switch appState.recordingState {
+        case .starting, .recording:
+            if translationSessionActive {
+                AppLog.info("Translation request toggled off")
+                translationSessionActive = false
+                appState.overlayMode = .dictation
+                appState.errorMessage = nil
+                transcriptionTrace?.event("translation.toggled_off")
+                transcriptionTrace?.set("translation.enabled", false)
+                return
+            }
+            guard LocalLLMPostProcessor.isCorrectionEnabled else {
+                AppLog.info("Translation request ignored: AI Correction disabled")
+                appState.errorMessage = L10n.text(en: "Translation requires AI Correction.", zh: "翻译需要先开启 AI Correction")
+                transcriptionTrace?.event("translation.request_ignored", metadata: ["reason": "ai_correction_disabled"])
+                return
+            }
+            translationSessionActive = true
+            selectionEditTarget = nil
+            appState.overlayMode = .translation
+            appState.errorMessage = nil
+            transcriptionTrace?.event("translation.requested", metadata: [
+                "target_language": LocalLLMSettingsStore.translationTargetLanguage.promptName
+            ])
+            transcriptionTrace?.set("translation.enabled", true)
+            transcriptionTrace?.set("translation.target_language", LocalLLMSettingsStore.translationTargetLanguage.promptName)
+        case .idle, .stopping:
+            break
+        }
+    }
+
     private func startRecordingFromHold() {
         AppLog.info("Hold recording start currentState=\(appState.recordingState)")
         guard appState.recordingState == .idle else { return }
+        holdRecordingStartedAt = ProcessInfo.processInfo.systemUptime
         startRecording()
     }
 
@@ -296,8 +340,21 @@ final class TranscriptionManager {
         AppLog.info("Hold recording stop currentState=\(appState.recordingState)")
         switch appState.recordingState {
         case .starting, .recording:
+            let heldDuration = holdRecordingStartedAt.map { ProcessInfo.processInfo.systemUptime - $0 } ?? 0
+            guard heldDuration >= minimumHoldRecordingDuration else {
+                AppLog.info("Hold recording cancelled: too short durationMs=\(Int((heldDuration * 1000).rounded())) minimumMs=\(Int(minimumHoldRecordingDuration * 1000))")
+                transcriptionTrace?.event("hold.cancelled_short_press", metadata: [
+                    "duration_ms": String(Int((heldDuration * 1000).rounded())),
+                    "minimum_ms": String(Int(minimumHoldRecordingDuration * 1000))
+                ])
+                holdRecordingStartedAt = nil
+                cancelRecording(traceOutcome: "cancelled_short_hold")
+                return
+            }
+            holdRecordingStartedAt = nil
             stopRecording()
         case .idle, .stopping:
+            holdRecordingStartedAt = nil
             break
         }
     }
@@ -323,6 +380,32 @@ final class TranscriptionManager {
         openedASRProviders.removeAll()
         finishedASRProviders.removeAll()
         isHandlingConnectionError = false
+        selectionEditTarget = nil
+        translationSessionActive = false
+        appState.overlayMode = .dictation
+        if LocalLLMSettingsStore.selectionEditingEnabled {
+            let selectionPreparation = prepareSelectionEditingTarget()
+            if selectionPreparation == .tooLong {
+                AppLog.info("Start blocked: selected text too long")
+                appState.errorMessage = Self.selectionTooLongMessage
+                transcriptionTrace?.event("selection_edit.blocked", metadata: [
+                    "reason": "selection_too_long",
+                    "max_chars": String(SelectedTextReader.maxSelectionCharacters)
+                ])
+                setRecordingState(.starting)
+                overlayPanel.show()
+                finishCurrentTrace(outcome: "blocked", metadata: ["reason": "selection_too_long"])
+                resetToIdle(after: 1.5)
+                return
+            }
+            if case .text(let selectedText) = selectionPreparation {
+                selectionEditTarget = selectedText
+                appState.overlayMode = .selectionEditing
+                transcriptionTrace?.set("selection_edit.enabled", true)
+                transcriptionTrace?.set("selection_edit.selected_chars", selectedText.count)
+            }
+        }
+
         setRecordingState(.starting)
         appState.transcript = ""
         appState.errorMessage = nil
@@ -458,18 +541,21 @@ final class TranscriptionManager {
         }
     }
 
-    func cancelRecording() {
+    func cancelRecording(traceOutcome: String = "cancelled") {
         guard appState.recordingState != .idle else { return }
         AppLog.info("Cancel recording currentTextChars=\(appState.transcript.count)")
         transcriptionTrace?.event("recording.cancel_requested", metadata: ["current_text_chars": String(appState.transcript.count)])
         awaitingFinalResult = false
         isCompletingTranscription = false
+        selectionEditTarget = nil
+        translationSessionActive = false
+        appState.overlayMode = .dictation
         completionTask?.cancel()
         completionTask = nil
         cancelFinalTimers()
         cancelActiveSession()
         logASRResultSummary(reason: "cancelled")
-        finishCurrentTrace(outcome: "cancelled", metadata: ["current_text_chars": String(appState.transcript.count)])
+        finishCurrentTrace(outcome: traceOutcome, metadata: ["current_text_chars": String(appState.transcript.count)])
         resetToIdle(after: 0)
     }
 
@@ -512,6 +598,7 @@ final class TranscriptionManager {
                         for: correctionRequest.promptText,
                         requiresEnabled: true,
                         promptConfiguration: correctionRequest.promptConfiguration,
+                        generationProfile: correctionRequest.generationProfile,
                         fallbackText: correctionRequest.fallbackText
                     )
                     self.transcriptionTrace?.addTimings(result.timings)
@@ -538,9 +625,47 @@ final class TranscriptionManager {
         let webText: String?
         let androidText: String?
         let promptConfiguration: LocalLLMPromptConfiguration?
+        let generationProfile: LocalLLMGenerationProfile?
+
+        init(
+            promptText: String,
+            fallbackText: String,
+            inputMode: String,
+            webText: String?,
+            androidText: String?,
+            promptConfiguration: LocalLLMPromptConfiguration?,
+            generationProfile: LocalLLMGenerationProfile? = nil
+        ) {
+            self.promptText = promptText
+            self.fallbackText = fallbackText
+            self.inputMode = inputMode
+            self.webText = webText
+            self.androidText = androidText
+            self.promptConfiguration = promptConfiguration
+            self.generationProfile = generationProfile
+        }
+    }
+
+    private func prepareSelectionEditingTarget() -> SelectedTextReadResult {
+        guard LocalLLMPostProcessor.isCorrectionEnabled,
+              LocalLLMSettingsStore.selectionEditingEnabled else {
+            return .none
+        }
+        return SelectedTextReader.currentSelection()
     }
 
     private func correctionRequest(for recognizedText: String) -> CorrectionRequest {
+        if translationSessionActive {
+            return translationCorrectionRequest(recognizedText: recognizedText)
+        }
+
+        if let selectionEditTarget {
+            return selectionEditCorrectionRequest(
+                spokenCommand: recognizedText,
+                selectedText: selectionEditTarget
+            )
+        }
+
         guard ASRProviderStore.selected == .mix else {
             return CorrectionRequest(
                 promptText: recognizedText,
@@ -590,6 +715,64 @@ final class TranscriptionManager {
         )
     }
 
+    private func selectionEditCorrectionRequest(
+        spokenCommand: String,
+        selectedText: String
+    ) -> CorrectionRequest {
+        let promptConfiguration = Self.selectionEditPromptConfiguration(selectedText: selectedText)
+        let generationProfile = LocalLLMGenerationProfile.currentCorrection(
+            for: spokenCommand + selectedText
+        )
+        return CorrectionRequest(
+            promptText: spokenCommand,
+            fallbackText: selectedText,
+            inputMode: "selection_edit",
+            webText: nil,
+            androidText: nil,
+            promptConfiguration: promptConfiguration,
+            generationProfile: generationProfile
+        )
+    }
+
+    private func translationCorrectionRequest(recognizedText: String) -> CorrectionRequest {
+        let targetLanguage = LocalLLMSettingsStore.translationTargetLanguage.promptName
+        if ASRProviderStore.selected == .mix {
+            let webText = providerTranscript("web")
+            let androidText = providerTranscript("android")
+            if !webText.isEmpty, !androidText.isEmpty {
+                return CorrectionRequest(
+                    promptText: Self.mixCorrectionPromptText(webText: webText, androidText: androidText),
+                    fallbackText: preferredMixFallback(webText: webText, androidText: androidText),
+                    inputMode: "translation_mix_dual",
+                    webText: webText,
+                    androidText: androidText,
+                    promptConfiguration: Self.translationMixPromptConfiguration(targetLanguage: targetLanguage)
+                )
+            }
+
+            let fallback = [webText, androidText, recognizedText]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? recognizedText
+            return CorrectionRequest(
+                promptText: fallback,
+                fallbackText: fallback,
+                inputMode: "translation_mix_single_available",
+                webText: webText.isEmpty ? nil : webText,
+                androidText: androidText.isEmpty ? nil : androidText,
+                promptConfiguration: Self.translationPromptConfiguration(targetLanguage: targetLanguage)
+            )
+        }
+
+        return CorrectionRequest(
+            promptText: recognizedText,
+            fallbackText: recognizedText,
+            inputMode: "translation",
+            webText: nil,
+            androidText: nil,
+            promptConfiguration: Self.translationPromptConfiguration(targetLanguage: targetLanguage)
+        )
+    }
+
     private func providerTranscript(_ provider: String) -> String {
         latestProviderTranscripts[provider]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
@@ -631,6 +814,9 @@ final class TranscriptionManager {
         let finalText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         AppLog.info("Finish transcription chars=\(finalText.count)")
         isCompletingTranscription = false
+        selectionEditTarget = nil
+        translationSessionActive = false
+        appState.overlayMode = .dictation
         completionTask = nil
         appState.lastTranscript = finalText
         transcriptionTrace?.set("corrected_text", finalText)
@@ -670,6 +856,7 @@ final class TranscriptionManager {
         AppLog.info("Complete without recognized text")
         awaitingFinalResult = false
         isCompletingTranscription = false
+        translationSessionActive = false
         completionTask?.cancel()
         completionTask = nil
         cancelFinalTimers()
@@ -707,6 +894,10 @@ final class TranscriptionManager {
         AppLog.info("Reset to idle now")
         awaitingFinalResult = false
         cancelActiveSession()
+        selectionEditTarget = nil
+        translationSessionActive = false
+        holdRecordingStartedAt = nil
+        appState.overlayMode = .dictation
         setRecordingState(.idle)
         overlayPanel.hide()
         appState.errorMessage = nil
@@ -831,7 +1022,80 @@ final class TranscriptionManager {
             removeFillerWords: current.removeFillerWords,
             softenEmotionalLanguage: current.softenEmotionalLanguage,
             outputStyle: current.outputStyle,
-            outputStyleStrength: current.outputStyleStrength
+            outputStyleStrength: current.outputStyleStrength,
+            customOutputStyleInstruction: current.customOutputStyleInstruction,
+            environmentContext: current.environmentContext,
+            userIdentity: current.userIdentity,
+            selectedText: current.selectedText,
+            translationLanguage: current.translationLanguage
+        )
+    }
+
+    private static func selectionEditPromptConfiguration(selectedText: String) -> LocalLLMPromptConfiguration {
+        let current = LocalLLMPromptConfiguration.current
+        return LocalLLMPromptConfiguration(
+            systemPromptTemplate: current.systemPromptTemplate,
+            userPromptTemplate: current.userPromptTemplate,
+            vocabulary: current.vocabulary,
+            punctuationStyle: current.punctuationStyle,
+            removeFillerWords: current.removeFillerWords,
+            softenEmotionalLanguage: current.softenEmotionalLanguage,
+            outputStyle: current.outputStyle,
+            outputStyleStrength: current.outputStyleStrength,
+            customOutputStyleInstruction: current.customOutputStyleInstruction,
+            environmentContext: current.environmentContext,
+            userIdentity: current.userIdentity,
+            selectedText: selectedText,
+            translationLanguage: ""
+        )
+    }
+
+    private static func translationPromptConfiguration(targetLanguage: String) -> LocalLLMPromptConfiguration {
+        let current = LocalLLMPromptConfiguration.current
+        return LocalLLMPromptConfiguration(
+            systemPromptTemplate: current.systemPromptTemplate,
+            userPromptTemplate: current.userPromptTemplate,
+            vocabulary: current.vocabulary,
+            punctuationStyle: current.punctuationStyle,
+            removeFillerWords: current.removeFillerWords,
+            softenEmotionalLanguage: current.softenEmotionalLanguage,
+            outputStyle: current.outputStyle,
+            outputStyleStrength: current.outputStyleStrength,
+            customOutputStyleInstruction: current.customOutputStyleInstruction,
+            environmentContext: current.environmentContext,
+            userIdentity: current.userIdentity,
+            selectedText: "",
+            translationLanguage: targetLanguage
+        )
+    }
+
+    private static func translationMixPromptConfiguration(targetLanguage: String) -> LocalLLMPromptConfiguration {
+        let current = translationPromptConfiguration(targetLanguage: targetLanguage)
+        let systemPrompt = """
+        \(current.systemPromptTemplate)
+
+        # 双路 ASR 合并
+        - 本次输入包含两路 ASR 识别结果；请综合两路信号后再翻译
+        - 两路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
+        - 用另一结果补足明显漏识别或错识别的片段
+        - 不要重复输出同一内容
+        - 不要输出“识别结果一”“识别结果二”“Doubao Web”“Doubao Android”等输入标签
+        """
+
+        return LocalLLMPromptConfiguration(
+            systemPromptTemplate: systemPrompt,
+            userPromptTemplate: current.userPromptTemplate,
+            vocabulary: current.vocabulary,
+            punctuationStyle: current.punctuationStyle,
+            removeFillerWords: current.removeFillerWords,
+            softenEmotionalLanguage: current.softenEmotionalLanguage,
+            outputStyle: current.outputStyle,
+            outputStyleStrength: current.outputStyleStrength,
+            customOutputStyleInstruction: current.customOutputStyleInstruction,
+            environmentContext: current.environmentContext,
+            userIdentity: current.userIdentity,
+            selectedText: current.selectedText,
+            translationLanguage: current.translationLanguage
         )
     }
 

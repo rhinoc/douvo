@@ -161,11 +161,17 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     func finishSending() {
         lock.lock()
         finishRequested = true
-        if state == .connecting || state == .open {
+        if state == .connecting {
+            let pendingCount = pendingAudio.count
+            lock.unlock()
+            AppLog.info("Android ASR finish deferred until session opens pendingAudio=\(pendingCount)")
+            return
+        }
+        if state == .open {
             state = .finishing
         }
         movePendingAudioToQueueLocked()
-        let shouldStartSending = !isSendingAudio
+        let shouldStartSending = !isSendingAudio && (state == .open || state == .finishing)
         lock.unlock()
 
         if shouldStartSending {
@@ -253,13 +259,14 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private func markOpen() {
         lock.lock()
         if state == .connecting {
-            state = .open
+            state = finishRequested ? .finishing : .open
         }
         let flushedCount = movePendingAudioToQueueLocked()
-        let shouldStartSending = !isSendingAudio
+        let finishWasRequested = finishRequested
+        let shouldStartSending = !isSendingAudio && (state == .open || state == .finishing)
         lock.unlock()
 
-        AppLog.info("Android ASR session opened flushedAudio=\(flushedCount)")
+        AppLog.info("Android ASR session opened flushedAudio=\(flushedCount) finishRequested=\(finishWasRequested)")
         onOpen?()
         if shouldStartSending {
             sendNextAudio()

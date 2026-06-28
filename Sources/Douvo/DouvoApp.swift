@@ -280,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsPanel.show(
             currentToggleShortcut: hotkeyManager.toggleShortcut,
             currentHoldShortcut: hotkeyManager.holdShortcut,
+            currentTranslationShortcut: hotkeyManager.translationShortcut,
             loginStatus: appState.loginStatus,
             isKeyboardCaptureActive: hotkeyManager.isEventTapActive,
             keyboardCaptureError: hotkeyManager.lastEventTapError,
@@ -295,6 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     accepted = self.hotkeyManager.setToggleShortcut(shortcut)
                 case .hold:
                     accepted = self.hotkeyManager.setHoldShortcut(shortcut)
+                case .translation:
+                    accepted = self.hotkeyManager.setTranslationShortcut(shortcut)
                 }
 
                 if accepted {
@@ -319,6 +322,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             onClearHold: { [weak self] in
                 self?.clearHoldTriggerKey()
+            },
+            onResetTranslation: { [weak self] in
+                self?.clearTranslationTriggerKey()
+            },
+            onClearTranslation: { [weak self] in
+                self?.clearTranslationTriggerKey()
             },
             onSelectMicrophone: { uid in
                 AudioDeviceStore.setSelectedUID(uid)
@@ -375,7 +384,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if hotkeyManager.resetShortcutToDefault() {
             settingsPanel.refreshShortcuts(
                 toggleShortcut: hotkeyManager.toggleShortcut,
-                holdShortcut: hotkeyManager.holdShortcut
+                holdShortcut: hotkeyManager.holdShortcut,
+                translationShortcut: hotkeyManager.translationShortcut
             )
         } else {
             settingsPanel.showShortcutConflict(for: .toggle)
@@ -388,7 +398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeyManager.clearHoldShortcut()
         settingsPanel.refreshShortcuts(
             toggleShortcut: hotkeyManager.toggleShortcut,
-            holdShortcut: hotkeyManager.holdShortcut
+            holdShortcut: hotkeyManager.holdShortcut,
+            translationShortcut: hotkeyManager.translationShortcut
         )
         rebuildMenu()
     }
@@ -398,7 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeyManager.clearToggleShortcut()
         settingsPanel.refreshShortcuts(
             toggleShortcut: hotkeyManager.toggleShortcut,
-            holdShortcut: hotkeyManager.holdShortcut
+            holdShortcut: hotkeyManager.holdShortcut,
+            translationShortcut: hotkeyManager.translationShortcut
         )
         rebuildMenu()
     }
@@ -408,11 +420,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if hotkeyManager.resetHoldShortcutToDefault() {
             settingsPanel.refreshShortcuts(
                 toggleShortcut: hotkeyManager.toggleShortcut,
-                holdShortcut: hotkeyManager.holdShortcut
+                holdShortcut: hotkeyManager.holdShortcut,
+                translationShortcut: hotkeyManager.translationShortcut
             )
         } else {
             settingsPanel.showShortcutConflict(for: .hold)
         }
+        rebuildMenu()
+    }
+
+    private func clearTranslationTriggerKey() {
+        AppLog.info("Translation trigger clear requested")
+        hotkeyManager.clearTranslationShortcut()
+        settingsPanel.refreshShortcuts(
+            toggleShortcut: hotkeyManager.toggleShortcut,
+            holdShortcut: hotkeyManager.holdShortcut,
+            translationShortcut: hotkeyManager.translationShortcut
+        )
         rebuildMenu()
     }
 

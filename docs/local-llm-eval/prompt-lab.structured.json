@@ -1,0 +1,64 @@
+{
+  "name": "structured-output-check",
+  "model": "quality",
+  "runs": 10,
+  "punctuationStyle": "complete",
+  "softenEmotionalLanguage": false,
+  "outputStyle": "structured",
+  "outputStyleStrength": "strong",
+  "reasoningMode": "disabled",
+  "systemPromptFile": "system-prompt.txt",
+  "userPromptFile": "user-message.txt",
+  "vocabulary": [
+    "CI",
+    "PR",
+    "workflow",
+    "自动发版",
+    "babysit",
+    "commit"
+  ],
+  "inputs": [
+    {
+      "id": "structured-pr-babysit-release-workflow",
+      "text": "帮我把这个项目 commit 一下 然后提一个 PR 提完之后 babysit 这个 PR 到可合入状态 如果 CI 都是绿的就直接帮我合入 然后另外你看看合入之后的那个自动发版的 workflow 它的耗时是多少",
+      "mustContain": [
+        "\n提完之后",
+        "\n如果",
+        "\n另外",
+        "commit",
+        "PR",
+        "CI",
+        "workflow"
+      ],
+      "shouldChange": true,
+      "allowFallback": false
+    },
+    {
+      "id": "structured-single-request-keeps-paragraph",
+      "text": "帮我看一下 README 里面那个安装步骤是不是有点不清楚",
+      "mustContain": [
+        "README",
+        "安装步骤"
+      ],
+      "mustNotContain": [
+        "\n1.",
+        "\n2."
+      ],
+      "shouldChange": true,
+      "allowFallback": false
+    },
+    {
+      "id": "structured-tail-follow-up-break",
+      "text": "帮我整理一下设置页的文案 然后把按钮状态也检查一下 最后顺便看下有没有遗漏的错误提示",
+      "mustContain": [
+        "1.",
+        "\n2.",
+        "设置页",
+        "按钮状态",
+        "错误提示"
+      ],
+      "shouldChange": true,
+      "allowFallback": false
+    }
+  ]
+}

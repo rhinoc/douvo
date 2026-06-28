@@ -1,4 +1,8 @@
 原始转写：
 {{original}}
 
-只输出最终正文：
+{{#if output_style_instruction}}
+输出格式必须遵守 system prompt 的“输出风格”。
+
+{{/if}}
+按 system prompt 只输出最终正文：
