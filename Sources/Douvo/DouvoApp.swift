@@ -256,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         copyItem.isEnabled = !lastTranscript.isEmpty
         menu.addItem(copyItem)
         menu.addItem(menuItem(title: L10n.text(en: "Settings", zh: "设置"), action: #selector(showSettings), keyEquivalent: ",", target: target))
-        let updateItem = menuItem(title: L10n.text(en: "Check for Updates", zh: "检查更新"), action: #selector(checkForUpdates), keyEquivalent: "", target: target)
+        let updateItem = menuItem(title: L10n.text(en: "Check for Updates…", zh: "检查更新…"), action: #selector(checkForUpdates), keyEquivalent: "", target: target)
         updateItem.isEnabled = canCheckForUpdates
         menu.addItem(updateItem)
         menu.addItem(menuItem(title: L10n.text(en: "Quit", zh: "退出"), action: #selector(quit), keyEquivalent: "q", target: target))

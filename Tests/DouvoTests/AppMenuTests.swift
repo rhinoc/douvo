@@ -50,7 +50,7 @@ final class AppMenuTests: XCTestCase {
         XCTAssertNotNil(editMenu?.items.first { $0.action == #selector(NSText.selectAll(_:)) })
     }
 
-    func testStatusMenuActionTitlesDoNotUseEllipsis() {
+    func testStatusMenuSettingsTitleDoesNotUseEllipsisAndUpdateTitleUsesEllipsis() {
         let menu = NSMenu()
 
         AppDelegate.rebuildStatusMenu(
@@ -67,8 +67,7 @@ final class AppMenuTests: XCTestCase {
 
         XCTAssertFalse(settingsItem?.title.contains("...") ?? true)
         XCTAssertFalse(settingsItem?.title.contains("…") ?? true)
-        XCTAssertFalse(updateItem?.title.contains("...") ?? true)
-        XCTAssertFalse(updateItem?.title.contains("…") ?? true)
+        XCTAssertEqual(updateItem?.title, "Check for Updates…")
     }
 
     func testSettingsHostingViewAcceptsFirstMouse() {

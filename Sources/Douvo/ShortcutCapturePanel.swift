@@ -3433,7 +3433,7 @@ private struct SettingsPanelView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
 
-                Button(L10n.text(en: "Check for Updates", zh: "检查更新"), action: onCheckForUpdates)
+                Button(L10n.text(en: "Check for Updates…", zh: "检查更新…"), action: onCheckForUpdates)
                     .focusable(false)
                     .disabled(!model.canCheckForUpdates)
                     .padding(.top, 8)
