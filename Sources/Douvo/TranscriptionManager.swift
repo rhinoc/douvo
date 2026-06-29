@@ -30,6 +30,10 @@ final class TranscriptionManager {
         L10n.text(en: "Recording did not start. Please try again.", zh: "录音没有启动，请重试")
     }
 
+    private static var speechRecognitionStartTimeoutMessage: String {
+        L10n.text(en: "Speech recognition did not connect. Please try again.", zh: "语音识别连接失败，请重试")
+    }
+
     private static var focusTextInputCopiedMessage: String {
         L10n.text(en: "No text field found. Copied to clipboard.", zh: "未找到输入框，已复制到剪贴板")
     }
@@ -167,11 +171,14 @@ final class TranscriptionManager {
         guard appState.recordingState == .starting || appState.recordingState == .recording else { return }
         openedASRProviders.insert(provider)
         transcriptionTrace?.event("asr.opened", metadata: ["asr_provider": provider])
-        if activeASRProviders.isSubset(of: openedASRProviders) {
+        if hasUsableASRConnection {
             transcriptionTrace?.finishSpan("asr.connect", metadata: [
                 "result": "opened",
                 "opened_providers": openedASRProviders.sorted().joined(separator: ",")
             ])
+            if audioReady {
+                cancelStartTimeout()
+            }
         }
         if appState.recordingState == .starting {
             tryTransitionToRecording(trigger: "asr_open")
@@ -186,18 +193,27 @@ final class TranscriptionManager {
         AppLog.info("Audio capture started")
         if appState.recordingState == .starting {
             tryTransitionToRecording(trigger: "audio_started")
+        } else if hasUsableASRConnection {
+            cancelStartTimeout()
         }
     }
 
-    /// Transition from `.starting` to `.recording` only when both ASR and audio are ready.
+    /// The user is recording as soon as microphone capture starts. ASR may still be connecting,
+    /// and AudioCaptureManager will buffer provider-specific audio until the socket opens.
     private func tryTransitionToRecording(trigger: String) {
-        let asrReady = activeASRProviders.isSubset(of: openedASRProviders)
-        guard asrReady, audioReady else {
-            AppLog.info("Waiting for readiness before recording: asrReady=\(asrReady) audioReady=\(audioReady) trigger=\(trigger)")
+        guard audioReady else {
+            AppLog.info("Waiting for audio before recording: asrUsable=\(hasUsableASRConnection) trigger=\(trigger)")
             return
         }
-        AppLog.info("Both ASR and audio ready; recording state -> recording (trigger=\(trigger))")
+        AppLog.info("Audio ready; recording state -> recording (trigger=\(trigger) asrUsable=\(hasUsableASRConnection))")
         setRecordingState(.recording)
+        if hasUsableASRConnection {
+            cancelStartTimeout()
+        }
+    }
+
+    private var hasUsableASRConnection: Bool {
+        !openedASRProviders.isDisjoint(with: activeASRProviders)
     }
 
     private func handleASRResult(_ result: ASRRecognitionResult) {
@@ -577,7 +593,7 @@ final class TranscriptionManager {
         let work = DispatchWorkItem { [weak self] in
             guard let self,
                   self.activeSessionID == sessionID,
-                  self.appState.recordingState == .starting else {
+                  self.appState.recordingState == .starting || self.appState.recordingState == .recording else {
                 return
             }
             self.handleRecordingStartTimeout(sessionID: sessionID)
@@ -1006,7 +1022,7 @@ final class TranscriptionManager {
 
     private func setRecordingState(_ state: RecordingState) {
         AppLog.info("Recording state \(appState.recordingState) -> \(state)")
-        if state != .starting {
+        if state == .idle || state == .stopping {
             cancelStartTimeout()
         }
         appState.recordingState = state
@@ -1047,17 +1063,41 @@ final class TranscriptionManager {
     }
 
     private func handleRecordingStartTimeout(sessionID: UUID) {
-        guard activeSessionID == sessionID, appState.recordingState == .starting else { return }
-        AppLog.error("Recording start timed out")
-        transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "timeout"])
-        transcriptionTrace?.finishSpan("asr.connect", metadata: ["result": "timeout"])
+        guard activeSessionID == sessionID,
+              appState.recordingState == .starting || appState.recordingState == .recording else {
+            return
+        }
+        let asrUsable = hasUsableASRConnection
+        guard !audioReady || !asrUsable else {
+            cancelStartTimeout()
+            return
+        }
+
+        let reason: String
+        if !audioReady {
+            AppLog.error("Recording start timed out")
+            transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "timeout"])
+            if !asrUsable {
+                transcriptionTrace?.finishSpan("asr.connect", metadata: ["result": "timeout"])
+            }
+            appState.errorMessage = Self.recordingStartTimeoutMessage
+            reason = "recording_start_timeout"
+        } else {
+            AppLog.error("ASR connection timed out")
+            transcriptionTrace?.finishSpan("asr.connect", metadata: [
+                "result": "timeout",
+                "opened_providers": openedASRProviders.sorted().joined(separator: ",")
+            ])
+            appState.errorMessage = Self.speechRecognitionStartTimeoutMessage
+            reason = "asr_connect_timeout"
+        }
+
         awaitingFinalResult = false
         cancelFinalTimers()
         cancelActiveSession()
-        appState.errorMessage = Self.recordingStartTimeoutMessage
         appState.transcript = ""
         appState.resetAudioLevels()
-        finishCurrentTrace(outcome: "failed", metadata: ["reason": "recording_start_timeout"])
+        finishCurrentTrace(outcome: "failed", metadata: ["reason": reason])
         resetToIdle(after: 2)
     }
 

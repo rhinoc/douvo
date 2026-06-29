@@ -3373,13 +3373,16 @@ private struct SettingsPanelView: View {
                 backend: selectedBackend,
                 localModel: selectedModel
             )
+            let remoteConfiguration = selectedBackend == .remote
+                ? RemoteLLMSettingsStore.currentConfiguration
+                : nil
             let traceURL = result.flatMap {
                 Self.writeCorrectionDebugTrace(
                     result: $0,
                     input: input,
                     backend: selectedBackend,
                     model: selectedModel,
-                    remoteConfiguration: RemoteLLMSettingsStore.currentConfiguration,
+                    remoteConfiguration: remoteConfiguration,
                     startedAt: startedAt,
                     durationMilliseconds: Self.milliseconds(since: startedAtUptime)
                 )
@@ -3419,10 +3422,21 @@ private struct SettingsPanelView: View {
         input: String,
         backend: CorrectionBackend,
         model: LocalLLMModel,
-        remoteConfiguration: RemoteLLMConfiguration,
+        remoteConfiguration: RemoteLLMConfiguration?,
         startedAt: Date,
         durationMilliseconds: Int
     ) -> URL? {
+        let remotePayload: Any = if let remoteConfiguration {
+            [
+                "provider": remoteConfiguration.provider.rawValue,
+                "base_url_host": URL(string: remoteConfiguration.baseURL)?.host ?? "",
+                "model": remoteConfiguration.model,
+                "configured": remoteConfiguration.isConfigured
+            ]
+        } else {
+            NSNull()
+        }
+
         let payload: [String: Any] = [
             "trace_id": UUID().uuidString,
             "type": "correction_debug",
@@ -3435,12 +3449,7 @@ private struct SettingsPanelView: View {
                 "repository_id": model.repositoryID,
                 "downloaded": model.isDownloaded
             ],
-            "remote": [
-                "provider": remoteConfiguration.provider.rawValue,
-                "base_url_host": URL(string: remoteConfiguration.baseURL)?.host ?? "",
-                "model": remoteConfiguration.model,
-                "configured": remoteConfiguration.isConfigured
-            ],
+            "remote": remotePayload,
             "raw_transcript": input,
             "corrected_output": result.text,
             "metadata": result.metadata,
