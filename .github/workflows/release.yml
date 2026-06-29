@@ -10,6 +10,9 @@ on:
 permissions:
   contents: write
 
+env:
+  XCODE_VERSION: "26.4"
+
 jobs:
   release:
     if: ${{ github.repository == 'rhinoc/douvo' && (github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore')) }}
@@ -20,12 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
       - uses: actions/cache@v4
         with:
           path: |
+            .build/arm64-apple-macosx
+            .build/artifacts
             .build/checkouts
+            .build/prebuilts
             .build/repositories
-          key: spm-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+            .build/build.db
+            .build/*.yaml
+            .build/workspace-state.json
+          key: swiftpm-build-${{ runner.os }}-xcode-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
           restore-keys: |
             spm-${{ runner.os }}-
 
@@ -34,12 +47,8 @@ jobs:
           FEED="https://raw.githubusercontent.com/${{ github.repository }}/main/appcast.xml"
           /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${FEED}" Sources/Douvo/Info.plist
 
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "26.4"
-
       - name: Swift tests
-        run: swift test -v
+        run: swift test
 
       - uses: actions/setup-node@v4
         with:
