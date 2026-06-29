@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var overlayPanel: OverlayPanel!
     private var transcriptionManager: TranscriptionManager!
     private var settingsPanel: ShortcutCapturePanel!
+    private var localLLMDownloadManager: LocalLLMDownloadManager!
     private let updaterController: SPUStandardUpdaterController
 
     override init() {
@@ -63,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLog.info("App launched bundle=\(Bundle.main.bundlePath) log=\(AppLog.fileURL.path)")
+        setupMainMenu()
         setupStatusItem()
         setupOverlay()
         setupWebView()
@@ -71,6 +73,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         requestMicrophonePermission()
         rebuildMenu()
         prewarmSelectedLocalLLMModel(reason: "launch")
+    }
+
+    private func setupMainMenu() {
+        NSApp.mainMenu = AppMenuFactory.makeMainMenu(
+            settingsAction: #selector(showSettings),
+            quitAction: #selector(quit),
+            target: self
+        )
     }
 
     private func setupStatusItem() {
@@ -125,6 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 error: self?.hotkeyManager.lastEventTapError
             )
             self?.rebuildMenu()
+        }
+        localLLMDownloadManager = LocalLLMDownloadManager { model in
+            try await LocalLLMPostProcessor.shared.downloadModel(model)
         }
         settingsPanel = ShortcutCapturePanel()
     }
@@ -197,43 +210,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func rebuildMenu() {
         guard let menu = statusItem.menu else { return }
+        Self.rebuildStatusMenu(
+            menu,
+            provider: ASRProviderStore.selected,
+            loginStatus: appState.loginStatus,
+            lastTranscript: appState.lastTranscript,
+            canCheckForUpdates: updaterController.updater.canCheckForUpdates,
+            target: self
+        )
+    }
+
+    static func rebuildStatusMenu(
+        _ menu: NSMenu,
+        provider: ASRProvider,
+        loginStatus: LoginStatus,
+        lastTranscript: String,
+        canCheckForUpdates: Bool,
+        target: AnyObject?
+    ) {
         menu.removeAllItems()
 
-        switch ASRProviderStore.selected {
+        switch provider {
         case .web:
-            switch appState.loginStatus {
+            switch loginStatus {
             case .checking:
                 menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
             case .loggedIn:
                 menu.addItem(disabledItem(L10n.text(en: "Web ASR logged in", zh: "网页 ASR 已登录")))
             case .notLoggedIn:
-                menu.addItem(NSMenuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l"))
+                menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
             }
         case .android:
             menu.addItem(disabledItem(L10n.text(en: "Android ASR ready", zh: "Android ASR 已就绪")))
         case .mix:
-            switch appState.loginStatus {
+            switch loginStatus {
             case .checking:
                 menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
             case .loggedIn:
                 menu.addItem(disabledItem(L10n.text(en: "Mix ASR ready", zh: "Mix ASR 已就绪")))
             case .notLoggedIn:
-                menu.addItem(NSMenuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l"))
+                menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
             }
         }
-        let copyItem = NSMenuItem(title: L10n.text(en: "Copy Last Transcript", zh: "复制上一段转写"), action: #selector(copyLastTranscript), keyEquivalent: "c")
-        copyItem.isEnabled = !appState.lastTranscript.isEmpty
+        let copyItem = menuItem(title: L10n.text(en: "Copy Last Transcript", zh: "复制上一段转写"), action: #selector(copyLastTranscript), keyEquivalent: "c", target: target)
+        copyItem.isEnabled = !lastTranscript.isEmpty
         menu.addItem(copyItem)
-        menu.addItem(NSMenuItem(title: L10n.text(en: "Settings...", zh: "设置..."), action: #selector(showSettings), keyEquivalent: ","))
-        let updateItem = NSMenuItem(title: L10n.text(en: "Check for Updates...", zh: "检查更新..."), action: #selector(checkForUpdates), keyEquivalent: "")
-        updateItem.isEnabled = updaterController.updater.canCheckForUpdates
+        menu.addItem(menuItem(title: L10n.text(en: "Settings", zh: "设置"), action: #selector(showSettings), keyEquivalent: ",", target: target))
+        let updateItem = menuItem(title: L10n.text(en: "Check for Updates…", zh: "检查更新…"), action: #selector(checkForUpdates), keyEquivalent: "", target: target)
+        updateItem.isEnabled = canCheckForUpdates
         menu.addItem(updateItem)
-        menu.addItem(NSMenuItem(title: L10n.text(en: "Quit", zh: "退出"), action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(menuItem(title: L10n.text(en: "Quit", zh: "退出"), action: #selector(quit), keyEquivalent: "q", target: target))
     }
 
-    private func disabledItem(_ title: String) -> NSMenuItem {
+    private static func disabledItem(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
+        return item
+    }
+
+    private static func menuItem(title: String, action: Selector, keyEquivalent: String, target: AnyObject?) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.target = target
         return item
     }
 
@@ -342,10 +379,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.settingsPanel.refreshLanguage(language)
                 self?.rebuildMenu()
             },
-            onDownloadLocalLLMModel: { model, onProgress in
-                try await LocalLLMPostProcessor.shared.preload(model, onProgress: onProgress)
-            },
-            onDeleteLocalLLMModel: { model in
+            onDeleteLocalLLMModel: { [weak self] model in
+                guard let self else { return }
+                self.localLLMDownloadManager.cancelDownload(model)
                 AppLog.info("Local LLM delete callback entered model=\(model.repositoryID)")
                 try await LocalLLMPostProcessor.shared.deleteDownloadedModel(model)
                 AppLog.info("Local LLM delete callback returned model=\(model.repositoryID)")
@@ -375,6 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onRequestAccessibility: { [weak self] in
                 self?.requestAccessibility()
             },
+            localLLMDownloadManager: localLLMDownloadManager,
             onCancel: {}
         )
     }
@@ -500,5 +537,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             webViewManager.showLoginWindow()
         }
         rebuildMenu()
+    }
+}
+
+enum AppMenuFactory {
+    @MainActor
+    static func makeMainMenu(
+        settingsAction: Selector?,
+        quitAction: Selector,
+        target: AnyObject? = nil
+    ) -> NSMenu {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+
+        let appMenu = NSMenu(title: ProcessInfo.processInfo.processName)
+        if let settingsAction {
+            let settingsItem = NSMenuItem(
+                title: L10n.text(en: "Settings", zh: "设置"),
+                action: settingsAction,
+                keyEquivalent: ","
+            )
+            settingsItem.target = target
+            appMenu.addItem(settingsItem)
+            appMenu.addItem(.separator())
+        }
+
+        let hideItem = NSMenuItem(
+            title: L10n.text(en: "Hide Douvo", zh: "隐藏 Douvo"),
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        hideItem.target = NSApp
+        appMenu.addItem(hideItem)
+
+        let hideOthersItem = NSMenuItem(
+            title: L10n.text(en: "Hide Others", zh: "隐藏其他"),
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        hideOthersItem.target = NSApp
+        appMenu.addItem(hideOthersItem)
+
+        let showAllItem = NSMenuItem(
+            title: L10n.text(en: "Show All", zh: "全部显示"),
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        )
+        showAllItem.target = NSApp
+        appMenu.addItem(showAllItem)
+        appMenu.addItem(.separator())
+
+        let quitItem = NSMenuItem(
+            title: L10n.text(en: "Quit", zh: "退出"),
+            action: quitAction,
+            keyEquivalent: "q"
+        )
+        quitItem.target = target
+        appMenu.addItem(quitItem)
+
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(editMenuItem())
+        return mainMenu
+    }
+
+    @MainActor
+    private static func editMenuItem() -> NSMenuItem {
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: L10n.text(en: "Edit", zh: "编辑"))
+
+        editMenu.addItem(NSMenuItem(
+            title: L10n.text(en: "Undo", zh: "撤销"),
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: L10n.text(en: "Redo", zh: "重做"),
+            action: Selector(("redo:")),
+            keyEquivalent: "Z"
+        ))
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(
+            title: L10n.text(en: "Cut", zh: "剪切"),
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: L10n.text(en: "Copy", zh: "复制"),
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: L10n.text(en: "Paste", zh: "粘贴"),
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: L10n.text(en: "Select All", zh: "全选"),
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        ))
+
+        editMenuItem.submenu = editMenu
+        return editMenuItem
     }
 }

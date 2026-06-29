@@ -30,6 +30,12 @@ final class PunctuationStyleTests: XCTestCase {
     }
 
     func testQuestionMarksOnlyStylePromptIsConcise() {
+        let previousLanguage = AppLanguageStore.selected
+        AppLanguageStore.selected = .english
+        defer {
+            AppLanguageStore.selected = previousLanguage
+        }
+
         XCTAssertEqual(PunctuationStyle.questionMarksOnly.displayName, "Question Marks Only")
         XCTAssertEqual(PunctuationStyle.questionMarksOnly.promptValue, "question_marks_only")
         XCTAssertTrue(PunctuationStyle.questionMarksOnly.instruction.contains("只保留问句的问号"))

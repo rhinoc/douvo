@@ -33,7 +33,6 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onSelectMicrophone: @escaping (String?) -> Void,
         onSelectASRProvider: @escaping (ASRProvider) -> Void,
         onSelectLanguage: @escaping (AppLanguage) -> Void,
-        onDownloadLocalLLMModel: @escaping (LocalLLMModel, @escaping @Sendable (Double) -> Void) async throws -> Void,
         onDeleteLocalLLMModel: @escaping (LocalLLMModel) async throws -> Void,
         onLogin: @escaping () -> Void,
         onLogout: @escaping () -> Void,
@@ -44,11 +43,32 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onCheckForUpdates: @escaping () -> Void,
         canCheckForUpdates: Bool,
         onRequestAccessibility: @escaping () -> Void,
+        localLLMDownloadManager: LocalLLMDownloadManager,
         onCancel: @escaping () -> Void
     ) {
         self.onCapture = onCapture
         self.onCaptureStateChanged = onCaptureStateChanged
         self.onCancel = onCancel
+
+        // Reuse the existing hosting view so tab/local UI state survives reopening.
+        // SettingsPanelView closures must only capture stable app-level dependencies.
+        if let panel, let model, panel.contentView != nil {
+            refresh(
+                model,
+                currentToggleShortcut: currentToggleShortcut,
+                currentHoldShortcut: currentHoldShortcut,
+                currentTranslationShortcut: currentTranslationShortcut,
+                loginStatus: loginStatus,
+                isKeyboardCaptureActive: isKeyboardCaptureActive,
+                keyboardCaptureError: keyboardCaptureError,
+                microphoneDevices: microphoneDevices,
+                selectedMicrophoneUID: selectedMicrophoneUID,
+                selectedASRProvider: selectedASRProvider,
+                canCheckForUpdates: canCheckForUpdates
+            )
+            bringPanelToFront(panel)
+            return
+        }
 
         let model = SettingsPanelModel(
             toggleShortcut: currentToggleShortcut,
@@ -87,7 +107,6 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onSelectMicrophone: onSelectMicrophone,
             onSelectASRProvider: onSelectASRProvider,
             onSelectLanguage: onSelectLanguage,
-            onDownloadLocalLLMModel: onDownloadLocalLLMModel,
             onDeleteLocalLLMModel: onDeleteLocalLLMModel,
             onLogin: onLogin,
             onLogout: onLogout,
@@ -96,9 +115,10 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onCopyLogPath: onCopyLogPath,
             onOpenLog: onOpenLog,
             onCheckForUpdates: onCheckForUpdates,
-            onRequestAccessibility: onRequestAccessibility
+            onRequestAccessibility: onRequestAccessibility,
+            localLLMDownloadManager: localLLMDownloadManager
         )
-        let hosting = NSHostingView(rootView: view)
+        let hosting = SettingsHostingView(rootView: view)
         hosting.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.panelWidth, height: SettingsPanelView.panelHeight)
 
         if panel == nil {
@@ -123,8 +143,9 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         panel?.title = L10n.text(en: "Settings", zh: "设置")
         panel?.setContentSize(hosting.frame.size)
         panel?.center()
-        panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if let panel {
+            bringPanelToFront(panel)
+        }
         panel?.initialFirstResponder = nil
         _ = panel?.makeFirstResponder(nil)
     }
@@ -246,6 +267,44 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         panel?.makeFirstResponder(nil)
     }
 
+    private func refresh(
+        _ model: SettingsPanelModel,
+        currentToggleShortcut: HotkeyShortcut?,
+        currentHoldShortcut: HotkeyShortcut?,
+        currentTranslationShortcut: HotkeyShortcut?,
+        loginStatus: LoginStatus,
+        isKeyboardCaptureActive: Bool,
+        keyboardCaptureError: String?,
+        microphoneDevices: [AudioInputDevice],
+        selectedMicrophoneUID: String?,
+        selectedASRProvider: ASRProvider,
+        canCheckForUpdates: Bool
+    ) {
+        model.toggleShortcut = currentToggleShortcut
+        model.holdShortcut = currentHoldShortcut
+        model.translationShortcut = currentTranslationShortcut
+        model.toggleShortcutName = Self.shortcutName(currentToggleShortcut)
+        model.holdShortcutName = Self.holdShortcutName(currentHoldShortcut)
+        model.translationShortcutName = Self.shortcutName(currentTranslationShortcut)
+        model.loginStatus = loginStatus
+        model.isKeyboardCaptureActive = isKeyboardCaptureActive
+        model.keyboardCaptureError = keyboardCaptureError
+        model.microphoneDevices = microphoneDevices
+        model.selectedMicrophoneUID = selectedMicrophoneUID
+        model.selectedASRProvider = selectedASRProvider
+        model.selectedLanguage = AppLanguageStore.selected
+        model.canCheckForUpdates = canCheckForUpdates
+        model.launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
+        model.refreshLocalModelStatus()
+        model.refreshMLXRuntimeDiagnostic()
+        panel?.title = L10n.text(en: "Settings", zh: "设置")
+    }
+
+    private func bringPanelToFront(_ panel: NSPanel) {
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func cancel() {
         stopLocalMonitor()
         isClosingFromCode = true
@@ -263,8 +322,15 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
     }
 }
 
-private final class SettingsPanelWindow: NSPanel {
+final class SettingsHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
+final class SettingsPanelWindow: NSPanel {
     override func sendEvent(_ event: NSEvent) {
+        activateForFirstMouseIfNeeded(event)
         if handleStandardTextEditingKey(event) {
             return
         }
@@ -305,6 +371,27 @@ private final class SettingsPanelWindow: NSPanel {
         }
         return true
     }
+
+    static func shouldActivateBeforeHandlingMouseDown(
+        eventType: NSEvent.EventType,
+        isKeyWindow: Bool,
+        isAppActive: Bool
+    ) -> Bool {
+        eventType == .leftMouseDown && (!isKeyWindow || !isAppActive)
+    }
+
+    private func activateForFirstMouseIfNeeded(_ event: NSEvent) {
+        guard Self.shouldActivateBeforeHandlingMouseDown(
+            eventType: event.type,
+            isKeyWindow: isKeyWindow,
+            isAppActive: NSApp.isActive
+        ) else {
+            return
+        }
+
+        makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }
 
 private final class SettingsPanelModel: ObservableObject {
@@ -321,7 +408,7 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var shortcutErrorMessage: String?
     @Published var canCheckForUpdates: Bool = false
     let appVersion: String
-    let microphoneDevices: [AudioInputDevice]
+    @Published var microphoneDevices: [AudioInputDevice]
     @Published var selectedMicrophoneUID: String?
     @Published var selectedASRProvider: ASRProvider
     @Published var selectedLanguage: AppLanguage
@@ -586,6 +673,11 @@ private extension HotkeyShortcutSlot {
     }
 }
 
+enum SettingsPanelLayoutMetrics {
+    static let localModelActionColumnWidth: CGFloat = 64
+    static let localModelDownloadAccessoryWidth: CGFloat = 64
+}
+
 private struct SettingsPanelView: View {
     @ObservedObject var model: SettingsPanelModel
     let onBeginCapture: () -> Void
@@ -599,7 +691,6 @@ private struct SettingsPanelView: View {
     let onSelectMicrophone: (String?) -> Void
     let onSelectASRProvider: (ASRProvider) -> Void
     let onSelectLanguage: (AppLanguage) -> Void
-    let onDownloadLocalLLMModel: (LocalLLMModel, @escaping @Sendable (Double) -> Void) async throws -> Void
     let onDeleteLocalLLMModel: (LocalLLMModel) async throws -> Void
     let onLogin: () -> Void
     let onLogout: () -> Void
@@ -609,11 +700,10 @@ private struct SettingsPanelView: View {
     let onOpenLog: () -> Void
     let onCheckForUpdates: () -> Void
     let onRequestAccessibility: () -> Void
+    @ObservedObject var localLLMDownloadManager: LocalLLMDownloadManager
     @State private var selectedTab: SettingsTab = .general
-    @State private var downloadingLocalModels: Set<LocalLLMModel> = []
     @State private var deletingLocalModels: Set<LocalLLMModel> = []
     @State private var validatingLocalModels: Set<LocalLLMModel> = []
-    @State private var localModelDownloadProgress: [LocalLLMModel: Double] = [:]
     @State private var isAddingLocalModel = false
     @State private var settingsToast: SettingsToast?
     @State private var validatingRemoteModelIDs: Set<String> = []
@@ -621,6 +711,7 @@ private struct SettingsPanelView: View {
     @State private var customOutputStyleEditorHeight: CGFloat = 82
     @State private var userIdentityEditorHeight: CGFloat = 92
     @State private var incrementalSystemPromptEditorHeight: CGFloat = 118
+    @FocusState private var isVocabularyFieldFocused: Bool
     @State private var systemPromptEditorHeight: CGFloat = 192
     @State private var userMessageEditorHeight: CGFloat = 118
     @State private var isResizingPromptEditor = false
@@ -645,7 +736,6 @@ private struct SettingsPanelView: View {
                 .padding(.top, 12)
 
             tabContent
-                .padding(22)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: Self.panelWidth, height: Self.panelHeight)
@@ -720,7 +810,7 @@ private struct SettingsPanelView: View {
     }
 
     private var generalTab: some View {
-        ScrollView {
+        settingsPage {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
                 settingsTitle(L10n.text(en: "Startup", zh: "启动"))
 
@@ -808,6 +898,7 @@ private struct SettingsPanelView: View {
                             }
                         }
                         .labelsHidden()
+                        .id(model.selectedLanguage)
                         .pickerStyle(.menu)
                         .frame(width: Self.settingsRowContentWidth, alignment: .trailing)
                     }
@@ -835,6 +926,7 @@ private struct SettingsPanelView: View {
                                 Text(size.displayName).tag(size)
                             }
                         }
+                        .id(model.selectedLanguage)
                         .labelsHidden()
                         .pickerStyle(.segmented)
                         .frame(width: 180, alignment: .trailing)
@@ -876,6 +968,7 @@ private struct SettingsPanelView: View {
                             }
                         }
                         .labelsHidden()
+                        .id(model.selectedLanguage)
                         .pickerStyle(.segmented)
                         .frame(width: 220, alignment: .trailing)
                     }
@@ -899,7 +992,6 @@ private struct SettingsPanelView: View {
                     }
                 }
             }
-            .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
         }
     }
 
@@ -1104,47 +1196,69 @@ private struct SettingsPanelView: View {
     }
 
     private var accountTab: some View {
-        VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
-            settingsTitle(L10n.text(en: "Doubao", zh: "豆包"))
+        settingsPage {
+            VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
+                settingsTitle(L10n.text(en: "Doubao", zh: "豆包"))
 
-            settingsSection {
-                settingsListRow(L10n.text(en: "Channel", zh: "渠道")) {
-                    Picker("", selection: asrProviderBinding) {
-                        ForEach(ASRProvider.allCases) { provider in
-                            Text(provider.displayName).tag(provider)
+                settingsSection {
+                    settingsListRow(L10n.text(en: "Channel", zh: "渠道")) {
+                        Picker("", selection: asrProviderBinding) {
+                            ForEach(ASRProvider.allCases) { provider in
+                                Text(provider.displayName).tag(provider)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 220, alignment: .trailing)
-                    .focusable(false)
-                }
-
-                settingsDivider()
-
-                settingsListRow(L10n.text(en: "Status", zh: "状态")) {
-                    switch model.selectedASRProvider {
-                    case .web:
-                        statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Logged in", zh: "已登录") : L10n.text(en: "Not logged in", zh: "未登录"), isHealthy: model.loginStatus == .loggedIn)
-                    case .android:
-                        statusText(L10n.text(en: "Automatic", zh: "自动"), isHealthy: true)
-                    case .mix:
-                        statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Web logged in + Android automatic", zh: "Web 已登录 + Android 自动") : L10n.text(en: "Web not logged in", zh: "Web 未登录"), isHealthy: model.loginStatus == .loggedIn)
-                    }
-                }
-
-                settingsDivider()
-
-                settingsListRow(L10n.text(en: "Account", zh: "账号")) {
-                    if model.selectedASRProvider == .android {
-                        Button(L10n.text(en: "Reset Android Credentials", zh: "重置 Android 凭据")) {
-                            DoubaoAndroidCredentialStore.clear()
-                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 220, alignment: .trailing)
                         .focusable(false)
-                        .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
-                    } else if model.selectedASRProvider == .mix {
-                        HStack(spacing: 8) {
-                            if model.loginStatus == .loggedIn {
-                                Button(L10n.text(en: "Refresh Web", zh: "刷新 Web"), action: onRepairLogin)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Status", zh: "状态")) {
+                        switch model.selectedASRProvider {
+                        case .web:
+                            statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Logged in", zh: "已登录") : L10n.text(en: "Not logged in", zh: "未登录"), isHealthy: model.loginStatus == .loggedIn)
+                        case .android:
+                            statusText(L10n.text(en: "Automatic", zh: "自动"), isHealthy: true)
+                        case .mix:
+                            statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Web logged in + Android automatic", zh: "Web 已登录 + Android 自动") : L10n.text(en: "Web not logged in", zh: "Web 未登录"), isHealthy: model.loginStatus == .loggedIn)
+                        }
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Account", zh: "账号")) {
+                        if model.selectedASRProvider == .android {
+                            Button(L10n.text(en: "Reset Android Credentials", zh: "重置 Android 凭据")) {
+                                DoubaoAndroidCredentialStore.clear()
+                            }
+                            .focusable(false)
+                            .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
+                        } else if model.selectedASRProvider == .mix {
+                            HStack(spacing: 8) {
+                                if model.loginStatus == .loggedIn {
+                                    Button(L10n.text(en: "Refresh Web", zh: "刷新 Web"), action: onRepairLogin)
+                                        .focusable(false)
+
+                                    Button(L10n.text(en: "Log Out", zh: "退出登录")) {
+                                        onLogout()
+                                        model.loginStatus = .notLoggedIn
+                                    }
+                                    .focusable(false)
+                                } else {
+                                    Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
+                                        .focusable(false)
+                                }
+
+                                Button(L10n.text(en: "Reset Android", zh: "重置 Android")) {
+                                    DoubaoAndroidCredentialStore.clear()
+                                }
+                                .focusable(false)
+                                .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
+                            }
+                        } else if model.loginStatus == .loggedIn {
+                            HStack(spacing: 8) {
+                                Button(L10n.text(en: "Refresh Credentials", zh: "刷新凭据"), action: onRepairLogin)
                                     .focusable(false)
 
                                 Button(L10n.text(en: "Log Out", zh: "退出登录")) {
@@ -1152,41 +1266,28 @@ private struct SettingsPanelView: View {
                                     model.loginStatus = .notLoggedIn
                                 }
                                 .focusable(false)
-                            } else {
-                                Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
-                                    .focusable(false)
                             }
-
-                            Button(L10n.text(en: "Reset Android", zh: "重置 Android")) {
-                                DoubaoAndroidCredentialStore.clear()
-                            }
-                            .focusable(false)
-                            .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
-                        }
-                    } else if model.loginStatus == .loggedIn {
-                        HStack(spacing: 8) {
-                            Button(L10n.text(en: "Refresh Credentials", zh: "刷新凭据"), action: onRepairLogin)
+                        } else {
+                            Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
                                 .focusable(false)
-
-                            Button(L10n.text(en: "Log Out", zh: "退出登录")) {
-                                onLogout()
-                                model.loginStatus = .notLoggedIn
-                            }
-                            .focusable(false)
                         }
-                    } else {
-                        Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(L10n.text(en: "Debug", zh: "调试")) {
+                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: onCopyLoginDebugInfo)
                             .focusable(false)
+                            .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
+                            .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
                     }
                 }
-
             }
         }
-        .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
     }
 
     private var featuresTab: some View {
-        ScrollView {
+        settingsPage {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
                 settingsTitle(L10n.text(en: "Output", zh: "输出"))
 
@@ -1198,6 +1299,7 @@ private struct SettingsPanelView: View {
                             }
                         }
                         .labelsHidden()
+                        .id(model.selectedLanguage)
                         .pickerStyle(.menu)
                         .frame(width: Self.correctionContentWidth, alignment: .trailing)
                     }
@@ -1262,6 +1364,7 @@ private struct SettingsPanelView: View {
                             }
                         }
                         .labelsHidden()
+                        .id(model.selectedLanguage)
                         .pickerStyle(.menu)
                         .frame(width: Self.correctionRowContentWidth(labelWidth: 148), alignment: .trailing)
                         .disabled(!aiDependentFeaturesEnabled)
@@ -1303,6 +1406,7 @@ private struct SettingsPanelView: View {
                                 }
                             }
                             .labelsHidden()
+                            .id(model.selectedLanguage)
                             .pickerStyle(.segmented)
                             .frame(width: 168, alignment: .trailing)
                             .disabled(!aiDependentFeaturesEnabled || model.localOutputStyle == .original)
@@ -1416,12 +1520,11 @@ private struct SettingsPanelView: View {
                     }
                 }
             }
-            .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
         }
     }
 
     private var aiTab: some View {
-        ScrollView {
+        settingsPage {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
                 settingsTitle(L10n.text(en: "Status", zh: "状态"))
 
@@ -1446,6 +1549,7 @@ private struct SettingsPanelView: View {
                             }
                         }
                         .labelsHidden()
+                        .id(model.selectedLanguage)
                         .pickerStyle(.segmented)
                         .frame(width: 168, alignment: .trailing)
                     }
@@ -1555,9 +1659,15 @@ private struct SettingsPanelView: View {
                     }
                 }
             }
-            .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
         }
         .onAppear {
+            model.refreshLocalModelStatus()
+        }
+        .onReceive(localLLMDownloadManager.$downloadErrors) { errors in
+            guard let failedModel = errors.keys.first,
+                  let message = errors[failedModel] else { return }
+            presentSettingsToast(L10n.text(en: "Download failed: \(message)", zh: "下载失败：\(message)"), kind: .error)
+            localLLMDownloadManager.clearError(failedModel)
             model.refreshLocalModelStatus()
         }
     }
@@ -1565,46 +1675,45 @@ private struct SettingsPanelView: View {
     private func localModelRow(_ localModel: LocalLLMModel) -> some View {
         let isSelected = model.selectedLocalLLMModel == localModel
         let isDownloaded = localModel.isDownloaded
-        let isDownloading = downloadingLocalModels.contains(localModel)
         let isDeleting = deletingLocalModels.contains(localModel)
-        let progress = localModelDownloadProgress[localModel] ?? 0
+        let downloadState = localLLMDownloadManager.downloadStates[localModel]
 
         return HStack(spacing: 8) {
             Button {
-                model.selectedLocalLLMModel = localModel
-                LocalLLMSettingsStore.selectedModel = localModel
-                model.refreshLocalModelStatus()
-                dismissSettingsToast()
-                Task {
-                    await LocalLLMPostProcessor.shared.retainOnly(localModel, reason: "settings_select")
-                }
-                prewarmLocalModelIfNeeded(localModel, reason: "select")
+                selectLocalModel(localModel)
             } label: {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
-                    .frame(width: 22, height: 22)
+                HStack(spacing: 8) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(isSelected ? .accentColor : .secondary)
+                        .frame(width: 22, height: 22)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(localModel.displayName)
+                            .font(.system(size: 13))
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                            .help(localModel.displayName)
+
+                        Text(localModelSubtitleText(localModel, downloadState: downloadState))
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focusable(false)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .help(L10n.text(en: "Use \(localModel.displayName) for final processing", zh: "使用 \(localModel.displayName) 进行最终处理"))
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(localModel.displayName)
-                    .font(.system(size: 13))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                    .help(localModel.displayName)
-
-                Text("\(localModelDetailText(localModel)) · \(localModelDownloadSizeText(localModel))")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            if isDownloading {
-                downloadProgressView(progress: progress)
+            if case .downloading = downloadState {
+                downloadingModelAccessory(localModel)
+            } else if case .failed(let message) = downloadState {
+                failedDownloadAccessory(localModel, message: message)
             } else if isDeleting {
                 localModelDeletingView
             } else if localModel.isLocalDirectoryModel {
@@ -1613,7 +1722,8 @@ private struct SettingsPanelView: View {
                 downloadedModelAccessory(localModel)
             } else {
                 Button {
-                    downloadLocalModel(localModel)
+                    dismissSettingsToast()
+                    localLLMDownloadManager.startDownload(localModel)
                 } label: {
                     Image(systemName: "icloud.and.arrow.down")
                         .font(.system(size: 18, weight: .regular))
@@ -1622,13 +1732,35 @@ private struct SettingsPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
-                .frame(width: Self.localModelSingleAccessoryWidth, alignment: .leading)
+                .frame(width: Self.localModelActionColumnWidth, alignment: .trailing)
                 .help(L10n.text(en: "Download \(localModel.displayName)", zh: "下载 \(localModel.displayName)"))
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    private func selectLocalModel(_ localModel: LocalLLMModel) {
+        if let validatingModel = validatingLocalModels.first, validatingModel != localModel {
+            presentSettingsToast(
+                L10n.text(
+                    en: "Finish validating \(validatingModel.displayName) before switching models.",
+                    zh: "请等待 \(validatingModel.displayName) 验证完成后，再切换模型。"
+                ),
+                kind: .info
+            )
+            return
+        }
+
+        model.selectedLocalLLMModel = localModel
+        LocalLLMSettingsStore.selectedModel = localModel
+        model.refreshLocalModelStatus()
+        dismissSettingsToast()
+        Task {
+            await LocalLLMPostProcessor.shared.retainOnly(localModel, reason: "settings_select")
+        }
+        prewarmLocalModelIfNeeded(localModel, reason: "select")
     }
 
     private func localModelDetailText(_ localModel: LocalLLMModel) -> String {
@@ -1652,6 +1784,16 @@ private struct SettingsPanelView: View {
         localModel.downloadSizeText == "Local Folder"
             ? L10n.text(en: "Local Folder", zh: "本地文件夹")
             : localModel.downloadSizeText
+    }
+
+    private func localModelSubtitleText(_ localModel: LocalLLMModel, downloadState: LocalLLMDownloadState?) -> String {
+        if case .failed = downloadState {
+            return L10n.text(en: "Download failed · Click retry", zh: "下载失败 · 点击重试")
+        }
+        if case .downloading = downloadState {
+            return L10n.text(en: "Downloading", zh: "下载中")
+        }
+        return "\(localModelDetailText(localModel)) · \(localModelDownloadSizeText(localModel))"
     }
 
     private var localModelList: some View {
@@ -1734,6 +1876,7 @@ private struct SettingsPanelView: View {
                     }
                 }
                 .labelsHidden()
+                .id(model.selectedLanguage)
                 .pickerStyle(.menu)
                 .frame(width: Self.correctionContentWidth, alignment: .trailing)
             }
@@ -2334,8 +2477,14 @@ private struct SettingsPanelView: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color.primary.opacity(0.12), lineWidth: 1)
                     )
+                    .focused($isVocabularyFieldFocused)
                     .onSubmit {
                         commitVocabularyDraft()
+                    }
+                    .onChange(of: isVocabularyFieldFocused) { _, isFocused in
+                        if !isFocused {
+                            commitVocabularyDraft()
+                        }
                     }
             }
             .frame(width: Self.correctionContentWidth, alignment: .leading)
@@ -2516,45 +2665,10 @@ private struct SettingsPanelView: View {
         model.refreshLocalModelStatus()
     }
 
-    private func downloadLocalModel(_ selectedModel: LocalLLMModel) {
-        guard selectedModel.isHuggingFaceModel else { return }
-        downloadingLocalModels.insert(selectedModel)
-        localModelDownloadProgress[selectedModel] = 0
-        dismissSettingsToast()
-
-        Task {
-            do {
-                try await onDownloadLocalLLMModel(selectedModel) { progress in
-                    Task { @MainActor in
-                        guard progress.isFinite else { return }
-                        let normalizedProgress = min(max(progress, 0), 1)
-                        localModelDownloadProgress[selectedModel] = max(
-                            localModelDownloadProgress[selectedModel] ?? 0,
-                            normalizedProgress
-                        )
-                    }
-                }
-                await MainActor.run {
-                    downloadingLocalModels.remove(selectedModel)
-                    localModelDownloadProgress[selectedModel] = 1
-                    dismissSettingsToast()
-                    model.refreshLocalModelStatus()
-                }
-            } catch {
-                await MainActor.run {
-                    downloadingLocalModels.remove(selectedModel)
-                    localModelDownloadProgress[selectedModel] = 0
-                    presentSettingsToast(L10n.text(en: "Download failed: \(error.localizedDescription)", zh: "下载失败：\(error.localizedDescription)"), kind: .error)
-                    model.refreshLocalModelStatus()
-                }
-            }
-        }
-    }
-
     private func deleteLocalModel(_ selectedModel: LocalLLMModel) {
         guard selectedModel.isHuggingFaceModel else { return }
         let selectedIsDownloaded = selectedModel.isDownloaded
-        let isDownloading = downloadingLocalModels.contains(selectedModel)
+        let isDownloading = localLLMDownloadManager.isDownloading(selectedModel)
         let isDeleting = deletingLocalModels.contains(selectedModel)
         let downloadedCount = downloadedLocalModels.count
         let canDelete = canDeleteLocalModel(
@@ -2562,12 +2676,13 @@ private struct SettingsPanelView: View {
             isDownloaded: selectedIsDownloaded,
             isDownloading: isDownloading,
             isDeleting: isDeleting,
+            isValidating: !validatingLocalModels.isEmpty,
             downloadedCount: downloadedCount
         )
         AppLog.info("Local LLM delete button pressed model=\(selectedModel.repositoryID) downloaded=\(selectedIsDownloaded) downloading=\(isDownloading) deleting=\(isDeleting) enabled=\(model.localPostProcessingEnabled) downloadedCount=\(downloadedCount) canDelete=\(canDelete)")
         guard canDelete else {
             AppLog.info("Local LLM delete button ignored model=\(selectedModel.repositoryID)")
-            presentSettingsToast(L10n.text(en: "AI Post-processing needs at least one downloaded model.", zh: "AI 后处理至少需要一个已下载模型。"), kind: .error)
+            presentSettingsToast(deleteHelpText(for: selectedModel), kind: .error)
             return
         }
 
@@ -2580,7 +2695,6 @@ private struct SettingsPanelView: View {
                 try await onDeleteLocalLLMModel(selectedModel)
                 await MainActor.run {
                     deletingLocalModels.remove(selectedModel)
-                    localModelDownloadProgress.removeValue(forKey: selectedModel)
                     selectFallbackModelIfNeeded(afterDeleting: selectedModel)
                     dismissSettingsToast()
                     model.refreshLocalModelStatus()
@@ -2619,7 +2733,7 @@ private struct SettingsPanelView: View {
 
     private func validateLocalModel(_ selectedModel: LocalLLMModel) {
         guard selectedModel.isDownloaded,
-              !validatingLocalModels.contains(selectedModel) else { return }
+              validatingLocalModels.isEmpty else { return }
         validatingLocalModels.insert(selectedModel)
         dismissSettingsToast()
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -2703,8 +2817,9 @@ private struct SettingsPanelView: View {
         return canDeleteLocalModel(
             selectedModel,
             isDownloaded: selectedModel.isDownloaded,
-            isDownloading: downloadingLocalModels.contains(selectedModel),
+            isDownloading: localLLMDownloadManager.isDownloading(selectedModel),
             isDeleting: deletingLocalModels.contains(selectedModel),
+            isValidating: !validatingLocalModels.isEmpty,
             downloadedCount: downloadedLocalModels.count
         )
     }
@@ -2714,12 +2829,14 @@ private struct SettingsPanelView: View {
         isDownloaded: Bool,
         isDownloading: Bool,
         isDeleting: Bool,
+        isValidating: Bool,
         downloadedCount: Int
     ) -> Bool {
         guard selectedModel.isHuggingFaceModel else { return false }
         guard isDownloaded,
               !isDownloading,
-              !isDeleting
+              !isDeleting,
+              !isValidating
         else {
             return false
         }
@@ -2734,6 +2851,9 @@ private struct SettingsPanelView: View {
     private func deleteHelpText(for selectedModel: LocalLLMModel) -> String {
         guard selectedModel.isHuggingFaceModel else {
             return L10n.text(en: "Local folders are only removed from this list; files are not deleted.", zh: "本地文件夹只会从列表移除，不会删除文件。")
+        }
+        if let validatingModel = validatingLocalModels.first {
+            return L10n.text(en: "Finish validating \(validatingModel.displayName) before deleting a model.", zh: "请等待 \(validatingModel.displayName) 验证完成后，再删除模型。")
         }
         if model.correctionBackend == .local, model.localPostProcessingEnabled, downloadedLocalModels.count <= 1 {
             return L10n.text(en: "Turn off AI Post-processing or download another model before deleting this one.", zh: "删除前请先关闭 AI 后处理或下载另一个模型。")
@@ -2758,7 +2878,7 @@ private struct SettingsPanelView: View {
             .disabled(!canDeleteLocalModel(selectedModel))
             .help(deleteHelpText(for: selectedModel))
         }
-        .frame(width: Self.localModelPairAccessoryWidth, alignment: .leading)
+        .frame(width: Self.localModelActionColumnWidth, alignment: .trailing)
     }
 
     private func localDirectoryModelAccessory(_ selectedModel: LocalLLMModel) -> some View {
@@ -2778,14 +2898,22 @@ private struct SettingsPanelView: View {
             } label: {
                 Image(systemName: "xmark.circle")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(validatingLocalModels.isEmpty ? .secondary : .secondary.opacity(0.45))
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help(L10n.text(en: "Remove \(selectedModel.displayName) from the model list", zh: "从模型列表中移除 \(selectedModel.displayName)"))
+            .disabled(!validatingLocalModels.isEmpty)
+            .help(removeLocalModelHelpText(for: selectedModel))
         }
-        .frame(width: selectedModel.isDownloaded ? Self.localModelPairAccessoryWidth : Self.localModelDirectoryAccessoryWidth, alignment: .leading)
+        .frame(width: Self.localModelActionColumnWidth, alignment: .trailing)
+    }
+
+    private func removeLocalModelHelpText(for selectedModel: LocalLLMModel) -> String {
+        if let validatingModel = validatingLocalModels.first {
+            return L10n.text(en: "Finish validating \(validatingModel.displayName) before removing a model.", zh: "请等待 \(validatingModel.displayName) 验证完成后，再移除模型。")
+        }
+        return L10n.text(en: "Remove \(selectedModel.displayName) from the model list", zh: "从模型列表中移除 \(selectedModel.displayName)")
     }
 
     @ViewBuilder
@@ -2795,19 +2923,30 @@ private struct SettingsPanelView: View {
                 .controlSize(.small)
                 .frame(width: 28, height: 28)
         } else {
+            let canValidate = selectedModel.isDownloaded && validatingLocalModels.isEmpty
             Button {
                 validateLocalModel(selectedModel)
             } label: {
                 Image(systemName: "speedometer")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(selectedModel.isDownloaded ? .secondary : .secondary.opacity(0.45))
+                    .foregroundColor(canValidate ? .secondary : .secondary.opacity(0.45))
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .disabled(!selectedModel.isDownloaded || validatingLocalModels.contains(selectedModel))
-            .help(L10n.text(en: "Validate \(selectedModel.displayName)", zh: "验证 \(selectedModel.displayName)"))
+            .disabled(!canValidate)
+            .help(localModelValidationHelpText(for: selectedModel))
         }
+    }
+
+    private func localModelValidationHelpText(for selectedModel: LocalLLMModel) -> String {
+        if !selectedModel.isDownloaded {
+            return L10n.text(en: "Download \(selectedModel.displayName) before validating it.", zh: "请先下载 \(selectedModel.displayName)，再进行验证。")
+        }
+        if let validatingModel = validatingLocalModels.first {
+            return L10n.text(en: "Finish validating \(validatingModel.displayName) before starting another model.", zh: "请等待 \(validatingModel.displayName) 验证完成后，再验证其他模型。")
+        }
+        return L10n.text(en: "Validate \(selectedModel.displayName)", zh: "验证 \(selectedModel.displayName)")
     }
 
     private var localModelDeletingView: some View {
@@ -2824,17 +2963,55 @@ private struct SettingsPanelView: View {
                 .minimumScaleFactor(0.8)
                 .frame(width: Self.localModelProgressTextWidth, alignment: .leading)
         }
-        .frame(width: Self.localModelActivityAccessoryWidth, alignment: .leading)
+        .frame(width: Self.localModelDownloadAccessoryWidth, alignment: .trailing)
     }
 
-    private func downloadProgressView(progress: Double) -> some View {
-        let normalizedProgress = min(max(progress, 0), 1)
+    private func downloadingModelAccessory(_ selectedModel: LocalLLMModel) -> some View {
+        HStack(spacing: 2) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+                .frame(width: 28, height: 28)
+                .frame(width: 28, alignment: .leading)
 
-        return ProgressView(value: normalizedProgress, total: 1)
-            .progressViewStyle(.circular)
-            .controlSize(.small)
-            .frame(width: 28, height: 28)
-            .frame(width: Self.localModelProgressAccessoryWidth, alignment: .leading)
+            Button {
+                localLLMDownloadManager.cancelDownload(selectedModel)
+                model.refreshLocalModelStatus()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(L10n.text(en: "Cancel download", zh: "取消下载"))
+        }
+        .frame(width: Self.localModelDownloadAccessoryWidth, alignment: .trailing)
+    }
+
+    private func failedDownloadAccessory(_ selectedModel: LocalLLMModel, message: String) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.orange)
+                .frame(width: 28, height: 28)
+                .help(message)
+
+            Button {
+                dismissSettingsToast()
+                localLLMDownloadManager.startDownload(selectedModel)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(L10n.text(en: "Retry download: \(message)", zh: "重试下载：\(message)"))
+        }
+        .frame(width: Self.localModelActionColumnWidth, alignment: .trailing)
     }
 
     private func compactStatusText(_ text: String, isHealthy: Bool) -> some View {
@@ -3015,7 +3192,7 @@ private struct SettingsPanelView: View {
     }
 
     private var diagnoseTab: some View {
-        ScrollView {
+        settingsPage {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
                 settingsTitle(L10n.text(en: "System", zh: "系统"))
 
@@ -3074,7 +3251,6 @@ private struct SettingsPanelView: View {
 
                 correctionDebugSection
             }
-            .frame(width: Self.settingsGroupWidth, alignment: .topLeading)
         }
     }
 
@@ -3240,32 +3416,33 @@ private struct SettingsPanelView: View {
     }
 
     private var aboutTab: some View {
-        VStack(spacing: 10) {
-            Image(nsImage: Self.aboutIconImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 64, height: 64)
-                .cornerRadius(14)
-                .padding(.bottom, 4)
+        settingsPage(scrolls: false, contentAlignment: .center) {
+            VStack(spacing: 10) {
+                Image(nsImage: Self.aboutIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 64, height: 64)
+                    .cornerRadius(14)
+                    .padding(.bottom, 4)
 
-            Text("Douvo")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(.primary)
+                Text("Douvo")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.primary)
 
-            Text("v\(model.appVersion)")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
+                Text("v\(model.appVersion)")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
 
-            Button(L10n.text(en: "Check for Updates...", zh: "检查更新..."), action: onCheckForUpdates)
-                .focusable(false)
-                .disabled(!model.canCheckForUpdates)
-                .padding(.top, 8)
+                Button(L10n.text(en: "Check for Updates…", zh: "检查更新…"), action: onCheckForUpdates)
+                    .focusable(false)
+                    .disabled(!model.canCheckForUpdates)
+                    .padding(.top, 8)
 
-            Link(Self.repositoryURL.absoluteString, destination: Self.repositoryURL)
-                .font(.system(size: 12, weight: .medium))
-                .padding(.top, 2)
+                Link(Self.repositoryURL.absoluteString, destination: Self.repositoryURL)
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(.top, 2)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     private static let repositoryURL = URL(string: "https://github.com/rhinoc/douvo")!
@@ -3323,6 +3500,41 @@ private struct SettingsPanelView: View {
         return NSApp.applicationIconImage
     }
 
+    @ViewBuilder
+    private func settingsPage<Content: View>(
+        scrolls: Bool = true,
+        contentAlignment: Alignment = .topLeading,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        if scrolls {
+            ScrollView {
+                settingsPageContent(alignment: contentAlignment, content: content)
+                    .frame(width: Self.panelWidth, alignment: .topLeading)
+            }
+            .frame(width: Self.panelWidth, alignment: .topLeading)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            settingsPageContent(alignment: contentAlignment, content: content)
+                .frame(width: Self.panelWidth, alignment: .topLeading)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func settingsPageContent<Content: View>(
+        alignment: Alignment,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .frame(width: Self.settingsGroupWidth, alignment: alignment)
+            .padding(.trailing, Self.settingsScrollContentTrailingPadding)
+            .frame(width: Self.settingsScrollContentWidth, alignment: alignment)
+            .frame(maxHeight: .infinity, alignment: alignment)
+            .padding(.leading, Self.settingsPageLeadingPadding)
+            .padding(.trailing, Self.settingsPageTrailingPadding)
+            .padding(.top, Self.settingsPageTopPadding)
+            .padding(.bottom, Self.settingsPageBottomPadding)
+    }
+
     private func settingsTitle(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 12, weight: .semibold))
@@ -3373,6 +3585,7 @@ private struct SettingsPanelView: View {
             }
         }
         .labelsHidden()
+        .id(model.selectedLanguage)
         .pickerStyle(.menu)
         .frame(width: width, alignment: .trailing)
     }
@@ -3485,20 +3698,25 @@ private struct SettingsPanelView: View {
 
     fileprivate static let panelWidth: CGFloat = 480
     fileprivate static let panelHeight: CGFloat = 440
+    private static let settingsPageTopPadding: CGFloat = 18
+    private static let settingsPageBottomPadding: CGFloat = 22
     private static let settingsLabelWidth: CGFloat = 90
     private static let settingsContentWidth: CGFloat = 320
     private static let settingsGroupWidth: CGFloat = settingsLabelWidth + 12 + settingsContentWidth
+    private static let settingsScrollContentTrailingPadding: CGFloat = 18
+    private static let settingsScrollContentWidth: CGFloat = settingsGroupWidth + settingsScrollContentTrailingPadding
+    private static let settingsPageLeadingPadding: CGFloat = (panelWidth - settingsGroupWidth) / 2
+    private static let settingsPageTrailingPadding: CGFloat = panelWidth - settingsPageLeadingPadding - settingsScrollContentWidth
     private static let settingsGroupSpacing: CGFloat = 10
     private static let settingsRowLabelWidth: CGFloat = 112
     private static let settingsRowContentWidth: CGFloat = settingsGroupWidth - 28 - 12 - settingsRowLabelWidth
     private static let correctionLabelWidth: CGFloat = 104
     private static let correctionContentWidth: CGFloat = settingsGroupWidth - 28 - 12 - correctionLabelWidth
-    private static let localModelSingleAccessoryWidth: CGFloat = 28
-    private static let localModelPairAccessoryWidth: CGFloat = 58
-    private static let localModelDirectoryAccessoryWidth: CGFloat = 62
+    private static let localModelActionColumnWidth = SettingsPanelLayoutMetrics.localModelActionColumnWidth
+    private static let localModelDownloadAccessoryWidth = SettingsPanelLayoutMetrics.localModelDownloadAccessoryWidth
     private static let localModelProgressAccessoryWidth: CGFloat = 28
     private static let localModelActivityAccessoryWidth: CGFloat = 110
-    private static let localModelProgressTextWidth: CGFloat = 76
+    private static let localModelProgressTextWidth: CGFloat = 68
     private static let disabledFeatureOpacity: CGFloat = 0.45
 
     private static func correctionRowContentWidth(labelWidth: CGFloat) -> CGFloat {
