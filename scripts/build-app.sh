@@ -4,8 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+timer_now() {
+  date +%s
+}
+
+log_timing() {
+  local label="$1"
+  local started_at="$2"
+  local ended_at
+  ended_at="$(timer_now)"
+  printf 'release-timing: %s duration=%ss\n' "$label" "$((ended_at - started_at))" >&2
+}
+
+TOTAL_STARTED_AT="$(timer_now)"
+SWIFT_BUILD_STARTED_AT="$(timer_now)"
 swift build -c release --product Douvo
+log_timing "swift release build" "$SWIFT_BUILD_STARTED_AT"
+
+MLX_METALLIB_STARTED_AT="$(timer_now)"
 "$ROOT/scripts/build-mlx-metallib.sh" release >/dev/null
+log_timing "build mlx metallib" "$MLX_METALLIB_STARTED_AT"
 
 APP="$ROOT/.build/release/Douvo.app"
 CONTENTS="$APP/Contents"
@@ -16,6 +34,7 @@ BIN="$ROOT/.build/release/Douvo"
 SPARKLE_FW="$(dirname "$BIN")/Sparkle.framework"
 PLIST_SRC="$ROOT/Sources/Douvo/Info.plist"
 
+ASSEMBLE_STARTED_AT="$(timer_now)"
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
 cp "$BIN" "$MACOS/Douvo"
@@ -47,6 +66,7 @@ if [[ ! -d "$SPARKLE_FW" ]]; then
 fi
 cp -R "$SPARKLE_FW" "$FRAMEWORKS/"
 install_name_tool -add_rpath @executable_path/../Frameworks "$MACOS/Douvo" 2>/dev/null || true
+log_timing "assemble app bundle" "$ASSEMBLE_STARTED_AT"
 
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -z "$CODESIGN_IDENTITY" ]]; then
@@ -76,15 +96,18 @@ if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
   echo "Use a stable local identity. Run scripts/ensure-local-code-signing-identity.sh explicitly if you want the repo to create one." >&2
   exit 1
 elif [[ -n "$CODESIGN_IDENTITY" ]]; then
+  CODESIGN_STARTED_AT="$(timer_now)"
   codesign_args=(--force --deep)
   if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then
     codesign_args+=(--keychain "$CODESIGN_KEYCHAIN")
   fi
   codesign "${codesign_args[@]}" --sign "$CODESIGN_IDENTITY" "$APP" >/dev/null
+  log_timing "codesign app bundle" "$CODESIGN_STARTED_AT"
 else
   echo "error: no codesigning identity found. Refusing to build an ad-hoc signed app." >&2
   echo "Set CODESIGN_IDENTITY or run scripts/ensure-local-code-signing-identity.sh explicitly." >&2
   echo "See docs/dev-local-build.md for contributor setup details." >&2
   exit 1
 fi
+log_timing "build app total" "$TOTAL_STARTED_AT"
 echo "$APP"

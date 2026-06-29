@@ -5,7 +5,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+timer_now() {
+  date +%s
+}
+
+log_timing() {
+  local label="$1"
+  local started_at="$2"
+  local ended_at
+  ended_at="$(timer_now)"
+  printf 'release-timing: %s duration=%ss\n' "$label" "$((ended_at - started_at))" >&2
+}
+
+TOTAL_STARTED_AT="$(timer_now)"
+BUILD_APP_STARTED_AT="$(timer_now)"
 APP_OUTPUT="$("$ROOT/scripts/build-app.sh")"
+log_timing "build app bundle" "$BUILD_APP_STARTED_AT"
 printf '%s\n' "$APP_OUTPUT" >&2
 APP="$(printf '%s\n' "$APP_OUTPUT" | tail -n 1)"
 if [[ ! -d "$APP" ]]; then
@@ -29,6 +44,7 @@ fi
 mkdir -p "$DIST"
 rm -f "$DMG"
 
+DMG_STAGING_STARTED_AT="$(timer_now)"
 DMG_BACKGROUND_COPY="$STAGE/dmg-background.png"
 DMG_BACKGROUND_RETINA_COPY="$STAGE/dmg-background@2x.png"
 sips -z 373 661 "$DMG_BACKGROUND" --out "$DMG_BACKGROUND_COPY" >/dev/null
@@ -54,7 +70,11 @@ cat >"$APPDMG_JSON" <<EOF
   ]
 }
 EOF
+log_timing "prepare dmg staging" "$DMG_STAGING_STARTED_AT"
 
+APPDMG_STARTED_AT="$(timer_now)"
 npx --yes --cache "$STAGE/npm-cache" "appdmg@${APPDMG_VERSION:-0.6.6}" "$APPDMG_JSON" "$DMG" >&2
+log_timing "create dmg with appdmg" "$APPDMG_STARTED_AT"
+log_timing "build dmg total" "$TOTAL_STARTED_AT"
 
 echo "$DMG"
