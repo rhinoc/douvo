@@ -167,22 +167,31 @@ enum TextInputFocusCheck {
 
     enum Result {
         case textInput(EditableTarget)
+        case possibleTextInput(EditableTarget, reason: String)
         case notTextInput(role: String, subrole: String)
+        case permissionDenied
         case unavailable(reason: String)
+        /// The focused element could not be determined (AX API returned no value).
+        /// Treat as potentially valid — allow recording to proceed with insertion verification as safety net.
+        case focusIndeterminate(reason: String)
 
         var isTextInput: Bool {
-            if case .textInput = self {
+            switch self {
+            case .textInput, .possibleTextInput, .focusIndeterminate:
                 return true
+            case .notTextInput, .permissionDenied, .unavailable:
+                return false
             }
-            return false
         }
 
         var blockedReason: String? {
             switch self {
-            case .textInput:
+            case .textInput, .possibleTextInput, .focusIndeterminate:
                 nil
             case .notTextInput:
                 "non_text_input"
+            case .permissionDenied:
+                "accessibility_permission_denied"
             case .unavailable(let reason):
                 reason
             }
@@ -197,15 +206,33 @@ enum TextInputFocusCheck {
                     "subrole": target.subrole,
                     "has_text_value": String(target.previousValue != nil)
                 ]
+            case .possibleTextInput(let target, let reason):
+                [
+                    "result": "possible_text_input",
+                    "reason": reason,
+                    "role": target.role,
+                    "subrole": target.subrole,
+                    "has_text_value": String(target.previousValue != nil)
+                ]
             case .notTextInput(let role, let subrole):
                 [
                     "result": "not_text_input",
                     "role": role,
                     "subrole": subrole
                 ]
+            case .permissionDenied:
+                [
+                    "result": "permission_denied",
+                    "reason": "accessibility_permission_denied"
+                ]
             case .unavailable(let reason):
                 [
                     "result": "unavailable",
+                    "reason": reason
+                ]
+            case .focusIndeterminate(let reason):
+                [
+                    "result": "focus_indeterminate",
                     "reason": reason
                 ]
             }
@@ -214,10 +241,16 @@ enum TextInputFocusCheck {
 
     enum Classification: Equatable {
         case textInput
+        case possibleTextInput(reason: String)
         case notTextInput
     }
 
     static func capture() -> Result {
+        guard AXIsProcessTrusted() else {
+            AppLog.info("Text input focus check permission_denied reason=accessibility_permission_denied")
+            return .permissionDenied
+        }
+
         guard let app = NSWorkspace.shared.frontmostApplication else {
             AppLog.info("Text input focus check unavailable reason=no_frontmost_app")
             return .unavailable(reason: "no_frontmost_app")
@@ -233,8 +266,12 @@ enum TextInputFocusCheck {
         guard focusedResult == .success,
               let focusedValue,
               CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
-            AppLog.info("Text input focus check unavailable reason=focused_element_unavailable ax=\(axErrorDescription(focusedResult))")
-            return .unavailable(reason: "focused_element_unavailable")
+            if focusedResult == .apiDisabled {
+                AppLog.info("Text input focus check permission_denied ax=\(axErrorDescription(focusedResult))")
+                return .permissionDenied
+            }
+            AppLog.info("Text input focus check focus_indeterminate reason=focused_element_unavailable ax=\(axErrorDescription(focusedResult))")
+            return .focusIndeterminate(reason: "focused_element_unavailable")
         }
 
         let element = focusedValue as! AXUIElement
@@ -242,15 +279,17 @@ enum TextInputFocusCheck {
         let subrole = attributeString(kAXSubroleAttribute, in: element) ?? "unknown"
         let previousValue = attributeString(kAXValueAttribute, in: element)
         let hasTextSelectionAttribute = hasTextSelectionAttribute(in: element)
+        let isEditable = attributeBool("AXEditable", in: element) == true
 
         switch classification(
             role: role,
+            isEditable: isEditable,
             hasTextValue: previousValue != nil,
             hasTextSelectionAttribute: hasTextSelectionAttribute
         ) {
         case .textInput:
             AppLog.info(
-                "Text input focus check result=text_input role=\(logValue(role)) subrole=\(logValue(subrole)) hasTextValue=\(previousValue != nil)"
+                "Text input focus check result=text_input role=\(logValue(role)) subrole=\(logValue(subrole)) isEditable=\(isEditable) hasTextValue=\(previousValue != nil)"
             )
             return .textInput(
                 EditableTarget(
@@ -260,6 +299,20 @@ enum TextInputFocusCheck {
                     role: role,
                     subrole: subrole
                 )
+            )
+        case .possibleTextInput(let reason):
+            AppLog.info(
+                "Text input focus check result=possible_text_input reason=\(reason) role=\(logValue(role)) subrole=\(logValue(subrole)) isEditable=\(isEditable) hasTextValue=\(previousValue != nil)"
+            )
+            return .possibleTextInput(
+                EditableTarget(
+                    pid: app.processIdentifier,
+                    element: element,
+                    previousValue: previousValue,
+                    role: role,
+                    subrole: subrole
+                ),
+                reason: reason
             )
         case .notTextInput:
             AppLog.info(
@@ -271,11 +324,15 @@ enum TextInputFocusCheck {
 
     static func classification(
         role: String,
+        isEditable: Bool = false,
         hasTextValue: Bool,
         hasTextSelectionAttribute: Bool
     ) -> Classification {
-        if hasTextValue || isKnownTextInput(role: role) || hasTextSelectionAttribute {
+        if isEditable || hasTextValue || isKnownTextInput(role: role) || hasTextSelectionAttribute {
             return .textInput
+        }
+        if isPossiblyEditableContainer(role: role) {
+            return .possibleTextInput(reason: "unconfirmed_editable_container")
         }
         return .notTextInput
     }
@@ -283,6 +340,15 @@ enum TextInputFocusCheck {
     private static func isKnownTextInput(role: String) -> Bool {
         switch role {
         case "AXTextArea", "AXTextField", "AXComboBox":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isPossiblyEditableContainer(role: String) -> Bool {
+        switch role {
+        case "AXWebArea", "AXGroup", "AXScrollArea", "AXGenericElement", "AXLayoutArea", "AXUnknown", "unknown":
             return true
         default:
             return false
@@ -313,6 +379,13 @@ enum TextInputFocusCheck {
         let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
         guard result == .success else { return nil }
         return value as? String
+    }
+
+    private static func attributeBool(_ attribute: String, in element: AXUIElement) -> Bool? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success else { return nil }
+        return value as? Bool
     }
 
     static func axErrorDescription(_ error: AXError) -> String {
@@ -369,7 +442,7 @@ private enum TextInsertionFailureCheck {
 
     static func capture(from focusResult: TextInputFocusCheck.Result) -> TextInsertionFailureCheck {
         switch focusResult {
-        case .textInput(let target):
+        case .textInput(let target), .possibleTextInput(let target, _):
             guard let value = target.previousValue else {
                 AppLog.info(
                     "PasteHelper insertion check unavailable reason=text_value_unavailable role=\(logValue(target.role)) subrole=\(logValue(target.subrole))"
@@ -391,9 +464,15 @@ private enum TextInsertionFailureCheck {
                 "PasteHelper insertion check captured non-text input role=\(logValue(role)) subrole=\(logValue(subrole))"
             )
             return .nonTextInput(role: role, subrole: subrole)
+        case .permissionDenied:
+            AppLog.info("PasteHelper insertion check unavailable reason=accessibility_permission_denied")
+            return .unavailable(reason: "accessibility_permission_denied")
         case .unavailable(let reason):
             AppLog.info("PasteHelper insertion check unavailable reason=\(reason)")
             return .unavailable(reason: reason)
+        case .focusIndeterminate:
+            AppLog.info("PasteHelper insertion check skipped reason=focus_indeterminate")
+            return .unavailable(reason: "focus_indeterminate")
         }
     }
 

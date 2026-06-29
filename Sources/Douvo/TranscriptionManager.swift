@@ -22,6 +22,14 @@ final class TranscriptionManager {
         L10n.text(en: "Focus a text field first.", zh: "请先聚焦在输入框中")
     }
 
+    private static var accessibilityPermissionMessage: String {
+        L10n.text(en: "Accessibility permission is required.", zh: "需要授予辅助功能权限")
+    }
+
+    private static var recordingStartTimeoutMessage: String {
+        L10n.text(en: "Recording did not start. Please try again.", zh: "录音没有启动，请重试")
+    }
+
     private static var focusTextInputCopiedMessage: String {
         L10n.text(en: "No text field found. Copied to clipboard.", zh: "未找到输入框，已复制到剪贴板")
     }
@@ -38,6 +46,7 @@ final class TranscriptionManager {
 
     private var quietCompletionWork: DispatchWorkItem?
     private var hardCompletionWork: DispatchWorkItem?
+    private var startTimeoutWork: DispatchWorkItem?
     private var completionTask: Task<Void, Never>?
     private var sessionStartTask: Task<Void, Never>?
     private var transcriptionSession: TranscriptionSession?
@@ -50,6 +59,7 @@ final class TranscriptionManager {
     private var latestProviderTranscripts: [String: String] = [:]
     private var activeASRProviders = Set<String>()
     private var openedASRProviders = Set<String>()
+    private var audioReady = false
     private var finishedASRProviders = Set<String>()
     private var selectionEditTarget: String?
     private var translationSessionActive = false
@@ -60,6 +70,8 @@ final class TranscriptionManager {
     private let finalQuietInterval: TimeInterval = 1.5
     // Absolute cap on how long we keep spinning after stop, in case finish never arrives.
     private let finalHardTimeout: TimeInterval = 12
+    // Avoid leaving the overlay in the loading state if audio/ASR startup hangs.
+    private let startTimeout: TimeInterval = 8
 
     var onAuthExpired: (() -> Void)?
     var onStateChanged: (() -> Void)?
@@ -131,6 +143,8 @@ final class TranscriptionManager {
             handleASRError(error, provider: provider)
         case .asrAuthError(let provider):
             handleASRAuthError(provider: provider)
+        case .audioStartFailed(let error):
+            handleAudioStartFailure(error, sessionID: sessionID)
         }
     }
 
@@ -160,18 +174,29 @@ final class TranscriptionManager {
             ])
         }
         if appState.recordingState == .starting {
-            AppLog.info("ASR open provider=\(provider); recording state -> recording")
-            setRecordingState(.recording)
+            tryTransitionToRecording(trigger: "asr_open")
         } else {
             AppLog.info("ASR open provider=\(provider); recording state already recording")
         }
     }
 
     private func handleAudioStarted() {
-        guard appState.recordingState == .starting else { return }
+        audioReady = true
         transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "started"])
         AppLog.info("Audio capture started")
-        AppLog.info("Audio capture ready; recording state -> recording")
+        if appState.recordingState == .starting {
+            tryTransitionToRecording(trigger: "audio_started")
+        }
+    }
+
+    /// Transition from `.starting` to `.recording` only when both ASR and audio are ready.
+    private func tryTransitionToRecording(trigger: String) {
+        let asrReady = activeASRProviders.isSubset(of: openedASRProviders)
+        guard asrReady, audioReady else {
+            AppLog.info("Waiting for readiness before recording: asrReady=\(asrReady) audioReady=\(audioReady) trigger=\(trigger)")
+            return
+        }
+        AppLog.info("Both ASR and audio ready; recording state -> recording (trigger=\(trigger))")
         setRecordingState(.recording)
     }
 
@@ -227,7 +252,7 @@ final class TranscriptionManager {
         )
         appState.transcript = selectedText
         if appState.recordingState == .starting {
-            setRecordingState(.recording)
+            tryTransitionToRecording(trigger: "asr_result")
         }
         // While finishing, keep waiting for the recognizer to catch up on the
         // tail of the audio. Each new result means it is still producing output,
@@ -386,6 +411,7 @@ final class TranscriptionManager {
         latestProviderTranscripts.removeAll()
         activeASRProviders = provider.activeProviderKeys
         openedASRProviders.removeAll()
+        audioReady = false
         finishedASRProviders.removeAll()
         isHandlingConnectionError = false
         selectionEditTarget = nil
@@ -485,11 +511,13 @@ final class TranscriptionManager {
         }
         activeSessionID = sessionID
         transcriptionSession = session
+        scheduleStartTimeout(sessionID: sessionID)
         sessionStartTask?.cancel()
         sessionStartTask = Task { [weak self, session] in
             do {
                 try await session.start(webParams: webParams)
             } catch {
+                AppLog.error("Session start failed: \(error)")
                 await MainActor.run {
                     self?.handleAudioStartFailure(error, sessionID: sessionID)
                 }
@@ -542,6 +570,25 @@ final class TranscriptionManager {
         quietCompletionWork = nil
         hardCompletionWork?.cancel()
         hardCompletionWork = nil
+    }
+
+    private func scheduleStartTimeout(sessionID: UUID) {
+        startTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.activeSessionID == sessionID,
+                  self.appState.recordingState == .starting else {
+                return
+            }
+            self.handleRecordingStartTimeout(sessionID: sessionID)
+        }
+        startTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + startTimeout, execute: work)
+    }
+
+    private func cancelStartTimeout() {
+        startTimeoutWork?.cancel()
+        startTimeoutWork = nil
     }
 
     func submitRecording() {
@@ -848,8 +895,10 @@ final class TranscriptionManager {
         ])
         appState.transcript = ""
         switch pasteOutcome {
-        case .copiedOnly:
-            appState.errorMessage = Self.focusTextInputCopiedMessage
+        case .copiedOnly(let reason):
+            appState.errorMessage = reason == "accessibility_permission_denied"
+                ? Self.accessibilityPermissionMessage
+                : Self.focusTextInputCopiedMessage
             setRecordingState(.idle)
             resetToIdle(after: 1.8)
         case .enqueuedPaste, .skippedEmpty:
@@ -940,7 +989,9 @@ final class TranscriptionManager {
     private func blockStartForMissingTextInput(_ inputFocus: TextInputFocusCheck.Result) {
         let reason = inputFocus.blockedReason ?? "unknown"
         AppLog.info("Start blocked: no focused text input reason=\(reason)")
-        appState.errorMessage = Self.focusTextInputMessage
+        appState.errorMessage = reason == "accessibility_permission_denied"
+            ? Self.accessibilityPermissionMessage
+            : Self.focusTextInputMessage
         appState.transcript = ""
         appState.resetAudioLevels()
         transcriptionTrace?.event("input_focus.blocked", metadata: inputFocus.traceMetadata)
@@ -955,6 +1006,9 @@ final class TranscriptionManager {
 
     private func setRecordingState(_ state: RecordingState) {
         AppLog.info("Recording state \(appState.recordingState) -> \(state)")
+        if state != .starting {
+            cancelStartTimeout()
+        }
         appState.recordingState = state
         hotkeyManager.setEscapeHandlingEnabled(state != .idle)
         onStateChanged?()
@@ -990,6 +1044,21 @@ final class TranscriptionManager {
             .map { "\($0.key):\($0.value.count)" }
             .joined(separator: ",")
         AppLog.info("ASR result summary reason=\(reason) total=\(asrResultCount) providerMaxChars=[\(providerMaxChars)] latestChars=[\(latestChars)] samples=\(Self.formatSamples(asrResultProgressSamples))")
+    }
+
+    private func handleRecordingStartTimeout(sessionID: UUID) {
+        guard activeSessionID == sessionID, appState.recordingState == .starting else { return }
+        AppLog.error("Recording start timed out")
+        transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "timeout"])
+        transcriptionTrace?.finishSpan("asr.connect", metadata: ["result": "timeout"])
+        awaitingFinalResult = false
+        cancelFinalTimers()
+        cancelActiveSession()
+        appState.errorMessage = Self.recordingStartTimeoutMessage
+        appState.transcript = ""
+        appState.resetAudioLevels()
+        finishCurrentTrace(outcome: "failed", metadata: ["reason": "recording_start_timeout"])
+        resetToIdle(after: 2)
     }
 
     private static func appendSummarySample(_ sample: String, to samples: inout [String]) {
