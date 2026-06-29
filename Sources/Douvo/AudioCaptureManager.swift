@@ -83,18 +83,26 @@ struct AudioLevelVisualizer {
     }
 }
 
-final class AudioCaptureManager {
+final class AudioCaptureManager: @unchecked Sendable {
     enum CaptureMode {
         case webPCM
         case androidOpus
         case webPCMAndAndroidOpus
     }
 
+    private enum CaptureState {
+        case idle
+        case starting(id: UUID, stopRequested: Bool)
+        case capturing(id: UUID)
+        case stopping(id: UUID)
+    }
+
     private var audioEngine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var captureMode: CaptureMode = .webPCM
     private var opusEncoder: OpusPacketEncoder?
-    private var isCapturing = false
+    private let stateLock = NSLock()
+    private var captureState: CaptureState = .idle
     private var chunkCount = 0
     private var levelSampleCount = 0
     private var levelMin: Float = .greatestFiniteMagnitude
@@ -127,27 +135,72 @@ final class AudioCaptureManager {
     var onLevel: ((Float) -> Void)?
 
     func startCapture(mode: CaptureMode = .webPCM) throws {
-        guard !isCapturing else { return }
+        let captureID = UUID()
+        guard beginStartingCapture(id: captureID) else { return }
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        applySelectedInputDevice(to: inputNode)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        // Reuse the engine across recordings to avoid repeated hardware initialization.
+        // Virtual audio devices (Feishu, Zoom) can take 3+ seconds on each new AVAudioEngine().
+        var engine: AVAudioEngine
+        var reusedEngine = false
+        if let existing = audioEngine {
+            engine = existing
+            reusedEngine = true
+            AppLog.info("Audio reusing existing engine")
+        } else {
+            engine = AVAudioEngine()
+            audioEngine = engine
+            AppLog.info("Audio created new engine")
+        }
+        let t1 = CFAbsoluteTimeGetCurrent()
+        var inputNode = engine.inputNode
+        let t2 = CFAbsoluteTimeGetCurrent()
+        do {
+            try applySelectedInputDevice(to: inputNode, resetDefaultDevice: reusedEngine)
+        } catch where reusedEngine {
+            AppLog.info("Audio discarding reused engine after input device apply failed error=\(error.localizedDescription)")
+            audioEngine = nil
+            engine = AVAudioEngine()
+            audioEngine = engine
+            inputNode = engine.inputNode
+            do {
+                try applySelectedInputDevice(to: inputNode, resetDefaultDevice: false)
+            } catch {
+                finishStartFailure(id: captureID, inputNode: nil)
+                throw error
+            }
+        } catch {
+            finishStartFailure(id: captureID, inputNode: nil)
+            throw error
+        }
+        let t3 = CFAbsoluteTimeGetCurrent()
         let inputFormat = inputNode.inputFormat(forBus: 0)
+        let t4 = CFAbsoluteTimeGetCurrent()
         AppLog.info("Audio input format sampleRate=\(inputFormat.sampleRate) channels=\(inputFormat.channelCount)")
+        AppLog.info("Audio init timing engine=\(Int((t1-t0)*1000))ms inputNode=\(Int((t2-t1)*1000))ms applyDevice=\(Int((t3-t2)*1000))ms queryFormat=\(Int((t4-t3)*1000))ms")
 
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             AppLog.error("Audio input unavailable sampleRate=\(inputFormat.sampleRate) channels=\(inputFormat.channelCount)")
+            finishStartFailure(id: captureID, inputNode: nil)
             throw NSError(domain: "Douvo.Audio", code: 1, userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
         }
 
+        let t5 = CFAbsoluteTimeGetCurrent()
         let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             AppLog.error("Audio converter creation failed")
+            finishStartFailure(id: captureID, inputNode: nil)
             throw NSError(domain: "Douvo.Audio", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not create audio converter"])
         }
+        let t6 = CFAbsoluteTimeGetCurrent()
         self.converter = converter
         captureMode = mode
-        opusEncoder = mode.usesAndroidOpus ? try OpusPacketEncoder() : nil
+        do {
+            opusEncoder = mode.usesAndroidOpus ? try OpusPacketEncoder() : nil
+        } catch {
+            finishStartFailure(id: captureID, inputNode: nil)
+            throw error
+        }
         resetCaptureMetrics()
         pcmAccumulator.removeAll(keepingCapacity: true)
         opusSampleAccumulator.removeAll(keepingCapacity: true)
@@ -157,52 +210,194 @@ final class AudioCaptureManager {
         inputNode.installTap(onBus: 0, bufferSize: Self.levelBufferSampleCount, format: inputFormat) { [weak self] buffer, _ in
             self?.process(buffer)
         }
+        let t7 = CFAbsoluteTimeGetCurrent()
 
         engine.prepare()
+        let t8 = CFAbsoluteTimeGetCurrent()
         do {
             try engine.start()
         } catch {
+            inputNode.removeTap(onBus: 0)
             opusEncoder = nil
             _ = debugAudioRecorder?.finish()
             debugAudioRecorder = nil
+            // Discard the engine on start failure so next attempt gets a fresh one.
+            audioEngine = nil
+            _ = finishStartFailure(id: captureID, inputNode: nil)
             throw error
         }
-        audioEngine = engine
-        isCapturing = true
+        let t9 = CFAbsoluteTimeGetCurrent()
+        if finishStartingCapture(id: captureID) {
+            AppLog.info("Audio engine started after stop was requested; stopping immediately")
+            _ = stopCaptureAfterStartWasCancelled(id: captureID)
+            throw CancellationError()
+        }
         AppLog.info("Audio engine started")
+        AppLog.info("Audio init timing engine=\(Int((t1-t0)*1000))ms inputNode=\(Int((t2-t1)*1000))ms applyDevice=\(Int((t3-t2)*1000))ms queryFormat=\(Int((t4-t3)*1000))ms converter=\(Int((t6-t5)*1000))ms installTap=\(Int((t7-t6)*1000))ms prepare=\(Int((t8-t7)*1000))ms start=\(Int((t9-t8)*1000))ms total=\(Int((t9-t0)*1000))ms")
     }
 
     func stopCapture() -> URL? {
-        guard isCapturing else { return nil }
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine?.stop()
-        audioEngine = nil
-        drainConverterTail()
-        converter = nil
-        isCapturing = false
-
-        flushTailAudio()
-        opusEncoder = nil
-        let recordingURL = debugAudioRecorder?.finish()
-        debugAudioRecorder = nil
-        logCaptureSummary(recordingURL: recordingURL)
-        resetCaptureMetrics()
+        guard let captureID = beginStoppingCapture() else { return nil }
+        let recordingURL = stopCurrentCapture(drainAndFlush: true, logSummary: true)
+        finishStoppingCapture(id: captureID)
         return recordingURL
     }
 
-    private func applySelectedInputDevice(to inputNode: AVAudioInputNode) {
+    private func beginStartingCapture(id: UUID) -> Bool {
+        withStateLock {
+            switch captureState {
+            case .idle:
+                captureState = .starting(id: id, stopRequested: false)
+                return true
+            case .starting, .capturing, .stopping:
+                return false
+            }
+        }
+    }
+
+    private func finishStartingCapture(id: UUID) -> Bool {
+        withStateLock {
+            switch captureState {
+            case .starting(let currentID, let stopRequested) where currentID == id:
+                if stopRequested {
+                    captureState = .stopping(id: id)
+                    return true
+                }
+                captureState = .capturing(id: id)
+                return false
+            case .idle, .starting, .capturing, .stopping:
+                return true
+            }
+        }
+    }
+
+    @discardableResult
+    private func finishStartFailure(id: UUID, inputNode: AVAudioInputNode?) -> Bool {
+        inputNode?.removeTap(onBus: 0)
+        converter = nil
+        opusEncoder = nil
+        pcmAccumulator.removeAll(keepingCapacity: true)
+        opusSampleAccumulator.removeAll(keepingCapacity: true)
+        _ = debugAudioRecorder?.finish()
+        debugAudioRecorder = nil
+        resetCaptureMetrics()
+
+        return withStateLock {
+            switch captureState {
+            case .starting(let currentID, let stopRequested) where currentID == id:
+                captureState = .idle
+                return stopRequested
+            case .stopping(let currentID) where currentID == id:
+                captureState = .idle
+                return true
+            case .idle, .starting, .capturing, .stopping:
+                return false
+            }
+        }
+    }
+
+    private func beginStoppingCapture() -> UUID? {
+        withStateLock {
+            switch captureState {
+            case .idle:
+                return nil
+            case .starting(let id, _):
+                captureState = .starting(id: id, stopRequested: true)
+                return nil
+            case .capturing(let id):
+                captureState = .stopping(id: id)
+                return id
+            case .stopping:
+                return nil
+            }
+        }
+    }
+
+    private func finishStoppingCapture(id: UUID) {
+        withStateLock {
+            if case .stopping(let currentID) = captureState, currentID == id {
+                captureState = .idle
+            }
+        }
+    }
+
+    private func stopCaptureAfterStartWasCancelled(id: UUID) -> URL? {
+        let recordingURL = stopCurrentCapture(drainAndFlush: false, logSummary: false)
+        finishStoppingCapture(id: id)
+        return recordingURL
+    }
+
+    private func stopCurrentCapture(drainAndFlush: Bool, logSummary: Bool) -> URL? {
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        // Keep the engine alive for reuse; only discard on start failure.
+        if drainAndFlush {
+            drainConverterTail()
+        }
+        converter = nil
+
+        if drainAndFlush {
+            flushTailAudio()
+        } else {
+            pcmAccumulator.removeAll(keepingCapacity: true)
+            opusSampleAccumulator.removeAll(keepingCapacity: true)
+        }
+        opusEncoder = nil
+        let recordingURL = debugAudioRecorder?.finish()
+        debugAudioRecorder = nil
+        if logSummary {
+            logCaptureSummary(recordingURL: recordingURL)
+        } else {
+            resetCaptureMetrics()
+        }
+        return drainAndFlush ? recordingURL : nil
+    }
+
+    private var isCaptureActive: Bool {
+        withStateLock {
+            if case .capturing = captureState {
+                return true
+            }
+            return false
+        }
+    }
+
+    private func withStateLock<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
+    private func applySelectedInputDevice(to inputNode: AVAudioInputNode, resetDefaultDevice: Bool) throws {
+        guard let audioUnit = inputNode.audioUnit else {
+            AppLog.error("Audio input node audioUnit unavailable; cannot set device")
+            throw NSError(domain: "Douvo.Audio", code: 5, userInfo: [NSLocalizedDescriptionKey: "Audio input unit is unavailable"])
+        }
         guard let uid = AudioDeviceStore.selectedUID() else {
-            AppLog.info("Audio input using system default device")
+            guard let defaultDevice = Self.currentDefaultInputDevice() else {
+                AppLog.info("Audio input using system default device device=unknown")
+                return
+            }
+            AppLog.info("Audio input using system default device device=\(defaultDevice.name)")
+            guard resetDefaultDevice else { return }
+            try setInputDevice(defaultDevice.id, label: "system default", audioUnit: audioUnit)
             return
         }
         guard let deviceID = AudioDeviceManager.deviceID(forUID: uid) else {
-            AppLog.info("Selected input device not available; falling back to system default uid=\(uid)")
+            guard let defaultDevice = Self.currentDefaultInputDevice() else {
+                AppLog.info("Selected input device not available and no system default found uid=\(uid)")
+                return
+            }
+            AppLog.info("Selected input device not available; falling back to system default uid=\(uid) device=\(defaultDevice.name)")
+            if resetDefaultDevice {
+                try setInputDevice(defaultDevice.id, label: "fallback default", audioUnit: audioUnit)
+            }
             return
         }
-        guard let audioUnit = inputNode.audioUnit else {
-            AppLog.error("Audio input node audioUnit unavailable; cannot set device")
-            return
-        }
+        try setInputDevice(deviceID, label: "uid=\(uid)", audioUnit: audioUnit)
+    }
+
+    private func setInputDevice(_ deviceID: AudioDeviceID, label: String, audioUnit: AudioUnit) throws {
         var device = deviceID
         let status = AudioUnitSetProperty(
             audioUnit,
@@ -213,14 +408,19 @@ final class AudioCaptureManager {
             UInt32(MemoryLayout<AudioDeviceID>.size)
         )
         if status == noErr {
-            AppLog.info("Audio input device set uid=\(uid) deviceID=\(deviceID)")
+            AppLog.info("Audio input device set \(label) deviceID=\(deviceID)")
         } else {
-            AppLog.error("Audio set input device failed status=\(status) uid=\(uid)")
+            AppLog.error("Audio set input device failed status=\(status) \(label)")
+            throw NSError(
+                domain: NSOSStatusErrorDomain,
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "Could not set audio input device (\(status))"]
+            )
         }
     }
 
     private func process(_ buffer: AVAudioPCMBuffer) {
-        guard let converter, hasAudioConsumer else { return }
+        guard isCaptureActive, let converter, hasAudioConsumer else { return }
 
         let ratio = 16_000.0 / converter.inputFormat.sampleRate
         let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * ratio))
@@ -485,6 +685,34 @@ final class AudioCaptureManager {
 
     private var hasAudioConsumer: Bool {
         onAudioData != nil || onWebPCMData != nil || onAndroidOpusData != nil
+    }
+
+    private static func currentDefaultInputDevice() -> (id: AudioDeviceID, name: String)? {
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr,
+              deviceID != 0 else {
+            return nil
+        }
+        var name: CFString?
+        var nameSize = UInt32(MemoryLayout<CFString?>.size)
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceNameCFString,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = withUnsafeMutablePointer(to: &name) { pointer -> OSStatus in
+            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, pointer)
+        }
+        guard status == noErr, let name else {
+            return (deviceID, "device_\(deviceID)")
+        }
+        return (deviceID, name as String)
     }
 }
 
