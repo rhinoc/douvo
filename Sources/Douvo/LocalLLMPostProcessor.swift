@@ -689,7 +689,10 @@ actor LocalLLMPostProcessor {
         _ = try await modelContainer(for: model, onProgress: onProgress)
     }
 
-    func downloadModel(_ model: LocalLLMModel) async throws {
+    func downloadModel(
+        _ model: LocalLLMModel,
+        onProgress: ProgressHandler? = nil
+    ) async throws {
         guard case .huggingFace(let repositoryID) = model.source else {
             return
         }
@@ -699,13 +702,85 @@ actor LocalLLMPostProcessor {
 
         try Task.checkCancellation()
         AppLog.info("Local LLM model download start model=\(repositoryID)")
+        let stagingDirectory = try prepareSnapshotDownloadStagingDirectory(for: model)
+        let progressReporter = LocalLLMDownloadProgressReporter(
+            repositoryID: repositoryID,
+            stagingDirectory: stagingDirectory,
+            onProgress: onProgress
+        )
+        progressReporter.startSampling()
+        defer {
+            progressReporter.stopSampling()
+            try? FileManager.default.removeItem(at: stagingDirectory)
+        }
         _ = try await HubClient().downloadSnapshot(
             of: repoID,
+            to: stagingDirectory,
             revision: "main",
-            matching: LocalLLMModel.downloadSnapshotFilePatterns
+            matching: LocalLLMModel.downloadSnapshotFilePatterns,
+            progressHandler: { progress in
+                progressReporter.update(from: progress)
+            }
         )
+        try syncStagedSnapshotFilesToCacheSnapshot(for: model, stagingDirectory: stagingDirectory)
+        progressReporter.complete()
         try Task.checkCancellation()
         AppLog.info("Local LLM model download complete model=\(repositoryID)")
+    }
+
+    private func prepareSnapshotDownloadStagingDirectory(for model: LocalLLMModel) throws -> URL {
+        guard let cacheURL = model.cacheURL else {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("douvo-local-model-downloads", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        }
+        let stagingRoot = cacheURL.appendingPathComponent("douvo-download-staging", isDirectory: true)
+        let stagingDirectory = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        return stagingDirectory
+    }
+
+    private func syncStagedSnapshotFilesToCacheSnapshot(
+        for model: LocalLLMModel,
+        stagingDirectory: URL
+    ) throws {
+        guard let cacheURL = model.cacheURL,
+              let snapshotURL = currentHuggingFaceSnapshotURL(in: cacheURL)
+        else {
+            return
+        }
+        guard FileManager.default.fileExists(atPath: stagingDirectory.path) else { return }
+
+        let stagedWeights = (try? FileManager.default.contentsOfDirectory(
+            at: stagingDirectory,
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "safetensors" }) ?? []
+        for stagedWeight in stagedWeights {
+            let targetURL = snapshotURL.appendingPathComponent(stagedWeight.lastPathComponent)
+            if FileManager.default.fileExists(atPath: targetURL.path) {
+                continue
+            }
+            try FileManager.default.createDirectory(
+                at: targetURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.copyItem(at: stagedWeight, to: targetURL)
+        }
+    }
+
+    private func currentHuggingFaceSnapshotURL(in cacheURL: URL) -> URL? {
+        let refsMainURL = cacheURL
+            .appendingPathComponent("refs", isDirectory: true)
+            .appendingPathComponent("main")
+        guard let commit = try? String(contentsOf: refsMainURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !commit.isEmpty
+        else {
+            return nil
+        }
+        return cacheURL
+            .appendingPathComponent("snapshots", isDirectory: true)
+            .appendingPathComponent(commit, isDirectory: true)
     }
 
     func deleteDownloadedModel(_ model: LocalLLMModel) async throws {
@@ -1960,6 +2035,192 @@ actor LocalLLMPostProcessor {
     private static let removablePunctuationCharacters = Set<Character>("。！，、；：；!;,")
     private static let codeVocabularySeparators = Set<Character>("./_-")
     private static let chinesePinyinMaximumWindowSize = 4
+}
+
+private final class LocalLLMDownloadProgressReporter: @unchecked Sendable {
+    private let stagingDirectory: URL
+    private let onProgress: LocalLLMPostProcessor.ProgressHandler?
+    private let logger: LocalLLMDownloadProgressLogger
+    private let lock = NSLock()
+    private var totalUnitCount: Int64 = 0
+    private var lastReportedFraction: Double = 0
+    private var samplingTask: Task<Void, Never>?
+
+    init(
+        repositoryID: String,
+        stagingDirectory: URL,
+        onProgress: LocalLLMPostProcessor.ProgressHandler?
+    ) {
+        self.stagingDirectory = stagingDirectory
+        self.onProgress = onProgress
+        logger = LocalLLMDownloadProgressLogger(repositoryID: repositoryID)
+    }
+
+    func startSampling() {
+        lock.lock()
+        guard samplingTask == nil else {
+            lock.unlock()
+            return
+        }
+        let task = Task(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                self?.sampleStagedFiles()
+            }
+        }
+        samplingTask = task
+        lock.unlock()
+    }
+
+    func stopSampling() {
+        lock.lock()
+        let task = samplingTask
+        samplingTask = nil
+        lock.unlock()
+        task?.cancel()
+    }
+
+    func update(from progress: Progress) {
+        let total = progress.totalUnitCount
+        if total > 0 {
+            lock.lock()
+            totalUnitCount = max(totalUnitCount, total)
+            lock.unlock()
+        }
+        report(
+            fractionCompleted: progress.fractionCompleted,
+            completedUnitCount: progress.completedUnitCount,
+            totalUnitCount: progress.totalUnitCount,
+            allowsComplete: progress.totalUnitCount > 0
+                && progress.completedUnitCount >= progress.totalUnitCount
+        )
+    }
+
+    func complete() {
+        report(
+            fractionCompleted: 1,
+            completedUnitCount: totalUnitCount,
+            totalUnitCount: totalUnitCount,
+            allowsComplete: true
+        )
+    }
+
+    private func sampleStagedFiles() {
+        let completedUnitCount = stagedFileSize(in: stagingDirectory)
+        guard completedUnitCount > 0 else { return }
+
+        lock.lock()
+        let total = totalUnitCount
+        lock.unlock()
+        guard total > 0 else { return }
+
+        report(
+            fractionCompleted: Double(completedUnitCount) / Double(total),
+            completedUnitCount: completedUnitCount,
+            totalUnitCount: total,
+            allowsComplete: false
+        )
+    }
+
+    private func report(
+        fractionCompleted: Double,
+        completedUnitCount: Int64,
+        totalUnitCount: Int64,
+        allowsComplete: Bool
+    ) {
+        let boundedFraction = max(0, min(1, fractionCompleted))
+        let reportableFraction = allowsComplete ? boundedFraction : min(boundedFraction, 0.99)
+
+        lock.lock()
+        guard reportableFraction > lastReportedFraction else {
+            lock.unlock()
+            return
+        }
+        lastReportedFraction = reportableFraction
+        lock.unlock()
+
+        onProgress?(reportableFraction)
+        logger.log(
+            fractionCompleted: reportableFraction,
+            completedUnitCount: completedUnitCount,
+            totalUnitCount: totalUnitCount
+        )
+    }
+
+    private func stagedFileSize(in directory: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true
+            else {
+                continue
+            }
+            total += Int64(values.fileSize ?? 0)
+        }
+        return total
+    }
+}
+
+private final class LocalLLMDownloadProgressLogger: @unchecked Sendable {
+    private let repositoryID: String
+    private let minimumInterval: TimeInterval
+    private let lock = NSLock()
+    private var lastLoggedPercent: Int?
+    private var lastLoggedCompletedUnitCount: Int64 = -1
+    private var lastLoggedAt: TimeInterval = 0
+
+    init(repositoryID: String, minimumInterval: TimeInterval = 5) {
+        self.repositoryID = repositoryID
+        self.minimumInterval = minimumInterval
+    }
+
+    func log(_ progress: Progress) {
+        log(
+            fractionCompleted: progress.fractionCompleted,
+            completedUnitCount: progress.completedUnitCount,
+            totalUnitCount: progress.totalUnitCount
+        )
+    }
+
+    func log(
+        fractionCompleted: Double,
+        completedUnitCount: Int64,
+        totalUnitCount: Int64
+    ) {
+        let fractionCompleted = max(0, min(1, fractionCompleted))
+        let percent = Int(fractionCompleted * 100)
+        let isComplete = totalUnitCount > 0 && completedUnitCount >= totalUnitCount
+        let now = ProcessInfo.processInfo.systemUptime
+
+        lock.lock()
+        let didPercentChange = lastLoggedPercent != percent
+        let didBytesAdvance = completedUnitCount > lastLoggedCompletedUnitCount
+        let hasIntervalElapsed = now - lastLoggedAt >= minimumInterval
+        let shouldLog = lastLoggedPercent == nil
+            || didPercentChange
+            || isComplete
+            || (didBytesAdvance && hasIntervalElapsed)
+
+        guard shouldLog else {
+            lock.unlock()
+            return
+        }
+
+        lastLoggedPercent = percent
+        lastLoggedCompletedUnitCount = completedUnitCount
+        lastLoggedAt = now
+        lock.unlock()
+
+        AppLog.info("Local LLM model download progress model=\(repositoryID) progress=\(percent)% completed=\(completedUnitCount) total=\(totalUnitCount)")
+    }
 }
 
 private enum PromptTemplateRenderer {

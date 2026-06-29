@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.1
 
 import PackageDescription
 
@@ -12,7 +12,10 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.3")),
-        .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
+        .package(
+            url: "https://github.com/mochiexists/swift-huggingface",
+            revision: "4abcf1485f3e06456140a1e0d33e72fa0bff273a"
+        ),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.4")
     ],
@@ -33,6 +36,7 @@ let package = Package(
             ],
             resources: [
                 .process("Resources/MenuBarIcon.svg"),
+                .process("Resources/ASRDemo.aiff"),
                 .copy("Resources/mlx-swift_Cmlx.bundle")
             ],
             linkerSettings: [

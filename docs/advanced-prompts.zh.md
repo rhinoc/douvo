@@ -10,10 +10,10 @@ Douvo 的高级 prompt 编辑器位于 **Settings... -> AI -> Advanced**。
 
 | 字段 | 用途 | 留空行为 |
 | --- | --- | --- |
-| User Identity | 长期用户身份、领域、术语偏好或写作场景，用于理解意图和术语消歧。 | 不发送用户身份上下文。 |
-| 增量提示词 | 追加到有效内置或自定义 System Prompt 之后的额外片段。 | 不追加任何内容。 |
-| System Prompt | 定义 AI 后处理规则、词库处理、标点行为、输出风格和安全约束。 | 使用应用内置 system prompt。 |
-| User Message | 包装原始转写文本，然后发送给选中的 AI 后端。 | 使用应用内置 user message 模板。 |
+| <a id="user-identity"></a>用户身份 | 长期用户身份、领域、术语偏好或写作场景，用于理解意图和术语消歧。 | 不发送用户身份上下文。 |
+| <a id="extra-rules"></a>补充规则 | 追加到有效内置或自定义 System Prompt 之后的额外片段。 | 不追加任何内容。 |
+| <a id="system-prompt"></a>System Prompt | 定义 AI 后处理规则、词库处理、标点行为、输出风格和安全约束。 | 使用应用内置 system prompt。 |
+| <a id="user-message-template"></a>用户消息模板 | 包装原始转写文本，然后发送给选中的 AI 后端。 | 使用应用内置 user message 模板。 |
 
 ## 模板语法
 
@@ -113,7 +113,7 @@ Douvo 支持一小部分类似 Mustache 的语法：
 ## 注意事项
 
 - 输出要求保持简短、明确。
-- 小范围补充规则优先使用增量提示词，再考虑覆盖完整 System Prompt。
+- 小范围补充规则优先使用补充规则，再考虑覆盖完整 System Prompt。
 - 不要要求模型解释修改原因；Douvo 会直接插入最终输出。
 - 除非用户明确要求转换，否则应保留代码、路径、命令、URL、人名和词库术语。
 - 翻译或格式化工作流优先使用 **Output Style -> Custom**，再考虑覆盖完整 System Prompt。

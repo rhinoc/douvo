@@ -1,6 +1,6 @@
 # ASR Providers
 
-Douvo supports three Doubao ASR recognition paths: `Web`, `Android`, and `Mix`. Choose the path in **Settings... -> Account -> ASR Provider**. The default provider is `Web`.
+Douvo supports three Doubao ASR recognition paths: `Web`, `Android`, and `Dual`. Choose the path in **Settings... -> Account -> Recognition**. The default provider is `Web`.
 
 All paths are based on observed Doubao client behavior, not an official public Doubao API. Any path may break if Doubao changes authentication, risk controls, WebSocket protocols, audio formats, or response payloads.
 
@@ -101,7 +101,7 @@ The token is read from `data.settings.asr_config.app_key`. The complete Android 
 ~/Library/Application Support/Douvo/android_asr_credentials.json
 ```
 
-Clicking **Reset Android Credentials** in Settings deletes this file. The next Android-provider run generates a new local identity and registers again, so Doubao will see it as a new IME-style device.
+Clicking **Reset Android Login** in Settings deletes this file. The next Android-provider run generates a new local identity and registers again, so Doubao will see it as a new IME-style device.
 
 ### WebSocket and Protocol
 
@@ -171,11 +171,11 @@ Server responses are also Protobuf-encoded. Douvo parses `message_type` and `res
 
 Trace metadata records the Android segment shape (`android_result_segments`, `android_text_segments`, `android_interim_segments`, `android_final_segments`, `android_vad_finished_segments`, `android_result_keys`, `android_segment_ids`, `android_assembled_segments`, and `android_assembled_segment_ids`) so provider behavior can be diagnosed from a failed trace.
 
-## Mix Provider
+## Dual Provider
 
-The Mix provider runs the Web and Android providers at the same time, then asks AI post-processing to merge the two recognition results into one final text.
+The Dual provider runs the Web and Android providers at the same time, then asks AI post-processing to merge the two recognition results into one final text.
 
-Mix mode requires:
+Dual mode requires:
 
 - Web ASR login to be valid.
 - Android ASR credentials to be available or creatable.
@@ -198,7 +198,7 @@ The model is instructed to combine overlapping content, use either path to fill 
 
 ## Comparison
 
-| Item | Web | Android | Mix |
+| Item | Web | Android | Dual |
 | --- | --- | --- | --- |
 | Entry point | Doubao Web ASR | Doubao IME Android ASR | Web + Android |
 | Requires WebView login | Yes | No | Yes |

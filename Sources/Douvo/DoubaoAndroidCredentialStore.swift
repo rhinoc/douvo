@@ -76,7 +76,7 @@ enum DoubaoAndroidCredentialStore {
     static func debugInfo() -> String {
         let credentials = load()
         return """
-        Android ASR Debug Info
+        Android Recognition Debug Info
         hasCredentials: \(credentials != nil)
         deviceIdSet: \(!(credentials?.deviceId ?? "").isEmpty)
         tokenSet: \(!(credentials?.token ?? "").isEmpty)
@@ -145,13 +145,13 @@ enum DoubaoAndroidCredentialStore {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        try validateHTTPResponse(response, context: "Android ASR device registration")
+        try validateHTTPResponse(response, context: "Android recognition device registration")
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let deviceId = numericString(json["device_id"]),
               let installId = numericString(json["install_id"]),
               deviceId != "0" else {
-            throw NSError(domain: "Douvo.AndroidASR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Android ASR device registration returned invalid identifiers"])
+            throw NSError(domain: "Douvo.AndroidASR", code: 1, userInfo: [NSLocalizedDescriptionKey: "Android recognition device registration returned invalid identifiers"])
         }
 
         credentials.deviceId = deviceId
@@ -167,7 +167,7 @@ enum DoubaoAndroidCredentialStore {
         request.httpBody = body.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        try validateHTTPResponse(response, context: "Android ASR token request")
+        try validateHTTPResponse(response, context: "Android recognition token request")
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataObject = json["data"] as? [String: Any],
@@ -175,7 +175,7 @@ enum DoubaoAndroidCredentialStore {
               let asrConfig = settings["asr_config"] as? [String: Any],
               let token = asrConfig["app_key"] as? String,
               !token.isEmpty else {
-            throw NSError(domain: "Douvo.AndroidASR", code: 2, userInfo: [NSLocalizedDescriptionKey: "Android ASR token response missing app key"])
+            throw NSError(domain: "Douvo.AndroidASR", code: 2, userInfo: [NSLocalizedDescriptionKey: "Android recognition token response missing app key"])
         }
         credentials.token = token
     }

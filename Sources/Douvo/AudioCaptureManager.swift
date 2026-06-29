@@ -716,6 +716,134 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 }
 
+struct DemoASRAudioPackets: Sendable {
+    let webPCM: [Data]
+    let androidOpus: [Data]
+    let sampleCount: Int
+}
+
+enum DemoASRAudioPipeline {
+    private static let webPacketSampleCount = 2048
+    private static let androidOpusFrameSampleCount = 320
+    private static let webTailSilencePacketCount = 2
+    private static let androidOpusTailSilenceFrameCount = 25
+
+    static func packets(from fileURL: URL, provider: ASRProvider) throws -> DemoASRAudioPackets {
+        let samples = try samples16kMonoFloat(from: fileURL)
+        var webPackets: [Data] = []
+        var androidPackets: [Data] = []
+
+        if provider.usesWebASR {
+            webPackets = webPCMPackets(from: samples)
+        }
+        if provider.usesAndroidASR {
+            androidPackets = try androidOpusPackets(from: samples)
+        }
+
+        return DemoASRAudioPackets(
+            webPCM: webPackets,
+            androidOpus: androidPackets,
+            sampleCount: samples.count
+        )
+    }
+
+    private static func samples16kMonoFloat(from fileURL: URL) throws -> [Float] {
+        let file = try AVAudioFile(forReading: fileURL)
+        let inputFormat = file.processingFormat
+        guard let inputBuffer = AVAudioPCMBuffer(
+            pcmFormat: inputFormat,
+            frameCapacity: AVAudioFrameCount(file.length)
+        ) else {
+            throw NSError(domain: "Douvo.AudioDemo", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not allocate demo audio input buffer"])
+        }
+        try file.read(into: inputBuffer)
+
+        let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            throw NSError(domain: "Douvo.AudioDemo", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not create demo audio converter"])
+        }
+
+        let ratio = targetFormat.sampleRate / inputFormat.sampleRate
+        let outputCapacity = AVAudioFrameCount(max(1, ceil(Double(inputBuffer.frameLength) * ratio) + 256))
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputCapacity) else {
+            throw NSError(domain: "Douvo.AudioDemo", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not allocate demo audio output buffer"])
+        }
+
+        let provider = SingleBufferAudioInputProvider(buffer: inputBuffer)
+        var error: NSError?
+        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+            provider.nextBuffer(outStatus)
+        }
+
+        if let error {
+            throw error
+        }
+        guard status != .error, outputBuffer.frameLength > 0 else {
+            throw NSError(domain: "Douvo.AudioDemo", code: 4, userInfo: [NSLocalizedDescriptionKey: "Demo audio conversion produced no samples"])
+        }
+
+        let floats = outputBuffer.floatChannelData![0]
+        let count = Int(outputBuffer.frameLength)
+        var conditioner = AudioInputConditioner()
+        return conditioner.process(UnsafeBufferPointer(start: floats, count: count))
+    }
+
+    private static func webPCMPackets(from samples: [Float]) -> [Data] {
+        var pcm = pcm16Data(from: samples)
+        let packetByteCount = webPacketSampleCount * 2
+        var packets: [Data] = []
+
+        if !pcm.isEmpty, pcm.count % packetByteCount != 0 {
+            pcm.append(Data(count: packetByteCount - (pcm.count % packetByteCount)))
+        }
+
+        var index = 0
+        while index < pcm.count {
+            let end = min(index + packetByteCount, pcm.count)
+            packets.append(pcm.subdata(in: index..<end))
+            index = end
+        }
+
+        let silence = Data(count: packetByteCount)
+        for _ in 0..<webTailSilencePacketCount {
+            packets.append(silence)
+        }
+        return packets
+    }
+
+    private static func androidOpusPackets(from samples: [Float]) throws -> [Data] {
+        var input = samples
+        if input.count % androidOpusFrameSampleCount != 0 {
+            input.append(contentsOf: repeatElement(0, count: androidOpusFrameSampleCount - (input.count % androidOpusFrameSampleCount)))
+        }
+        input.append(
+            contentsOf: repeatElement(0, count: androidOpusFrameSampleCount * androidOpusTailSilenceFrameCount)
+        )
+
+        let encoder = try OpusPacketEncoder()
+        var packets: [Data] = []
+        var index = 0
+        while index < input.count {
+            let end = min(index + androidOpusFrameSampleCount, input.count)
+            packets.append(try encoder.encode(Array(input[index..<end])))
+            index = end
+        }
+        return packets
+    }
+
+    private static func pcm16Data(from samples: [Float]) -> Data {
+        var pcm = Data(count: samples.count * 2)
+        pcm.withUnsafeMutableBytes { raw in
+            let int16 = raw.bindMemory(to: Int16.self)
+            for (index, sample) in samples.enumerated() {
+                let scaled = sample < 0 ? sample * 32768.0 : sample * 32767.0
+                int16[index] = Int16(max(-32768, min(32767, scaled)))
+            }
+        }
+        return pcm
+    }
+}
+
 private extension AudioCaptureManager.CaptureMode {
     var logName: String {
         switch self {

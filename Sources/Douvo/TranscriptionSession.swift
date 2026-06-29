@@ -1,9 +1,14 @@
 import Foundation
 
+enum TranscriptionErrorMetadata {
+    static let userInfoKey = "Douvo.TranscriptionErrorMetadata"
+}
+
 struct TranscriptionSessionError: Error, LocalizedError, Sendable {
     let domain: String
     let code: Int
     let localizedDescription: String
+    let metadata: [String: String]
 
     var errorDescription: String? {
         localizedDescription
@@ -14,6 +19,7 @@ struct TranscriptionSessionError: Error, LocalizedError, Sendable {
             domain = "Douvo.ASR"
             code = 0
             localizedDescription = "unknown"
+            metadata = [:]
             return
         }
 
@@ -21,12 +27,19 @@ struct TranscriptionSessionError: Error, LocalizedError, Sendable {
         domain = nsError.domain
         code = nsError.code
         localizedDescription = nsError.localizedDescription
+        metadata = nsError.userInfo[TranscriptionErrorMetadata.userInfoKey] as? [String: String] ?? [:]
     }
 
-    init(domain: String, code: Int, localizedDescription: String) {
+    init(
+        domain: String,
+        code: Int,
+        localizedDescription: String,
+        metadata: [String: String] = [:]
+    ) {
         self.domain = domain
         self.code = code
         self.localizedDescription = localizedDescription
+        self.metadata = metadata
     }
 }
 
@@ -120,7 +133,7 @@ actor TranscriptionSession {
         switch provider {
         case .web:
             guard let webParams, let webASRClient else {
-                throw NSError(domain: "Douvo.ASR", code: 10, userInfo: [NSLocalizedDescriptionKey: "Web ASR parameters are missing"])
+                throw NSError(domain: "Douvo.ASR", code: 10, userInfo: [NSLocalizedDescriptionKey: "Web recognition parameters are missing"])
             }
             webASRClient.connect(params: webParams)
             let audioCapture = self.audioCapture
@@ -144,7 +157,7 @@ actor TranscriptionSession {
             }
         case .android:
             guard let androidASRClient else {
-                throw NSError(domain: "Douvo.ASR", code: 11, userInfo: [NSLocalizedDescriptionKey: "Android ASR client is unavailable"])
+                throw NSError(domain: "Douvo.ASR", code: 11, userInfo: [NSLocalizedDescriptionKey: "Android recognition client is unavailable"])
             }
             let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
             androidASRClient.connect(credentials: credentials)
@@ -169,17 +182,28 @@ actor TranscriptionSession {
             }
         case .mix:
             guard let webParams, let webASRClient, let androidASRClient else {
-                throw NSError(domain: "Douvo.ASR", code: 12, userInfo: [NSLocalizedDescriptionKey: "Mix ASR clients are unavailable"])
+                throw NSError(domain: "Douvo.ASR", code: 12, userInfo: [NSLocalizedDescriptionKey: "Dual recognition clients are unavailable"])
             }
-            let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+            let androidCredentials: DoubaoAndroidCredentials?
+            do {
+                androidCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+            } catch {
+                androidCredentials = nil
+                await emit(.asrError("android", TranscriptionSessionError(error)))
+            }
             webASRClient.connect(params: webParams)
-            androidASRClient.connect(credentials: credentials)
-            let audioCapture = self.audioCapture
+            if let androidCredentials {
+                androidASRClient.connect(credentials: androidCredentials)
+            }
             let weakSelf = WeakRef(self)
+            let audioCapture = self.audioCapture
+            let captureMode: AudioCaptureManager.CaptureMode = androidCredentials == nil
+                ? .webPCM
+                : .webPCMAndAndroidOpus
             audioStartTask = Task.detached {
                 do {
                     try Task.checkCancellation()
-                    try audioCapture.startCapture(mode: .webPCMAndAndroidOpus)
+                    try audioCapture.startCapture(mode: captureMode)
                     try Task.checkCancellation()
                     await weakSelf.value?.emit(.audioStarted)
                 } catch is CancellationError {

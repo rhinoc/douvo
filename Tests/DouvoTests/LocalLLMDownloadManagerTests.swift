@@ -21,7 +21,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
 
     func testDifferentModelsCanDownloadAtTheSameTime() async throws {
         let probe = DownloadProbe()
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { model in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { model, _ in
             await probe.markStarted(model)
             try await Task.sleep(nanoseconds: 2_000_000_000)
         }
@@ -37,14 +37,14 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
         XCTAssertTrue(manager.isDownloading(.light))
         XCTAssertTrue(manager.isDownloading(.quality))
         XCTAssertEqual(manager.activeDownloadCount, 2)
-        guard case .downloading? = manager.downloadStates[.light] else {
+        guard case .downloading(_, _)? = manager.downloadStates[.light] else {
             return XCTFail("Expected light model to stay in downloading state")
         }
     }
 
     func testStartingSameModelTwiceReusesExistingDownload() async throws {
         let probe = DownloadProbe()
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { model in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { model, _ in
             await probe.markStarted(model)
             try await Task.sleep(nanoseconds: 2_000_000_000)
         }
@@ -65,7 +65,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
     func testStaleCancelledDownloadCannotClearRestartedDownload() async throws {
         let releaseFirst = ReleaseGate()
         let probe = DownloadProbe()
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { model in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { model, _ in
             await probe.markStarted(model)
             if await probe.startedCount == 1 {
                 await releaseFirst.wait()
@@ -90,7 +90,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
     }
 
     func testDownloadErrorCanBeConsumed() async throws {
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _ in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _, _ in
             throw NSError(domain: "test", code: 7)
         }
 
@@ -112,25 +112,88 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
         let manager = LocalLLMDownloadManager(
             now: { clock.value },
             validateDownloadedModel: { _ in false }
-        ) { _ in
+        ) { _, _ in
             await release.wait()
         }
 
         manager.startDownload(.light)
 
-        guard case .downloading(let startedAt)? = manager.downloadStates[.light] else {
+        guard case .downloading(let startedAt, let progress)? = manager.downloadStates[.light] else {
             return XCTFail("Expected downloading state")
         }
         XCTAssertEqual(startedAt, 10)
+        XCTAssertEqual(progress, 0)
         XCTAssertTrue(manager.isDownloading(.light))
 
         manager.cancelDownload(.light)
         await release.release()
     }
 
+    func testDownloadProgressUpdatesDownloadingState() async throws {
+        let release = ReleaseGate()
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _, progress in
+            await progress(0.25)
+            await progress(0.75)
+            await release.wait()
+        }
+        defer {
+            manager.cancelDownload(.light)
+        }
+
+        manager.startDownload(.light)
+        while true {
+            if case .downloading(_, let progress)? = manager.downloadStates[.light],
+               progress >= 0.75 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        guard case .downloading(_, let progress)? = manager.downloadStates[.light] else {
+            return XCTFail("Expected downloading state")
+        }
+        XCTAssertEqual(progress, 0.75, accuracy: 0.001)
+        await release.release()
+    }
+
+    func testDownloadProgressStallReportsFailure() async throws {
+        let clock = TestClock(10)
+        let release = ReleaseGate()
+        let manager = LocalLLMDownloadManager(
+            now: { clock.value },
+            progressStallTimeout: 0.1,
+            progressStallCheckInterval: 0.02,
+            validateDownloadedModel: { _ in false }
+        ) { _, progress in
+            await progress(0.2)
+            await release.wait()
+        }
+
+        manager.startDownload(.light)
+        while true {
+            if case .downloading(_, let progress)? = manager.downloadStates[.light],
+               progress >= 0.2 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        clock.value = 10.2
+
+        while manager.isDownloading(.light) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertNotNil(manager.downloadErrors[.light])
+        guard case .failed(let message)? = manager.downloadStates[.light] else {
+            return XCTFail("Expected stalled download to leave a persistent failed state")
+        }
+        XCTAssertTrue(message.contains("Download did not make progress"))
+        await release.release()
+    }
+
     func testAlreadyDownloadedModelDoesNotStartDownloadTask() async throws {
         let probe = DownloadProbe()
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in true }) { model in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in true }) { model, _ in
             await probe.markStarted(model)
         }
 
@@ -145,7 +208,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
     }
 
     func testDownloadThatDoesNotProduceUsableModelReportsError() async throws {
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _ in }
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _, _ in }
 
         manager.startDownload(.light)
         while manager.isDownloading(.light) {
@@ -162,7 +225,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
 
     func testRetryClearsPreviousDownloadFailure() async throws {
         let release = ReleaseGate()
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _ in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _, _ in
             await release.wait()
         }
 
@@ -176,7 +239,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
         manager.startDownload(.light)
 
         XCTAssertNil(manager.downloadFailureMessages[.light])
-        guard case .downloading? = manager.downloadStates[.light] else {
+        guard case .downloading(_, _)? = manager.downloadStates[.light] else {
             return XCTFail("Expected retry to re-enter downloading state")
         }
         manager.cancelDownload(.light)
@@ -184,12 +247,12 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
 
     func testCancelClearsDownloadState() async throws {
         let release = ReleaseGate()
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _ in
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in false }) { _, _ in
             await release.wait()
         }
 
         manager.startDownload(.light)
-        guard case .downloading? = manager.downloadStates[.light] else {
+        guard case .downloading(_, _)? = manager.downloadStates[.light] else {
             return XCTFail("Expected active download state")
         }
 
@@ -201,7 +264,7 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
 
     func testSuccessClearsDownloadStateAndFailure() async throws {
         let shouldValidate = TestFlag(false)
-        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in shouldValidate.value }) { _ in }
+        let manager = LocalLLMDownloadManager(validateDownloadedModel: { _ in shouldValidate.value }) { _, _ in }
 
         manager.startDownload(.light)
         while manager.isDownloading(.light) {

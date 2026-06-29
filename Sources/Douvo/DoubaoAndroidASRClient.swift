@@ -6,7 +6,7 @@ enum AndroidASRResponseType {
     case sessionFinished
     case recognition(ASRRecognitionResult)
     case heartbeat
-    case error(String)
+    case error(String, [String: String])
     case unknown
 }
 
@@ -26,6 +26,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     }
 
     private static let webSocketURL = URL(string: "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws")!
+    private static let webSocketHost = webSocketURL.host ?? "unknown"
     private static let aid = "401734"
     private static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
     private static let frameDurationMillis: Int64 = 20
@@ -483,7 +484,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 if !self.isExpectedClose(error) {
                     AppLog.error("Android ASR receive failed error=\(error.localizedDescription)")
                     self.logSummary(reason: "receive_failed")
-                    self.onError?(error)
+                    self.onError?(self.asrError(error, stage: "receive_failed"))
                 } else {
                     self.logSummary(reason: "receive_ended")
                 }
@@ -523,14 +524,19 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             }
         case .heartbeat:
             break
-        case .error(let message):
+        case .error(let message, let responseMetadata):
             markFailed(nil, notify: false)
             AppLog.error("Android ASR error message=\(message)")
             logSummary(reason: "server_error")
             if message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("token") {
                 onAuthError?()
             } else {
-                onError?(NSError(domain: "Douvo.AndroidASR", code: 3, userInfo: [NSLocalizedDescriptionKey: message]))
+                onError?(asrError(
+                    description: message,
+                    code: 3,
+                    stage: "server_error",
+                    responseMetadata: responseMetadata
+                ))
             }
         case .unknown:
             break
@@ -559,8 +565,68 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         finishSessionDrainMaxWork = nil
         lock.unlock()
         if notify {
-            onError?(error)
+            onError?(asrError(error, stage: "transport_failed"))
         }
+    }
+
+    private func asrError(_ error: Error?, stage: String) -> Error? {
+        guard let error else { return nil }
+        let nsError = error as NSError
+        var metadata = diagnosticMetadata(stage: stage)
+        metadata["source_domain"] = nsError.domain
+        metadata["source_code"] = String(nsError.code)
+        return NSError(
+            domain: nsError.domain,
+            code: nsError.code,
+            userInfo: [
+                NSLocalizedDescriptionKey: nsError.localizedDescription,
+                TranscriptionErrorMetadata.userInfoKey: metadata
+            ]
+        )
+    }
+
+    private func asrError(
+        description: String,
+        code: Int,
+        stage: String,
+        responseMetadata: [String: String]
+    ) -> Error {
+        var metadata = diagnosticMetadata(stage: stage)
+        for (key, value) in responseMetadata {
+            metadata[key] = value
+        }
+        return NSError(
+            domain: "Douvo.AndroidASR",
+            code: code,
+            userInfo: [
+                NSLocalizedDescriptionKey: description.isEmpty ? "Android recognition server error" : description,
+                TranscriptionErrorMetadata.userInfoKey: metadata
+            ]
+        )
+    }
+
+    private func diagnosticMetadata(stage: String) -> [String: String] {
+        lock.lock()
+        let currentState = state.rawValue
+        let currentRequestID = requestID
+        let pendingCount = pendingAudio.count
+        let queuedCount = queuedAudio.count
+        let sentFrames = frameIndex
+        let receivedCount = receivedMessageCount
+        let recognitionCount = recognitionMessageCount
+        lock.unlock()
+
+        return [
+            "android_stage": stage,
+            "android_endpoint_host": Self.webSocketHost,
+            "android_request_id": currentRequestID,
+            "android_state": currentState,
+            "android_pending_audio_count": String(pendingCount),
+            "android_queued_audio_count": String(queuedCount),
+            "android_sent_frames": String(sentFrames),
+            "android_received_messages": String(receivedCount),
+            "android_recognition_messages": String(recognitionCount)
+        ]
     }
 
     private func sendFinishSessionAfterPreFinishFinalIfNeeded() {
@@ -1003,12 +1069,15 @@ enum AndroidASRProtobuf {
         var messageType = ""
         var statusMessage = ""
         var resultJSON = ""
+        var fieldNumbers = Set<Int>()
+        var unknownFieldNumbers = Set<Int>()
         var index = data.startIndex
 
         while index < data.endIndex {
             guard let key = readVarint(data, index: &index) else { break }
             let fieldNumber = Int(key >> 3)
             let wireType = Int(key & 0x07)
+            fieldNumbers.insert(fieldNumber)
             switch (fieldNumber, wireType) {
             case (4, 2):
                 messageType = readString(data, index: &index) ?? ""
@@ -1017,9 +1086,19 @@ enum AndroidASRProtobuf {
             case (7, 2):
                 resultJSON = readString(data, index: &index) ?? ""
             default:
+                unknownFieldNumbers.insert(fieldNumber)
                 skip(wireType: wireType, data: data, index: &index)
             }
         }
+
+        let responseMetadata = [
+            "android_response_bytes": String(data.count),
+            "android_response_message_type": messageType,
+            "android_response_status_chars": String(statusMessage.count),
+            "android_response_result_json_bytes": String(resultJSON.utf8.count),
+            "android_response_fields": fieldNumbers.sorted().map(String.init).joined(separator: ","),
+            "android_response_unknown_fields": unknownFieldNumbers.sorted().map(String.init).joined(separator: ",")
+        ]
 
         switch messageType {
         case "TaskStarted":
@@ -1029,7 +1108,7 @@ enum AndroidASRProtobuf {
         case "SessionFinished":
             return AndroidASRResponse(type: .sessionFinished)
         case "TaskFailed", "SessionFailed":
-            return AndroidASRResponse(type: .error(statusMessage))
+            return AndroidASRResponse(type: .error(statusMessage, responseMetadata))
         default:
             break
         }

@@ -40,6 +40,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onRepairLogin: @escaping () -> Void,
         onCopyLogPath: @escaping () -> Void,
         onOpenLog: @escaping () -> Void,
+        onExportLogs: @escaping () -> Void,
         onCheckForUpdates: @escaping () -> Void,
         canCheckForUpdates: Bool,
         onRequestAccessibility: @escaping () -> Void,
@@ -114,6 +115,7 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onRepairLogin: onRepairLogin,
             onCopyLogPath: onCopyLogPath,
             onOpenLog: onOpenLog,
+            onExportLogs: onExportLogs,
             onCheckForUpdates: onCheckForUpdates,
             onRequestAccessibility: onRequestAccessibility,
             localLLMDownloadManager: localLLMDownloadManager
@@ -700,6 +702,7 @@ private struct SettingsPanelView: View {
     let onRepairLogin: () -> Void
     let onCopyLogPath: () -> Void
     let onOpenLog: () -> Void
+    let onExportLogs: () -> Void
     let onCheckForUpdates: () -> Void
     let onRequestAccessibility: () -> Void
     @ObservedObject var localLLMDownloadManager: LocalLLMDownloadManager
@@ -725,6 +728,8 @@ private struct SettingsPanelView: View {
     @State private var correctionDebugError: String?
     @State private var correctionDebugTraceURL: URL?
     @State private var isRunningCorrectionDebug = false
+    @State private var isRunningASRDemoDiagnostic = false
+    @State private var selectedASRDemoProvider: ASRProvider = .web
     @State private var editingRemoteModelProfile: RemoteLLMModelProfile?
     @State private var isAddingRemoteModelProfile = false
 
@@ -950,7 +955,10 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow(L10n.text(en: "Background Opacity", zh: "背景不透明度")) {
+                    settingsListRow(
+                        L10n.text(en: "Background Opacity", zh: "背景不透明度"),
+                        labelWidth: 150
+                    ) {
                         HStack(spacing: 8) {
                             Slider(
                                 value: overlaySurfaceOpacityBinding,
@@ -958,6 +966,7 @@ private struct SettingsPanelView: View {
                                 step: 0.05
                             )
                             .controlSize(.small)
+                            .frame(width: 156)
 
                             Text("\(Int((model.overlaySurfaceOpacity * 100).rounded()))%")
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -1009,7 +1018,13 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow(L10n.text(en: "Noise Gate", zh: "底噪门限")) {
+                    settingsListRow(
+                        L10n.text(en: "Ignore Noise", zh: "忽略底噪"),
+                        help: L10n.text(
+                            en: "Raises the level that counts as silence.\nHigher values hide more background noise in the waveform.",
+                            zh: "提高被视为空白的音量门槛。\n数值越高，波形里越容易忽略环境底噪。"
+                        )
+                    ) {
                         HStack(spacing: 8) {
                             Slider(
                                 value: overlayWaveformNoiseFloorBinding,
@@ -1255,7 +1270,13 @@ private struct SettingsPanelView: View {
                 settingsTitle(L10n.text(en: "Doubao", zh: "豆包"))
 
                 settingsSection {
-                    settingsListRow(L10n.text(en: "Channel", zh: "渠道")) {
+                    settingsListRow(
+                        L10n.text(en: "Recognition", zh: "识别方式"),
+                        help: L10n.text(
+                            en: "Web uses Doubao web login.\nAndroid prepares automatically.\nDual runs both and uses AI to merge the results.",
+                            zh: "Web 使用豆包网页登录。\nAndroid 会自动准备。\n双路会同时使用两路识别，并用 AI 合并结果。"
+                        )
+                    ) {
                         Picker("", selection: asrProviderBinding) {
                             ForEach(ASRProvider.allCases) { provider in
                                 Text(provider.displayName).tag(provider)
@@ -1283,7 +1304,7 @@ private struct SettingsPanelView: View {
 
                     settingsListRow(L10n.text(en: "Account", zh: "账号")) {
                         if model.selectedASRProvider == .android {
-                            Button(L10n.text(en: "Reset Android Credentials", zh: "重置 Android 凭据")) {
+                            Button(L10n.text(en: "Reset Android Login", zh: "重置 Android 登录信息")) {
                                 resetAndroidCredentials()
                             }
                             .focusable(false)
@@ -1312,7 +1333,7 @@ private struct SettingsPanelView: View {
                             }
                         } else if model.loginStatus == .loggedIn {
                             HStack(spacing: 8) {
-                                Button(L10n.text(en: "Refresh Credentials", zh: "刷新凭据"), action: onRepairLogin)
+                                Button(L10n.text(en: "Refresh Login", zh: "刷新登录"), action: onRepairLogin)
                                     .focusable(false)
 
                                 Button(L10n.text(en: "Log Out", zh: "退出登录")) {
@@ -1325,15 +1346,6 @@ private struct SettingsPanelView: View {
                             Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
                                 .focusable(false)
                         }
-                    }
-
-                    settingsDivider()
-
-                    settingsListRow(L10n.text(en: "Debug", zh: "调试")) {
-                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: copyLoginDebugInfo)
-                            .focusable(false)
-                            .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
-                            .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
                     }
                 }
             }
@@ -1381,7 +1393,14 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    correctionListRow(L10n.text(en: "Vocabularies", zh: "词库"), height: nil) {
+                    correctionListRow(
+                        L10n.text(en: "Vocabulary", zh: "词库"),
+                        help: L10n.text(
+                            en: "Add words, names, or phrases Douvo should recognize and preserve more reliably.",
+                            zh: "添加人名、术语或常用短语，帮助 Douvo 更稳定地识别和保留这些词。"
+                        ),
+                        height: nil
+                    ) {
                         vocabularyChipEditor
                     }
 
@@ -1392,7 +1411,10 @@ private struct SettingsPanelView: View {
                         labelWidth: 148,
                         contentAlignment: .trailing,
                         label: {
-                            aiRequiredLabel(L10n.text(en: "Remove Filler Words", zh: "去水词"), isEnabled: aiDependentFeaturesEnabled)
+                            aiRequiredLabel(
+                                L10n.text(en: "Remove Filler Words", zh: "去水词"),
+                                isEnabled: aiDependentFeaturesEnabled
+                            )
                         }
                     ) {
                         Toggle("", isOn: removeFillerWordsBinding)
@@ -1401,7 +1423,6 @@ private struct SettingsPanelView: View {
                             .controlSize(.small)
                             .disabled(!aiDependentFeaturesEnabled)
                             .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
-                            .help(L10n.text(en: "Remove filler words and brief hesitations while preserving meaning.", zh: "在保留语义的同时移除水词和短暂停顿。"))
                     }
 
                     settingsDivider()
@@ -1411,7 +1432,10 @@ private struct SettingsPanelView: View {
                         labelWidth: 148,
                         contentAlignment: .trailing,
                         label: {
-                            aiRequiredLabel(L10n.text(en: "Soften Emotion", zh: "弱化情绪"), isEnabled: aiDependentFeaturesEnabled)
+                            aiRequiredLabel(
+                                L10n.text(en: "Soften Emotion", zh: "弱化情绪"),
+                                isEnabled: aiDependentFeaturesEnabled
+                            )
                         }
                     ) {
                         Toggle("", isOn: softenEmotionalLanguageBinding)
@@ -1420,7 +1444,6 @@ private struct SettingsPanelView: View {
                             .controlSize(.small)
                             .disabled(!aiDependentFeaturesEnabled)
                             .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
-                            .help(L10n.text(en: "Rewrite hostile or overly emotional wording into a calmer expression without changing the core meaning.", zh: "在不改变核心含义的前提下，把攻击性或情绪化表达改得更克制。"))
                     }
 
                     settingsDivider()
@@ -1430,7 +1453,10 @@ private struct SettingsPanelView: View {
                         labelWidth: 148,
                         contentAlignment: .trailing,
                         label: {
-                            aiRequiredLabel(L10n.text(en: "Output Style", zh: "输出风格"), isEnabled: aiDependentFeaturesEnabled)
+                            aiRequiredLabel(
+                                L10n.text(en: "Output Style", zh: "输出风格"),
+                                isEnabled: aiDependentFeaturesEnabled
+                            )
                         }
                     ) {
                         Picker("", selection: outputStyleBinding) {
@@ -1453,7 +1479,10 @@ private struct SettingsPanelView: View {
                             height: nil,
                             labelWidth: 148,
                             label: {
-                                aiRequiredLabel(L10n.text(en: "Custom", zh: "自定义"), isEnabled: aiDependentFeaturesEnabled)
+                                aiRequiredLabel(
+                                    L10n.text(en: "Custom", zh: "自定义"),
+                                    isEnabled: aiDependentFeaturesEnabled
+                                )
                             }
                         ) {
                             promptTextEditor(
@@ -1472,7 +1501,10 @@ private struct SettingsPanelView: View {
                             labelWidth: 148,
                             contentAlignment: .trailing,
                             label: {
-                                aiRequiredLabel(L10n.text(en: "Style Strength", zh: "风格强度"), isEnabled: aiDependentFeaturesEnabled)
+                                aiRequiredLabel(
+                                    L10n.text(en: "Style Strength", zh: "风格强度"),
+                                    isEnabled: aiDependentFeaturesEnabled
+                                )
                             }
                         ) {
                             Picker("", selection: outputStyleStrengthBinding) {
@@ -1513,7 +1545,14 @@ private struct SettingsPanelView: View {
                         labelWidth: 160,
                         contentAlignment: .trailing,
                         label: {
-                            aiRequiredLabel(L10n.text(en: "Selection Editing", zh: "选区编辑"), isEnabled: aiDependentFeaturesEnabled)
+                            aiRequiredLabel(
+                                L10n.text(en: "Selection Editing", zh: "选区编辑"),
+                                isEnabled: aiDependentFeaturesEnabled,
+                                help: L10n.text(
+                                    en: "When text is selected, your speech becomes an edit instruction for that selection.",
+                                    zh: "存在选中文本时，把语音当作对选区的编辑指令。"
+                                )
+                            )
                         }
                     ) {
                         Toggle("", isOn: selectionEditingEnabledBinding)
@@ -1534,7 +1573,10 @@ private struct SettingsPanelView: View {
                         labelWidth: 160,
                         contentAlignment: .trailing,
                         label: {
-                            aiRequiredLabel(L10n.text(en: "Shortcut", zh: "快捷键"), isEnabled: aiDependentFeaturesEnabled)
+                            aiRequiredLabel(
+                                L10n.text(en: "Shortcut", zh: "快捷键"),
+                                isEnabled: aiDependentFeaturesEnabled
+                            )
                         }
                     ) {
                         shortcutButtons(
@@ -1582,7 +1624,10 @@ private struct SettingsPanelView: View {
                         labelWidth: 160,
                         contentAlignment: .trailing,
                         label: {
-                            aiRequiredLabel(L10n.text(en: "Target Language", zh: "目标语言"), isEnabled: aiDependentFeaturesEnabled)
+                            aiRequiredLabel(
+                                L10n.text(en: "Target Language", zh: "目标语言"),
+                                isEnabled: aiDependentFeaturesEnabled
+                            )
                         }
                     ) {
                         languageMenuPicker(
@@ -1604,20 +1649,29 @@ private struct SettingsPanelView: View {
                 settingsTitle(L10n.text(en: "Status", zh: "状态"))
 
                 settingsSection {
-                    correctionListRow(L10n.text(en: "Enable", zh: "启用"), contentAlignment: .trailing) {
+                    correctionListRow(
+                        L10n.text(en: "Enable", zh: "启用"),
+                        contentAlignment: .trailing
+                    ) {
                         Toggle("", isOn: localPostProcessingBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
                             .disabled(!model.canEnablePostProcessing)
-                            .help(L10n.text(en: "Use AI after transcription for correction, rewriting, translation, and custom actions.", zh: "转写后使用 AI 进行纠错、改写、翻译和自定义操作。"))
                     }
                 }
 
                 settingsTitle(L10n.text(en: "Model", zh: "模型"))
 
                 settingsSection {
-                    correctionListRow(L10n.text(en: "Backend", zh: "后端"), contentAlignment: .trailing) {
+                    correctionListRow(
+                        L10n.text(en: "Run Mode", zh: "运行方式"),
+                        help: L10n.text(
+                            en: "Local runs a model on this Mac.\nRemote sends text to the provider you configure.",
+                            zh: "本地：在这台 Mac 上运行模型。\n远端：把文本发送到你配置的服务商。"
+                        ),
+                        contentAlignment: .trailing
+                    ) {
                         Picker("", selection: correctionBackendBinding) {
                             ForEach(CorrectionBackend.allCases) { backend in
                                 Text(backend.displayName).tag(backend)
@@ -1641,27 +1695,39 @@ private struct SettingsPanelView: View {
                 settingsTitle(L10n.text(en: "Context", zh: "上下文"))
 
                 settingsSection {
-                    correctionListRow(L10n.text(en: "Current Time", zh: "当前时间"), contentAlignment: .trailing) {
+                    correctionListRow(
+                        L10n.text(en: "Current Time", zh: "当前时间"),
+                        contentAlignment: .trailing
+                    ) {
                         Toggle("", isOn: includeCurrentTimeContextBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
-                            .help(L10n.text(en: "Send current local time, weekday, and timezone to AI.", zh: "把当前本地时间、星期和时区传给 AI。"))
                     }
 
                     settingsDivider()
 
-                    correctionListRow(L10n.text(en: "Frontmost App", zh: "前台应用"), contentAlignment: .trailing) {
+                    correctionListRow(
+                        L10n.text(en: "Frontmost App", zh: "前台应用"),
+                        contentAlignment: .trailing
+                    ) {
                         Toggle("", isOn: includeFrontmostAppContextBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.small)
-                            .help(L10n.text(en: "Send the frontmost app name to AI for context.", zh: "把前台应用名称作为上下文传给 AI。"))
                     }
 
                     settingsDivider()
 
-                    correctionListRow(L10n.text(en: "Window Title", zh: "窗口标题"), contentAlignment: .trailing) {
+                    correctionListRow(
+                        L10n.text(en: "Window Title", zh: "窗口标题"),
+                        help: L10n.text(
+                            en: "May include document, page, chat, or project names.\nTurn it off if that context is sensitive.",
+                            zh: "可能包含文档、网页、聊天或项目名称。\n如果这些上下文敏感，可以关闭。"
+                        ),
+                        labelWidth: 120,
+                        contentAlignment: .trailing
+                    ) {
                         Toggle("", isOn: includeWindowTitleContextBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
@@ -1672,13 +1738,20 @@ private struct SettingsPanelView: View {
 
                 }
 
-                settingsDocumentationTitle(L10n.text(en: "Advanced", zh: "高级"))
+                settingsTitle(L10n.text(en: "Advanced", zh: "高级"))
 
                 settingsSection {
                     correctionListRow(
                         height: nil,
                         label: {
-                            correctionRowLabel(L10n.text(en: "User Identity", zh: "用户身份"))
+                            correctionRowLabel(
+                                L10n.text(en: "User Identity", zh: "用户身份"),
+                                help: L10n.text(
+                                    en: "Long-term context about you, your domain, terminology, or writing preferences.",
+                                    zh: "长期使用的个人背景、领域、术语偏好或写作习惯。"
+                                ),
+                                helpLink: Self.advancedPromptDocumentationLink(anchor: "user-identity")
+                            )
                         }
                     ) {
                         promptTextEditor(
@@ -1693,7 +1766,14 @@ private struct SettingsPanelView: View {
                     correctionListRow(
                         height: nil,
                         label: {
-                            correctionRowLabel(L10n.text(en: "Add-on Prompt", zh: "增量提示词"))
+                            correctionRowLabel(
+                                L10n.text(en: "Extra Rules", zh: "补充规则"),
+                                help: L10n.text(
+                                    en: "Adds a small rule block after the built-in system prompt without replacing it.",
+                                    zh: "在内置系统提示词后追加一小段规则，不会替换内置提示词。"
+                                ),
+                                helpLink: Self.advancedPromptDocumentationLink(anchor: "extra-rules")
+                            )
                         }
                     ) {
                         promptTextEditor(
@@ -1707,13 +1787,22 @@ private struct SettingsPanelView: View {
 
                     correctionListRow(
                         height: nil,
+                        labelWidth: 120,
                         label: {
-                            correctionRowLabel(L10n.text(en: "System Prompt", zh: "系统提示词"))
+                            correctionRowLabel(
+                                L10n.text(en: "System Prompt", zh: "系统提示词"),
+                                help: L10n.text(
+                                    en: "Advanced override for the full AI behavior instructions. Leave blank to use Douvo's built-in prompt.",
+                                    zh: "高级设置：覆盖完整 AI 行为指令。留空则使用 Douvo 内置提示词。"
+                                ),
+                                helpLink: Self.advancedPromptDocumentationLink(anchor: "system-prompt")
+                            )
                         }
                     ) {
                         promptTextEditor(
                             text: localSystemPromptBinding,
                             height: $systemPromptEditorHeight,
+                            width: Self.correctionRowContentWidth(labelWidth: 120),
                             placeholder: L10n.text(en: "Use the built-in system prompt", zh: "使用内置系统提示词")
                         )
                     }
@@ -1722,14 +1811,23 @@ private struct SettingsPanelView: View {
 
                     correctionListRow(
                         height: nil,
+                        labelWidth: 120,
                         label: {
-                            correctionRowLabel(L10n.text(en: "User Message", zh: "用户消息"))
+                            correctionRowLabel(
+                                L10n.text(en: "User Message", zh: "用户消息"),
+                                help: L10n.text(
+                                    en: "Wraps the recognized text before sending it to AI.",
+                                    zh: "发送给 AI 前，用来包装识别文本。"
+                                ),
+                                helpLink: Self.advancedPromptDocumentationLink(anchor: "user-message-template")
+                            )
                         }
                     ) {
                         promptTextEditor(
                             text: localUserPromptTemplateBinding,
                             height: $userMessageEditorHeight,
-                            placeholder: L10n.text(en: "Use the built-in user message template", zh: "使用内置用户消息模板")
+                            width: Self.correctionRowContentWidth(labelWidth: 120),
+                            placeholder: L10n.text(en: "Use the built-in user message", zh: "使用内置用户消息")
                         )
                     }
                 }
@@ -1785,8 +1883,8 @@ private struct SettingsPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(L10n.text(en: "Use \(localModel.displayName) for final processing", zh: "使用 \(localModel.displayName) 进行最终处理"))
 
-            if case .downloading = downloadState {
-                downloadingModelAccessory(localModel)
+            if case .downloading(_, let progress) = downloadState {
+                downloadingModelAccessory(localModel, progress: progress)
             } else if case .failed(let message) = downloadState {
                 failedDownloadAccessory(localModel, message: message)
             } else if isDeleting {
@@ -1801,7 +1899,7 @@ private struct SettingsPanelView: View {
                     localLLMDownloadManager.startDownload(localModel)
                 } label: {
                     Image(systemName: "icloud.and.arrow.down")
-                        .font(.system(size: 18, weight: .regular))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.accentColor)
                         .frame(width: 28, height: 28)
                 }
@@ -1864,9 +1962,6 @@ private struct SettingsPanelView: View {
     private func localModelSubtitleText(_ localModel: LocalLLMModel, downloadState: LocalLLMDownloadState?) -> String {
         if case .failed = downloadState {
             return L10n.text(en: "Download failed · Click retry", zh: "下载失败 · 点击重试")
-        }
-        if case .downloading = downloadState {
-            return L10n.text(en: "Downloading", zh: "下载中")
         }
         return "\(localModelDetailText(localModel)) · \(localModelDownloadSizeText(localModel))"
     }
@@ -1944,7 +2039,14 @@ private struct SettingsPanelView: View {
 
             settingsDivider()
 
-            correctionListRow(L10n.text(en: "Provider", zh: "服务商"), contentAlignment: .trailing) {
+            correctionListRow(
+                L10n.text(en: "Provider", zh: "服务商"),
+                help: L10n.text(
+                    en: "Choose a preset provider.\nUse Custom if your endpoint is OpenAI-compatible.",
+                    zh: "选择预设服务商。\n如果你的接口兼容 OpenAI 格式，可以选自定义。"
+                ),
+                contentAlignment: .trailing
+            ) {
                 Picker("", selection: remoteLLMProviderBinding) {
                     ForEach(RemoteLLMProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
@@ -1958,7 +2060,13 @@ private struct SettingsPanelView: View {
 
             settingsDivider()
 
-            correctionListRow("Base URL") {
+            correctionListRow(
+                L10n.text(en: "API URL", zh: "接口地址"),
+                help: L10n.text(
+                    en: "The base endpoint for chat completions, usually ending in /v1.",
+                    zh: "聊天补全接口的基础地址，通常以 /v1 结尾。"
+                )
+            ) {
                 TextField("https://api.example.com/v1", text: remoteLLMBaseURLBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
@@ -1967,7 +2075,13 @@ private struct SettingsPanelView: View {
 
             settingsDivider()
 
-            correctionListRow(L10n.text(en: "Model", zh: "模型")) {
+            correctionListRow(
+                L10n.text(en: "Model ID", zh: "模型 ID"),
+                help: L10n.text(
+                    en: "The provider's model identifier, such as gpt-4o or deepseek-chat.",
+                    zh: "服务商提供的模型标识，例如 gpt-4o 或 deepseek-chat。"
+                )
+            ) {
                 TextField("model-id", text: remoteLLMModelBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
@@ -1976,7 +2090,13 @@ private struct SettingsPanelView: View {
 
             settingsDivider()
 
-            correctionListRow("API Key") {
+            correctionListRow(
+                L10n.text(en: "API Key", zh: "API 密钥"),
+                help: L10n.text(
+                    en: "Stored in Keychain.\nPaste a new key only when adding or replacing it.",
+                    zh: "会保存在钥匙串中。\n只有添加或替换密钥时才需要粘贴。"
+                )
+            ) {
                 SecureCredentialField(text: remoteLLMAPIKeyBinding, placeholder: L10n.text(en: "Paste key to replace saved key", zh: "粘贴新 key 以替换已保存的 key"))
                     .frame(width: Self.correctionContentWidth)
             }
@@ -2676,13 +2796,14 @@ private struct SettingsPanelView: View {
     private func promptTextEditor(
         text: Binding<String>,
         height: Binding<CGFloat>,
+        width: CGFloat = Self.correctionContentWidth,
         placeholder: String = ""
     ) -> some View {
         ResizablePromptTextEditor(
             text: text,
             height: height,
             isResizing: $isResizingPromptEditor,
-            width: Self.correctionContentWidth,
+            width: width,
             placeholder: placeholder
         )
     }
@@ -3041,13 +3162,10 @@ private struct SettingsPanelView: View {
         .frame(width: Self.localModelDownloadAccessoryWidth, alignment: .trailing)
     }
 
-    private func downloadingModelAccessory(_ selectedModel: LocalLLMModel) -> some View {
+    private func downloadingModelAccessory(_ selectedModel: LocalLLMModel, progress: Double) -> some View {
         HStack(spacing: 2) {
-            ProgressView()
-                .progressViewStyle(.circular)
-                .controlSize(.small)
+            CircularDownloadProgress(progress: progress)
                 .frame(width: 28, height: 28)
-                .frame(width: 28, alignment: .leading)
 
             Button {
                 localLLMDownloadManager.cancelDownload(selectedModel)
@@ -3287,11 +3405,55 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow(L10n.text(en: "MLX Runtime", zh: "MLX 运行时"), height: 44) {
+                    settingsListRow(
+                        L10n.text(en: "MLX Runtime", zh: "MLX 运行时"),
+                        help: L10n.text(
+                            en: "Checks whether the local AI runtime needed for on-device models is available.",
+                            zh: "检查运行本地 AI 模型所需的本机推理运行时是否可用。"
+                        ),
+                        height: 44
+                    ) {
                         statusText(
                             model.mlxRuntimeDiagnostic.message,
                             isHealthy: model.mlxRuntimeDiagnostic.isAvailable
                         )
+                    }
+
+                    settingsDivider()
+
+                    settingsListRow(
+                        L10n.text(en: "Recognition", zh: "语音识别"),
+                        help: L10n.text(
+                            en: "Sends the bundled demo clip through one recognition route.",
+                            zh: "把内置示例音频通过单个识别渠道发送测试。"
+                        ),
+                        height: 44
+                    ) {
+                        HStack(spacing: 8) {
+                            Picker("", selection: $selectedASRDemoProvider) {
+                                Text("Web").tag(ASRProvider.web)
+                                Text("Android").tag(ASRProvider.android)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 148)
+                            .labelsHidden()
+                            .disabled(isRunningASRDemoDiagnostic)
+
+                            Button {
+                                runASRDemoDiagnostic()
+                            } label: {
+                                Text(
+                                    isRunningASRDemoDiagnostic
+                                        ? L10n.text(en: "Testing...", zh: "测试中...")
+                                        : L10n.text(en: "Test", zh: "测试")
+                                )
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .frame(width: 78)
+                            }
+                            .focusable(false)
+                            .disabled(isRunningASRDemoDiagnostic || (selectedASRDemoProvider == .web && model.loginStatus != .loggedIn))
+                        }
                     }
 
                     settingsDivider()
@@ -3301,6 +3463,9 @@ private struct SettingsPanelView: View {
                             Button(L10n.text(en: "Open Log", zh: "打开日志"), action: onOpenLog)
                                 .focusable(false)
 
+                            Button(L10n.text(en: "Export Logs", zh: "导出日志"), action: onExportLogs)
+                                .focusable(false)
+
                             Button(L10n.text(en: "Copy Log Path", zh: "复制日志路径"), action: copyLogPath)
                                 .focusable(false)
                         }
@@ -3308,11 +3473,13 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow(L10n.text(en: "Account", zh: "账号"), height: 44) {
-                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: copyLoginDebugInfo)
+                    settingsListRow(
+                        L10n.text(en: "Account", zh: "账号"),
+                        height: 44
+                    ) {
+                        Button(L10n.text(en: "Copy Login Diagnostics", zh: "复制登录诊断信息"), action: copyLoginDebugInfo)
                             .focusable(false)
                             .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
-                            .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
                     }
                 }
 
@@ -3325,6 +3492,36 @@ private struct SettingsPanelView: View {
                 }
 
                 correctionDebugSection
+            }
+        }
+    }
+
+    private func runASRDemoDiagnostic() {
+        guard !isRunningASRDemoDiagnostic else { return }
+        dismissSettingsToast()
+        isRunningASRDemoDiagnostic = true
+        let provider = selectedASRDemoProvider
+
+        Task {
+            do {
+                let result = try await ASRDemoDiagnosticRunner.run(provider: provider)
+                await MainActor.run {
+                    isRunningASRDemoDiagnostic = false
+                    presentSettingsToast(
+                        result.isHealthy
+                            ? L10n.text(en: "Recognition demo passed.", zh: "语音识别示例测试通过。")
+                            : L10n.text(en: "Recognition demo failed.", zh: "语音识别示例测试失败。"),
+                        kind: result.isHealthy ? .success : .error
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    isRunningASRDemoDiagnostic = false
+                    presentSettingsToast(
+                        L10n.text(en: "Recognition demo failed: \(error.localizedDescription)", zh: "语音识别示例测试失败：\(error.localizedDescription)"),
+                        kind: .error
+                    )
+                }
             }
         }
     }
@@ -3530,11 +3727,19 @@ private struct SettingsPanelView: View {
     }
 
     private static let repositoryURL = URL(string: "https://github.com/rhinoc/douvo")!
-    private static var promptDocumentationURL: URL {
-        URL(string: L10n.text(
+    private static func advancedPromptDocumentationURL(anchor: String) -> URL {
+        let baseURL = L10n.text(
             en: "https://github.com/rhinoc/douvo/blob/main/docs/advanced-prompts.md",
             zh: "https://github.com/rhinoc/douvo/blob/main/docs/advanced-prompts.zh.md"
-        ))!
+        )
+        return URL(string: "\(baseURL)#\(anchor)")!
+    }
+
+    private static func advancedPromptDocumentationLink(anchor: String) -> QuickTooltipLink {
+        QuickTooltipLink(
+            title: L10n.text(en: "Open docs", zh: "查看文档"),
+            url: advancedPromptDocumentationURL(anchor: anchor)
+        )
     }
 
     private func statusText(_ text: String, isHealthy: Bool) -> some View {
@@ -3549,7 +3754,7 @@ private struct SettingsPanelView: View {
         .foregroundColor(isHealthy ? .green : .orange)
     }
 
-    private func aiRequiredLabel(_ title: String, isEnabled: Bool) -> some View {
+    private func aiRequiredLabel(_ title: String, isEnabled: Bool, help: String? = nil) -> some View {
         HStack(spacing: 5) {
             Text(title)
                 .lineLimit(1)
@@ -3558,15 +3763,16 @@ private struct SettingsPanelView: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.secondary)
                 .frame(width: 14, height: 14)
-                .overlay {
-                    TooltipArea(text: L10n.text(en: "Requires AI to take effect.", zh: "需要启用 AI 才会生效。"))
-                }
+                .quickTooltip(L10n.text(en: "Requires AI to take effect.", zh: "需要启用 AI 才会生效。"))
+
+            if let help {
+                QuickInfoIcon(text: help)
+            }
         }
         .font(.system(size: 13, weight: .medium))
         .foregroundColor(isEnabled ? .primary : .secondary)
         .opacity(isEnabled ? 1 : Self.disabledFeatureOpacity)
         .contentShape(Rectangle())
-        .help(L10n.text(en: "Requires AI to take effect.", zh: "需要启用 AI 才会生效。"))
     }
 
     private static var aboutIconImage: NSImage {
@@ -3625,24 +3831,6 @@ private struct SettingsPanelView: View {
             .foregroundColor(.secondary)
     }
 
-    private func settingsDocumentationTitle(_ title: String) -> some View {
-        HStack(spacing: 5) {
-            Text(title)
-
-            Link(destination: Self.promptDocumentationURL) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .frame(width: 14, height: 14)
-            }
-            .buttonStyle(.plain)
-            .focusable(false)
-            .help(L10n.text(en: "Open prompt documentation on GitHub", zh: "打开 GitHub 上的提示词说明文档"))
-        }
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundColor(.secondary)
-    }
-
     private func settingsRow<Content: View>(
         _ label: String,
         @ViewBuilder content: () -> Content
@@ -3685,19 +3873,22 @@ private struct SettingsPanelView: View {
 
     private func settingsListRow<Content: View>(
         _ title: String,
+        help: String? = nil,
         height: CGFloat? = 48,
+        labelWidth: CGFloat? = nil,
         contentAlignment: Alignment = .trailing,
         @ViewBuilder trailing: () -> Content
     ) -> some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.primary)
-                .lineLimit(1)
-                .frame(width: Self.settingsRowLabelWidth, alignment: .leading)
+        let resolvedLabelWidth = labelWidth ?? Self.settingsRowLabelWidth
+
+        return HStack(spacing: 12) {
+            settingsRowLabel(title, help: help)
+                .frame(width: resolvedLabelWidth, alignment: .leading)
+                .zIndex(2)
 
             trailing()
-                .frame(width: Self.settingsRowContentWidth, alignment: contentAlignment)
+                .frame(width: Self.settingsRowContentWidth(labelWidth: resolvedLabelWidth), alignment: contentAlignment)
+                .zIndex(0)
         }
         .padding(.horizontal, 14)
         .frame(height: height)
@@ -3706,6 +3897,7 @@ private struct SettingsPanelView: View {
 
     private func correctionListRow<Content: View>(
         _ title: String,
+        help: String? = nil,
         height: CGFloat? = 48,
         labelWidth: CGFloat = Self.correctionLabelWidth,
         contentAlignment: Alignment = .leading,
@@ -3716,20 +3908,40 @@ private struct SettingsPanelView: View {
             labelWidth: labelWidth,
             contentAlignment: contentAlignment,
             label: {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
+                correctionRowLabel(title, help: help)
             },
             trailing: trailing
         )
     }
 
-    private func correctionRowLabel(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundColor(.primary)
-            .lineLimit(1)
+    private func settingsRowLabel(_ title: String, help: String? = nil) -> some View {
+        HStack(spacing: 5) {
+            Text(title)
+                .lineLimit(1)
+
+            if let help {
+                QuickInfoIcon(text: help)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundColor(.primary)
+    }
+
+    private func correctionRowLabel(_ title: String, help: String? = nil, helpLink: QuickTooltipLink? = nil) -> some View {
+        HStack(spacing: 5) {
+            Text(title)
+                .lineLimit(1)
+
+            if let help {
+                QuickInfoIcon(text: help, link: helpLink)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundColor(.primary)
     }
 
     private func correctionListRow<Label: View, Content: View>(
@@ -3748,9 +3960,11 @@ private struct SettingsPanelView: View {
             label()
                 .frame(width: labelWidth, alignment: .leading)
                 .padding(.top, labelTopPadding)
+                .zIndex(2)
 
             trailing()
                 .frame(width: contentWidth, alignment: contentAlignment)
+                .zIndex(0)
         }
         .padding(.horizontal, 14)
         .frame(height: height)
@@ -3802,6 +4016,10 @@ private struct SettingsPanelView: View {
     private static let localModelActivityAccessoryWidth: CGFloat = 110
     private static let localModelProgressTextWidth: CGFloat = 68
     private static let disabledFeatureOpacity: CGFloat = 0.45
+
+    private static func settingsRowContentWidth(labelWidth: CGFloat) -> CGFloat {
+        settingsGroupWidth - 28 - 12 - labelWidth
+    }
 
     private static func correctionRowContentWidth(labelWidth: CGFloat) -> CGFloat {
         settingsGroupWidth - 28 - 12 - labelWidth
@@ -3928,17 +4146,185 @@ private final class FocusableSecureTextField: NSSecureTextField {
     }
 }
 
-private struct TooltipArea: NSViewRepresentable {
-    let text: String
+private struct CircularDownloadProgress: View {
+    let progress: Double
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.toolTip = text
-        return view
+    private var clampedProgress: CGFloat {
+        CGFloat(max(0, min(1, progress)))
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.toolTip = text
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 1.75)
+
+            Circle()
+                .trim(from: 0, to: clampedProgress)
+                .stroke(
+                    Color.accentColor,
+                    style: StrokeStyle(lineWidth: 1.75, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityLabel(L10n.text(en: "Download progress", zh: "下载进度"))
+    }
+}
+
+private struct QuickTooltipLink {
+    let title: String
+    let url: URL
+}
+
+private struct QuickInfoIcon: View {
+    let text: String
+    let link: QuickTooltipLink?
+
+    init(text: String, link: QuickTooltipLink? = nil) {
+        self.text = text
+        self.link = link
+    }
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.secondary)
+            .frame(width: 14, height: 14)
+            .quickTooltip(text, link: link)
+            .accessibilityLabel(L10n.text(en: "Info", zh: "说明"))
+    }
+}
+
+private struct QuickTooltipModifier: ViewModifier {
+    let text: String
+    let link: QuickTooltipLink?
+    @State private var isHovering = false
+    @State private var isHoveringTooltip = false
+    @State private var isPresented = false
+
+    private var textWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: Self.fontSize)
+        let lines = text
+            .components(separatedBy: .newlines)
+            + [link?.title].compactMap { $0 }
+        let naturalWidth = lines.map {
+            ($0 as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+        }
+            .max() ?? Self.minimumTextWidth
+        return min(max(naturalWidth, Self.minimumTextWidth), Self.maximumTextWidth)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .overlay(alignment: .topLeading) {
+                if isPresented {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(text)
+                            .font(.system(size: Self.fontSize))
+                            .foregroundColor(.primary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: textWidth, alignment: .leading)
+
+                        if let link {
+                            Button {
+                                NSWorkspace.shared.open(link.url)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(link.title)
+
+                                    Image(systemName: "arrow.up.right")
+                                        .font(.system(size: 9, weight: .semibold))
+                                }
+                                .font(.system(size: Self.fontSize, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.accentColor)
+                            .focusable(false)
+                            .contentShape(Rectangle())
+                            .pointingHandCursor()
+                        }
+                    }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.16), radius: 10, y: 5)
+                        .offset(x: 16, y: -8)
+                        .zIndex(100)
+                        .transition(.opacity)
+                        .onHover { hovering in
+                            isHoveringTooltip = hovering
+                            if !hovering {
+                                scheduleDismiss()
+                            }
+                        }
+                }
+            }
+            .zIndex(isPresented ? 100 : 0)
+            .onHover { hovering in
+                isHovering = hovering
+                if hovering {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        guard isHovering else { return }
+                        withAnimation(.easeOut(duration: 0.08)) {
+                            isPresented = true
+                        }
+                    }
+                } else {
+                    scheduleDismiss()
+                }
+            }
+    }
+
+    private func scheduleDismiss() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard !isHovering, !isHoveringTooltip else { return }
+            withAnimation(.easeOut(duration: 0.06)) {
+                isPresented = false
+            }
+        }
+    }
+
+    private static let fontSize: CGFloat = 11
+    private static let minimumTextWidth: CGFloat = 96
+    private static let maximumTextWidth: CGFloat = 260
+}
+
+private extension View {
+    func quickTooltip(_ text: String, link: QuickTooltipLink? = nil) -> some View {
+        modifier(QuickTooltipModifier(text: text, link: link))
+    }
+
+    func pointingHandCursor() -> some View {
+        modifier(PointingHandCursorModifier())
+    }
+}
+
+private struct PointingHandCursorModifier: ViewModifier {
+    @State private var isPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if hovering, !isPushed {
+                    NSCursor.pointingHand.push()
+                    isPushed = true
+                } else if !hovering, isPushed {
+                    NSCursor.pop()
+                    isPushed = false
+                }
+            }
+            .onDisappear {
+                if isPushed {
+                    NSCursor.pop()
+                    isPushed = false
+                }
+            }
     }
 }
 

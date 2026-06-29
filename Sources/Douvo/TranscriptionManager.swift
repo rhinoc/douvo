@@ -34,6 +34,13 @@ final class TranscriptionManager {
         L10n.text(en: "Speech recognition did not connect. Please try again.", zh: "语音识别连接失败，请重试")
     }
 
+    private static var speechRecognitionServiceTimeoutMessage: String {
+        L10n.text(
+            en: "Speech recognition timed out. Try a shorter recording or switch to Android.",
+            zh: "语音识别服务处理超时，请缩短录音或切换到 Android。"
+        )
+    }
+
     private static var focusTextInputCopiedMessage: String {
         L10n.text(en: "No text field found. Copied to clipboard.", zh: "未找到输入框，已复制到剪贴板")
     }
@@ -63,6 +70,7 @@ final class TranscriptionManager {
     private var latestProviderTranscripts: [String: String] = [:]
     private var activeASRProviders = Set<String>()
     private var openedASRProviders = Set<String>()
+    private var failedASRProviders = Set<String>()
     private var audioReady = false
     private var finishedASRProviders = Set<String>()
     private var selectionEditTarget: String?
@@ -169,6 +177,10 @@ final class TranscriptionManager {
 
     private func handleASROpen(provider: String) {
         guard appState.recordingState == .starting || appState.recordingState == .recording else { return }
+        guard activeASRProviders.contains(provider) || !failedASRProviders.contains(provider) else {
+            AppLog.info("Dropped late ASR open from failed provider=\(provider)")
+            return
+        }
         openedASRProviders.insert(provider)
         transcriptionTrace?.event("asr.opened", metadata: ["asr_provider": provider])
         if hasUsableASRConnection {
@@ -217,6 +229,10 @@ final class TranscriptionManager {
     }
 
     private func handleASRResult(_ result: ASRRecognitionResult) {
+        guard activeASRProviders.contains(result.provider) || !failedASRProviders.contains(result.provider) else {
+            AppLog.info("Dropped late ASR result from failed provider=\(result.provider) chars=\(result.text.count)")
+            return
+        }
         let text = result.text
         asrResultCount += 1
         transcriptionTrace?.set("asr_result_count", asrResultCount)
@@ -279,6 +295,10 @@ final class TranscriptionManager {
     }
 
     private func handleASRFinish(provider: String) {
+        guard activeASRProviders.contains(provider) || !failedASRProviders.contains(provider) else {
+            AppLog.info("Dropped late ASR finish from failed provider=\(provider)")
+            return
+        }
         finishedASRProviders.insert(provider)
         transcriptionTrace?.event("asr.finish_event", metadata: [
             "asr_provider": provider,
@@ -300,6 +320,15 @@ final class TranscriptionManager {
 
     private func handleASRError(_ error: TranscriptionSessionError?, provider: String) {
         guard appState.recordingState != .idle, !isHandlingConnectionError else { return }
+        guard activeASRProviders.contains(provider) || !failedASRProviders.contains(provider) else {
+            AppLog.info("Dropped repeated ASR error from failed provider=\(provider) error=\(error?.localizedDescription ?? "unknown")")
+            return
+        }
+        let willContinue = canContinueAfterASRProviderFailure(provider: provider)
+        writeASRErrorDiagnostic(provider: provider, error: error, reason: "asr_error", willContinue: willContinue)
+        if shouldContinueAfterASRProviderFailure(provider: provider, error: error) {
+            return
+        }
         isHandlingConnectionError = true
         transcriptionTrace?.event("asr.connection_error", metadata: [
             "asr_provider": provider,
@@ -318,7 +347,7 @@ final class TranscriptionManager {
         } else if Self.isBenignDisconnect(error) {
             completeWithoutRecognizedText()
         } else {
-            appState.errorMessage = L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
+            appState.errorMessage = Self.userFacingASRErrorMessage(error)
             logASRResultSummary(reason: "connection_error")
             finishCurrentTrace(outcome: "failed", metadata: [
                 "reason": "asr_connection_error",
@@ -330,6 +359,17 @@ final class TranscriptionManager {
 
     private func handleASRAuthError(provider: String) {
         AppLog.error("ASR auth error provider=\(provider)")
+        let willContinue = canContinueAfterASRProviderFailure(provider: provider)
+        let error = TranscriptionSessionError(
+            domain: "Douvo.ASRAuth",
+            code: 1,
+            localizedDescription: "ASR authentication failed"
+        )
+        writeASRErrorDiagnostic(provider: provider, error: error, reason: "asr_auth_error", willContinue: willContinue)
+        if shouldContinueAfterASRProviderFailure(provider: provider, error: error) {
+            clearASRAuthState(provider: provider)
+            return
+        }
         handleAuthFailure(provider: provider)
     }
 
@@ -360,7 +400,7 @@ final class TranscriptionManager {
             }
             guard LocalLLMPostProcessor.isCorrectionEnabled else {
                 AppLog.info("Translation request ignored: AI Correction disabled")
-                appState.errorMessage = L10n.text(en: "Translation requires AI Correction.", zh: "翻译需要先开启 AI Correction")
+                appState.errorMessage = L10n.text(en: "Translation requires AI.", zh: "翻译需要先开启 AI")
                 transcriptionTrace?.event("translation.request_ignored", metadata: ["reason": "ai_correction_disabled"])
                 return
             }
@@ -427,6 +467,7 @@ final class TranscriptionManager {
         latestProviderTranscripts.removeAll()
         activeASRProviders = provider.activeProviderKeys
         openedASRProviders.removeAll()
+        failedASRProviders.removeAll()
         audioReady = false
         finishedASRProviders.removeAll()
         isHandlingConnectionError = false
@@ -472,8 +513,8 @@ final class TranscriptionManager {
 
         var webParams: DoubaoASRParams?
         if provider == .mix, !LocalLLMPostProcessor.isCorrectionEnabled {
-            AppLog.error("Start blocked: Mix ASR requires AI Correction")
-            appState.errorMessage = L10n.text(en: "Mix ASR requires AI Correction.", zh: "Mix ASR 需要先开启 AI Correction")
+            AppLog.error("Start blocked: Dual ASR requires AI Correction")
+            appState.errorMessage = L10n.text(en: "Dual recognition requires AI.", zh: "双路识别需要先开启 AI")
             finishCurrentTrace(outcome: "blocked", metadata: ["reason": "mix_requires_ai_correction"])
             resetToIdle(after: 1.8)
             return
@@ -925,21 +966,13 @@ final class TranscriptionManager {
     private func handleAuthFailure(provider failedProvider: String) {
         AppLog.error("Handling auth failure; clearing ASR params provider=\(failedProvider)")
         transcriptionTrace?.event("asr.auth_failure", metadata: ["asr_provider": failedProvider])
-        switch failedProvider {
-        case "web":
-            ASRParamsStore.clear()
-            appState.loginStatus = .notLoggedIn
-        case "android":
-            DoubaoAndroidCredentialStore.clear()
-        default:
-            break
-        }
+        clearASRAuthState(provider: failedProvider)
         usingCachedParams = false
         cancelActiveSession()
         appState.transcript = ""
         appState.errorMessage = failedProvider == "web"
             ? Self.authExpiredMessage
-            : L10n.text(en: "Android ASR credentials expired and will be recreated on the next recording.", zh: "Android ASR 凭据失效，将在下次录音时重新创建")
+            : L10n.text(en: "Android recognition login expired and will be recreated on the next recording.", zh: "Android 识别登录信息失效，将在下次录音时重新创建")
         logASRResultSummary(reason: "auth_failure")
         finishCurrentTrace(outcome: "failed", metadata: ["reason": "auth_expired"])
         resetToIdle(after: 1.5)
@@ -1092,6 +1125,12 @@ final class TranscriptionManager {
             reason = "asr_connect_timeout"
         }
 
+        let error = TranscriptionSessionError(
+            domain: "Douvo.ASR",
+            code: 1002,
+            localizedDescription: reason
+        )
+        writeASRErrorDiagnostic(provider: "session", error: error, reason: reason, willContinue: false)
         awaitingFinalResult = false
         cancelFinalTimers()
         cancelActiveSession()
@@ -1099,6 +1138,98 @@ final class TranscriptionManager {
         appState.resetAudioLevels()
         finishCurrentTrace(outcome: "failed", metadata: ["reason": reason])
         resetToIdle(after: 2)
+    }
+
+    private func shouldContinueAfterASRProviderFailure(provider: String, error: TranscriptionSessionError?) -> Bool {
+        guard canContinueAfterASRProviderFailure(provider: provider) else { return false }
+        let remainingProviders = activeASRProviders.subtracting([provider])
+
+        failedASRProviders.insert(provider)
+        activeASRProviders.remove(provider)
+        finishedASRProviders.remove(provider)
+        openedASRProviders.remove(provider)
+        transcriptionTrace?.event("asr.provider_failed_continuing", metadata: [
+            "asr_provider": provider,
+            "remaining_providers": remainingProviders.sorted().joined(separator: ","),
+            "error": error?.localizedDescription ?? "unknown"
+        ])
+        AppLog.error("ASR provider failed; continuing with remaining providers failed=\(provider) remaining=\(remainingProviders.sorted().joined(separator: ",")) error=\(error?.localizedDescription ?? "unknown")")
+
+        if !hasUsableASRConnection, let activeSessionID {
+            scheduleStartTimeout(sessionID: activeSessionID)
+        } else if audioReady {
+            cancelStartTimeout()
+        }
+
+        if appState.recordingState == .starting {
+            tryTransitionToRecording(trigger: "asr_provider_failed")
+        } else if awaitingFinalResult,
+                  appState.recordingState == .stopping,
+                  activeASRProviders.isSubset(of: finishedASRProviders) {
+            transcriptionTrace?.finishSpan("asr.final_wait", metadata: [
+                "completion_trigger": "provider_failed_remaining_finished",
+                "finished_providers": finishedASRProviders.sorted().joined(separator: ","),
+                "failed_providers": failedASRProviders.sorted().joined(separator: ",")
+            ])
+            completeTranscription(trigger: "provider_failed_remaining_finished")
+        }
+        return true
+    }
+
+    private func canContinueAfterASRProviderFailure(provider: String) -> Bool {
+        activeASRProviders.contains(provider) && !activeASRProviders.subtracting([provider]).isEmpty
+    }
+
+    private func writeASRErrorDiagnostic(
+        provider: String,
+        error: TranscriptionSessionError?,
+        reason: String,
+        willContinue: Bool
+    ) {
+        var payload: [String: Any] = [
+            "created_at": ISO8601DateFormatter().string(from: Date()),
+            "reason": reason,
+            "provider": provider,
+            "selected_asr_provider": ASRProviderStore.selected.rawValue,
+            "recording_state": String(describing: appState.recordingState),
+            "will_continue_with_remaining_provider": willContinue,
+            "active_providers": activeASRProviders.sorted(),
+            "opened_providers": openedASRProviders.sorted(),
+            "failed_providers": failedASRProviders.sorted(),
+            "finished_providers": finishedASRProviders.sorted(),
+            "audio_ready": audioReady,
+            "awaiting_final_result": awaitingFinalResult,
+            "asr_result_count": asrResultCount,
+            "transcript_chars": appState.transcript.count,
+            "latest_provider_transcript_chars": latestProviderTranscripts
+                .mapValues { $0.trimmingCharacters(in: .whitespacesAndNewlines).count },
+            "max_provider_result_chars": maxASRResultCharsByProvider
+        ]
+
+        if let error {
+            payload["error"] = [
+                "domain": error.domain,
+                "code": error.code,
+                "message": error.localizedDescription
+            ]
+            if !error.metadata.isEmpty {
+                payload["client_metadata"] = error.metadata
+            }
+        }
+
+        _ = ASRErrorDiagnosticStore.write(payload: payload, provider: provider, reason: reason)
+    }
+
+    private func clearASRAuthState(provider: String) {
+        switch provider {
+        case "web":
+            ASRParamsStore.clear()
+            appState.loginStatus = .notLoggedIn
+        case "android":
+            DoubaoAndroidCredentialStore.clear()
+        default:
+            break
+        }
     }
 
     private static func appendSummarySample(_ sample: String, to samples: inout [String]) {
@@ -1271,5 +1402,20 @@ final class TranscriptionManager {
             }
         }
         return error.localizedDescription.localizedCaseInsensitiveContains("socket is not connected")
+    }
+
+    private static func userFacingASRErrorMessage(_ error: TranscriptionSessionError?) -> String {
+        guard let error else {
+            return L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
+        }
+        let message = error.localizedDescription.lowercased()
+        if error.domain == "Douvo.WebASR",
+           error.code == 710020702 || message.contains("server processing timeout") || message.contains("node execution timeout") {
+            return speechRecognitionServiceTimeoutMessage
+        }
+        if error.domain == NSURLErrorDomain, error.code == NSURLErrorTimedOut {
+            return speechRecognitionStartTimeoutMessage
+        }
+        return L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
     }
 }

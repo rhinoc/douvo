@@ -95,17 +95,17 @@ This project depends on observed Doubao web and IME client behavior. It is **not
 
 ## How it works
 
-Douvo supports three Doubao ASR paths: **Web**, **Android**, and **Mix**. The default is **Web**. The Android path follows observed Doubao IME client behavior, and Mix runs Web and Android together before merging the recognition results with AI post-processing. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
+Douvo supports three Doubao ASR paths: **Web**, **Android**, and **Dual**. The default is **Web**. The Android path follows observed Doubao IME client behavior, and Dual runs Web and Android together before merging the recognition results with AI post-processing. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
 
 ```mermaid
 flowchart TD
-    A[Choose Web, Android, or Mix ASR provider] --> B[Prepare credentials required by the selected provider]
+    A[Choose Web, Android, or Dual recognition mode] --> B[Prepare credentials required by the selected mode]
     B --> C[Trigger recording from the menu bar app]
     C --> D[Capture microphone audio with AVAudioEngine]
     D --> E{Selected ASR path}
     E -- Web --> F[Stream 16 kHz PCM chunks to Doubao Web ASR]
     E -- Android --> G[Encode 16 kHz Opus and send Protobuf frames to Doubao Android ASR]
-    E -- Mix --> H[Send PCM to Web ASR and Opus Protobuf frames to Android ASR]
+    E -- Dual --> H[Send PCM to Web ASR and Opus Protobuf frames to Android ASR]
     F --> I[Show partial transcript in the floating overlay]
     G --> I
     H --> I
@@ -184,7 +184,7 @@ Local AI post-processing runs on device. Remote AI post-processing sends transcr
 7. Press the translation key while recording to switch the current recording into translation mode.
 8. Press **Escape** while recording to cancel.
 
-Use **Settings...** from the menu bar to change trigger keys, choose a microphone, choose the ASR provider, refresh credentials, configure AI features, copy diagnostics, or open the app log.
+Use **Settings...** from the menu bar to change trigger keys, choose a microphone, choose the recognition mode, refresh login, configure AI features, copy diagnostics, or open the app log.
 
 ### AI Post-processing
 

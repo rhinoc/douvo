@@ -136,8 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             self?.rebuildMenu()
         }
-        localLLMDownloadManager = LocalLLMDownloadManager { model in
-            try await LocalLLMPostProcessor.shared.downloadModel(model)
+        localLLMDownloadManager = LocalLLMDownloadManager { model, onProgress in
+            try await LocalLLMPostProcessor.shared.downloadModel(model) { progress in
+                Task { @MainActor in
+                    onProgress(progress)
+                }
+            }
         }
         settingsPanel = ShortcutCapturePanel()
     }
@@ -236,18 +240,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .checking:
                 menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
             case .loggedIn:
-                menu.addItem(disabledItem(L10n.text(en: "Web ASR logged in", zh: "网页 ASR 已登录")))
+                menu.addItem(disabledItem(L10n.text(en: "Recognition: Web", zh: "识别方式：Web")))
             case .notLoggedIn:
                 menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
             }
         case .android:
-            menu.addItem(disabledItem(L10n.text(en: "Android ASR ready", zh: "Android ASR 已就绪")))
+            menu.addItem(disabledItem(L10n.text(en: "Recognition: Android", zh: "识别方式：Android")))
         case .mix:
             switch loginStatus {
             case .checking:
                 menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
             case .loggedIn:
-                menu.addItem(disabledItem(L10n.text(en: "Mix ASR ready", zh: "Mix ASR 已就绪")))
+                menu.addItem(disabledItem(L10n.text(en: "Recognition: Dual", zh: "识别方式：双路")))
             case .notLoggedIn:
                 menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
             }
@@ -404,6 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onOpenLog: { [weak self] in
                 self?.openLog()
             },
+            onExportLogs: { [weak self] in
+                self?.exportLogs()
+            },
             onCheckForUpdates: { [weak self] in
                 self?.checkForUpdates()
             },
@@ -519,6 +526,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openLog() {
         AppLog.info("Open log requested")
         NSWorkspace.shared.activateFileViewerSelecting([AppLog.fileURL])
+    }
+
+    private func exportLogs() {
+        AppLog.info("Export logs requested")
+        Task {
+            do {
+                let zipURL = try LogExportStore.export()
+                await MainActor.run {
+                    NSWorkspace.shared.activateFileViewerSelecting([zipURL])
+                }
+            } catch {
+                AppLog.error("Export logs failed error=\(error.localizedDescription)")
+            }
+        }
     }
 
     @objc private func checkForUpdates() {

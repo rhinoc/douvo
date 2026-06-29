@@ -38,6 +38,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     private var connectionTimeout: DispatchWorkItem?
     private let lock = NSLock()
     private static let maxSummarySamples = 12
+    private static let webSocketHost = "ws-samantha.doubao.com"
 
     var onOpen: (() -> Void)?
     var onResult: ((ASRRecognitionResult) -> Void)?
@@ -226,7 +227,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             self.onError?(NSError(
                 domain: "Douvo.ASR",
                 code: 1001,
-                userInfo: [NSLocalizedDescriptionKey: "ASR WebSocket did not accept audio within 8 seconds"]
+                userInfo: [NSLocalizedDescriptionKey: "Speech recognition did not accept audio within 8 seconds"]
             ))
         }
         connectionTimeout = timeout
@@ -349,11 +350,11 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                 } else if failure.wasOpen {
                     AppLog.error("ASR receive failed error=\(error.localizedDescription)")
                     self.logSummary(reason: "receive_failed")
-                    self.onError?(error)
+                    self.onError?(self.asrError(error, stage: "receive_failed"))
                 } else {
                     AppLog.error("ASR receive failed before open error=\(error.localizedDescription)")
                     self.logSummary(reason: "receive_failed_before_open")
-                    self.onError?(error)
+                    self.onError?(self.asrError(error, stage: "receive_failed_before_open"))
                 }
             }
         }
@@ -391,6 +392,18 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                 return
             }
             AppLog.error("ASR nonzero code=\(code) message=\(message)")
+            markFailed()
+            logSummary(reason: "server_error")
+            let description = message.isEmpty ? "ASR server error code=\(code)" : message
+            onError?(NSError(
+                domain: "Douvo.WebASR",
+                code: code,
+                userInfo: [
+                    NSLocalizedDescriptionKey: description,
+                    TranscriptionErrorMetadata.userInfoKey: diagnosticMetadata(stage: "server_error", event: event, code: code)
+                ]
+            ))
+            return
         }
 
         if event == "result",
@@ -450,6 +463,52 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             }
         }
         return nsError.localizedDescription.localizedCaseInsensitiveContains("socket is not connected")
+    }
+
+    private func asrError(_ error: Error, stage: String) -> Error {
+        let nsError = error as NSError
+        var metadata = diagnosticMetadata(stage: stage)
+        metadata["source_domain"] = nsError.domain
+        metadata["source_code"] = String(nsError.code)
+        return NSError(
+            domain: nsError.domain,
+            code: nsError.code,
+            userInfo: [
+                NSLocalizedDescriptionKey: nsError.localizedDescription,
+                TranscriptionErrorMetadata.userInfoKey: metadata
+            ]
+        )
+    }
+
+    private func diagnosticMetadata(stage: String, event: String = "", code: Int? = nil) -> [String: String] {
+        lock.lock()
+        let currentState = state.rawValue
+        let pendingCount = pendingAudio.count
+        let queuedCount = queuedAudio.count
+        let sentCount = sentAudioCount
+        let completedCount = completedSendCount
+        let receivedCount = receivedMessageCount
+        let resultCount = resultMessageCount
+        lock.unlock()
+
+        var metadata: [String: String] = [
+            "web_stage": stage,
+            "web_endpoint_host": Self.webSocketHost,
+            "web_state": currentState,
+            "web_pending_audio_count": String(pendingCount),
+            "web_queued_audio_count": String(queuedCount),
+            "web_sent_audio_count": String(sentCount),
+            "web_completed_send_count": String(completedCount),
+            "web_received_messages": String(receivedCount),
+            "web_result_messages": String(resultCount)
+        ]
+        if !event.isEmpty {
+            metadata["web_event"] = event
+        }
+        if let code {
+            metadata["web_code"] = String(code)
+        }
+        return metadata
     }
 
     func urlSession(

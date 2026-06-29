@@ -27,4 +27,23 @@ final class TranscriptionSessionErrorTests: XCTestCase {
         XCTAssertEqual(sessionError.code, 42)
         XCTAssertEqual(sessionError.localizedDescription, "Input device unavailable")
     }
+
+    func testNSErrorMetadataIsPreservedForDiagnostics() {
+        let source = NSError(
+            domain: "Douvo.AndroidASR",
+            code: 3,
+            userInfo: [
+                NSLocalizedDescriptionKey: "service discovery failure",
+                TranscriptionErrorMetadata.userInfoKey: [
+                    "android_request_id": "request-1",
+                    "android_response_message_type": "SessionFailed"
+                ]
+            ]
+        )
+
+        let sessionError = TranscriptionSessionError(source)
+
+        XCTAssertEqual(sessionError.metadata["android_request_id"], "request-1")
+        XCTAssertEqual(sessionError.metadata["android_response_message_type"], "SessionFailed")
+    }
 }

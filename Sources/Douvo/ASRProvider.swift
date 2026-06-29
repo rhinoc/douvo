@@ -14,18 +14,18 @@ enum ASRProvider: String, CaseIterable, Identifiable, Codable {
         case .android:
             "Android"
         case .mix:
-            "Mix"
+            L10n.text(en: "Dual", zh: "双路")
         }
     }
 
     var detail: String {
         switch self {
         case .web:
-            "Doubao Web ASR"
+            L10n.text(en: "Doubao Web recognition", zh: "豆包网页识别")
         case .android:
-            "Doubao IME protocol"
+            L10n.text(en: "Doubao Android input method", zh: "豆包 Android 输入法")
         case .mix:
-            "Web + Android with AI merge"
+            L10n.text(en: "Web + Android with AI merge", zh: "Web + Android，经 AI 合并")
         }
     }
 

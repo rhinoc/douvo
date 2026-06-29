@@ -95,17 +95,17 @@ Douvo 保留豆包 ASR 路径，但把它包装成一个不绑定具体应用的
 
 ## 大概原理
 
-Douvo 支持三种豆包 ASR 路径：**Web**、**Android** 和 **Mix**。默认是 **Web**。Android 路径参考观察到的豆包输入法客户端行为；Mix 会同时运行 Web 和 Android，再用 AI 后处理合并两路识别结果。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
+Douvo 支持三种豆包 ASR 路径：**Web**、**Android** 和 **双路**。默认是 **Web**。Android 路径参考观察到的豆包输入法客户端行为；双路会同时运行 Web 和 Android，再用 AI 后处理合并两路识别结果。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
 
 ```mermaid
 flowchart TD
-    A[选择 Web、Android 或 Mix ASR provider] --> B[准备所选 provider 需要的凭据]
+    A[选择 Web、Android 或双路识别方式] --> B[准备所选方式需要的凭据]
     B --> C[通过菜单栏应用触发录音]
     C --> D[AVAudioEngine 采集麦克风音频]
     D --> E{所选 ASR 路径}
     E -- Web --> F[发送 16 kHz PCM 分片到豆包 Web ASR]
     E -- Android --> G[编码 16 kHz Opus 并用 Protobuf 帧发送到豆包 Android ASR]
-    E -- Mix --> H[同时向 Web ASR 发送 PCM 并向 Android ASR 发送 Opus Protobuf 帧]
+    E -- 双路 --> H[同时向 Web ASR 发送 PCM 并向 Android ASR 发送 Opus Protobuf 帧]
     F --> I[悬浮窗显示实时识别结果]
     G --> I
     H --> I
@@ -184,7 +184,7 @@ open /Applications/Douvo.app
 7. 录音过程中按翻译键，可以把当前录音切换到翻译模式。
 8. 录音过程中按 **Escape** 可以取消。
 
-菜单栏里的 **Settings...** 可以修改触发键、选择麦克风、选择 ASR provider、刷新登录凭据、配置 AI 功能、复制诊断信息或打开日志。
+菜单栏里的 **Settings...** 可以修改触发键、选择麦克风、选择识别方式、刷新登录、配置 AI 功能、复制诊断信息或打开日志。
 
 ### AI 后处理
 

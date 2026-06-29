@@ -10,10 +10,10 @@ Prefer structured settings first: vocabulary, punctuation, filler-word removal, 
 
 | Field | Purpose | Empty behavior |
 | --- | --- | --- |
-| User Identity | Long-lived user role, domain, terminology preferences, or writing context used for intent and terminology disambiguation. | No user identity context is sent. |
-| Add-on Prompt | Extra system-prompt fragment appended after the effective built-in or custom System Prompt. | Nothing is appended. |
-| System Prompt | Defines post-processing rules, vocabulary handling, punctuation behavior, output style, and safety constraints. | Uses the built-in app system prompt. |
-| User Message | Wraps the raw transcript before it is sent to the selected AI backend. | Uses the built-in app user message template. |
+| <a id="user-identity"></a>User Identity | Long-lived user role, domain, terminology preferences, or writing context used for intent and terminology disambiguation. | No user identity context is sent. |
+| <a id="extra-rules"></a>Extra Rules | Extra system-prompt fragment appended after the effective built-in or custom System Prompt. | Nothing is appended. |
+| <a id="system-prompt"></a>System Prompt | Defines post-processing rules, vocabulary handling, punctuation behavior, output style, and safety constraints. | Uses the built-in app system prompt. |
+| <a id="user-message-template"></a>User Message Template | Wraps the raw transcript before it is sent to the selected AI backend. | Uses the built-in app user message template. |
 
 ## Template Syntax
 
@@ -113,7 +113,7 @@ Use this only for intent understanding and terminology disambiguation. Do not ou
 ## Notes
 
 - Keep prompt output requirements short and explicit.
-- Prefer Add-on Prompt for small additions before replacing the full System Prompt.
+- Prefer Extra Rules for small additions before replacing the full System Prompt.
 - Do not ask the model to explain its changes; Douvo inserts the final output directly.
 - Preserve code, paths, commands, URLs, names, and vocabulary terms unless the user explicitly asks to transform them.
 - For translation or formatting workflows, prefer **Output Style -> Custom** before overriding the full System Prompt.
