@@ -9,11 +9,20 @@ enum PasteHelper {
     private static let restoreDelay: TimeInterval = 0.75
     private static let pasteKeyDelay: TimeInterval = 0.05
 
-    static func copyAndPaste(_ text: String) {
-        guard !text.isEmpty else { return }
+    @discardableResult
+    static func copyAndPaste(_ text: String) -> PasteOutcome {
+        guard !text.isEmpty else { return .skippedEmpty }
         AppLog.info("PasteHelper copyAndPaste chars=\(text.count)")
+        let focusResult = TextInputFocusCheck.capture()
+        guard focusResult.isTextInput else {
+            let reason = focusResult.blockedReason ?? "unknown"
+            AppLog.info("PasteHelper copyAndPaste blocked reason=\(reason); copying only")
+            copyOnly(text)
+            return .copiedOnly(reason: reason)
+        }
+
         let insertionCheck = TextInsertionSettingsStore.copyResultWhenInsertionFails
-            ? TextInsertionFailureCheck.capture()
+            ? TextInsertionFailureCheck.capture(from: focusResult)
             : nil
         let restorePlan = copyForPaste(text)
         DispatchQueue.main.asyncAfter(deadline: .now() + pasteKeyDelay) {
@@ -24,6 +33,7 @@ enum PasteHelper {
                 scheduleRestore(restorePlan)
             }
         }
+        return .enqueuedPaste
     }
 
     static func copyOnly(_ text: String) {
@@ -114,6 +124,23 @@ enum PasteHelper {
     }
 }
 
+enum PasteOutcome: Equatable {
+    case skippedEmpty
+    case enqueuedPaste
+    case copiedOnly(reason: String)
+
+    var traceValue: String {
+        switch self {
+        case .skippedEmpty:
+            "skipped_empty"
+        case .enqueuedPaste:
+            "enqueued_paste"
+        case .copiedOnly:
+            "copied_only"
+        }
+    }
+}
+
 enum TextInsertionSettingsStore {
     private enum Key {
         static let copyResultWhenInsertionFails = "textInsertion.copyResultWhenInsertionFails"
@@ -129,14 +156,70 @@ enum TextInsertionSettingsStore {
     }
 }
 
-private enum TextInsertionFailureCheck {
-    case unavailable(reason: String)
-    case nonTextInput(role: String, subrole: String)
-    case textValue(pid: pid_t, element: AXUIElement, previousValue: String, role: String, subrole: String)
+enum TextInputFocusCheck {
+    struct EditableTarget {
+        let pid: pid_t
+        let element: AXUIElement
+        let previousValue: String?
+        let role: String
+        let subrole: String
+    }
 
-    static func capture() -> TextInsertionFailureCheck {
+    enum Result {
+        case textInput(EditableTarget)
+        case notTextInput(role: String, subrole: String)
+        case unavailable(reason: String)
+
+        var isTextInput: Bool {
+            if case .textInput = self {
+                return true
+            }
+            return false
+        }
+
+        var blockedReason: String? {
+            switch self {
+            case .textInput:
+                nil
+            case .notTextInput:
+                "non_text_input"
+            case .unavailable(let reason):
+                reason
+            }
+        }
+
+        var traceMetadata: [String: String] {
+            switch self {
+            case .textInput(let target):
+                [
+                    "result": "text_input",
+                    "role": target.role,
+                    "subrole": target.subrole,
+                    "has_text_value": String(target.previousValue != nil)
+                ]
+            case .notTextInput(let role, let subrole):
+                [
+                    "result": "not_text_input",
+                    "role": role,
+                    "subrole": subrole
+                ]
+            case .unavailable(let reason):
+                [
+                    "result": "unavailable",
+                    "reason": reason
+                ]
+            }
+        }
+    }
+
+    enum Classification: Equatable {
+        case textInput
+        case notTextInput
+    }
+
+    static func capture() -> Result {
         guard let app = NSWorkspace.shared.frontmostApplication else {
-            AppLog.info("PasteHelper insertion check unavailable reason=no_frontmost_app")
+            AppLog.info("Text input focus check unavailable reason=no_frontmost_app")
             return .unavailable(reason: "no_frontmost_app")
         }
 
@@ -150,66 +233,51 @@ private enum TextInsertionFailureCheck {
         guard focusedResult == .success,
               let focusedValue,
               CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
-            AppLog.info("PasteHelper insertion check unavailable reason=focused_element_unavailable ax=\(axErrorDescription(focusedResult))")
+            AppLog.info("Text input focus check unavailable reason=focused_element_unavailable ax=\(axErrorDescription(focusedResult))")
             return .unavailable(reason: "focused_element_unavailable")
         }
 
         let element = focusedValue as! AXUIElement
         let role = attributeString(kAXRoleAttribute, in: element) ?? "unknown"
         let subrole = attributeString(kAXSubroleAttribute, in: element) ?? "unknown"
-        if let value = attributeString(kAXValueAttribute, in: element) {
-            AppLog.info(
-                "PasteHelper insertion check captured text value chars=\(value.count) role=\(logValue(role)) subrole=\(logValue(subrole))"
-            )
-            return .textValue(
-                pid: app.processIdentifier,
-                element: element,
-                previousValue: value,
-                role: role,
-                subrole: subrole
-            )
-        }
+        let previousValue = attributeString(kAXValueAttribute, in: element)
+        let hasTextSelectionAttribute = hasTextSelectionAttribute(in: element)
 
-        if isKnownTextInput(role: role) || hasTextSelectionAttribute(in: element) {
+        switch classification(
+            role: role,
+            hasTextValue: previousValue != nil,
+            hasTextSelectionAttribute: hasTextSelectionAttribute
+        ) {
+        case .textInput:
             AppLog.info(
-                "PasteHelper insertion check unavailable reason=text_value_unavailable role=\(logValue(role)) subrole=\(logValue(subrole))"
+                "Text input focus check result=text_input role=\(logValue(role)) subrole=\(logValue(subrole)) hasTextValue=\(previousValue != nil)"
             )
-            return .unavailable(reason: "text_value_unavailable")
+            return .textInput(
+                EditableTarget(
+                    pid: app.processIdentifier,
+                    element: element,
+                    previousValue: previousValue,
+                    role: role,
+                    subrole: subrole
+                )
+            )
+        case .notTextInput:
+            AppLog.info(
+                "Text input focus check result=not_text_input role=\(logValue(role)) subrole=\(logValue(subrole))"
+            )
+            return .notTextInput(role: role, subrole: subrole)
         }
-
-        AppLog.info(
-            "PasteHelper insertion check captured non-text input role=\(logValue(role)) subrole=\(logValue(subrole))"
-        )
-        return .nonTextInput(role: role, subrole: subrole)
     }
 
-    func didInsertionFail() -> Bool {
-        switch self {
-        case .unavailable(let reason):
-            AppLog.info("PasteHelper insertion check skipped reason=\(reason)")
-            return false
-        case .nonTextInput(let role, let subrole):
-            AppLog.info(
-                "PasteHelper insertion check failed reason=non_text_input role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
-            )
-            return true
-        case .textValue(let pid, let element, let previousValue, let role, let subrole):
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
-                AppLog.info("PasteHelper insertion check skipped reason=frontmost_app_changed")
-                return false
-            }
-            guard let currentValue = Self.attributeString(kAXValueAttribute, in: element) else {
-                AppLog.info(
-                    "PasteHelper insertion check skipped reason=current_text_value_unavailable role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
-                )
-                return false
-            }
-            let failed = currentValue == previousValue
-            AppLog.info(
-                "PasteHelper insertion check result=\(failed ? "failed" : "changed") previousChars=\(previousValue.count) currentChars=\(currentValue.count) role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
-            )
-            return failed
+    static func classification(
+        role: String,
+        hasTextValue: Bool,
+        hasTextSelectionAttribute: Bool
+    ) -> Classification {
+        if hasTextValue || isKnownTextInput(role: role) || hasTextSelectionAttribute {
+            return .textInput
         }
+        return .notTextInput
     }
 
     private static func isKnownTextInput(role: String) -> Bool {
@@ -240,14 +308,14 @@ private enum TextInsertionFailureCheck {
         return selectedRangeResult == .success
     }
 
-    private static func attributeString(_ attribute: String, in element: AXUIElement) -> String? {
+    static func attributeString(_ attribute: String, in element: AXUIElement) -> String? {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
         guard result == .success else { return nil }
         return value as? String
     }
 
-    private static func axErrorDescription(_ error: AXError) -> String {
+    static func axErrorDescription(_ error: AXError) -> String {
         switch error {
         case .success:
             return "success"
@@ -286,11 +354,80 @@ private enum TextInsertionFailureCheck {
         }
     }
 
-    private static func logValue(_ value: String) -> String {
+    static func logValue(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
+    }
+}
+
+private enum TextInsertionFailureCheck {
+    case unavailable(reason: String)
+    case nonTextInput(role: String, subrole: String)
+    case textValue(pid: pid_t, element: AXUIElement, previousValue: String, role: String, subrole: String)
+
+    static func capture(from focusResult: TextInputFocusCheck.Result) -> TextInsertionFailureCheck {
+        switch focusResult {
+        case .textInput(let target):
+            guard let value = target.previousValue else {
+                AppLog.info(
+                    "PasteHelper insertion check unavailable reason=text_value_unavailable role=\(logValue(target.role)) subrole=\(logValue(target.subrole))"
+                )
+                return .unavailable(reason: "text_value_unavailable")
+            }
+            AppLog.info(
+                "PasteHelper insertion check captured text value chars=\(value.count) role=\(logValue(target.role)) subrole=\(logValue(target.subrole))"
+            )
+            return .textValue(
+                pid: target.pid,
+                element: target.element,
+                previousValue: value,
+                role: target.role,
+                subrole: target.subrole
+            )
+        case .notTextInput(let role, let subrole):
+            AppLog.info(
+                "PasteHelper insertion check captured non-text input role=\(logValue(role)) subrole=\(logValue(subrole))"
+            )
+            return .nonTextInput(role: role, subrole: subrole)
+        case .unavailable(let reason):
+            AppLog.info("PasteHelper insertion check unavailable reason=\(reason)")
+            return .unavailable(reason: reason)
+        }
+    }
+
+    func didInsertionFail() -> Bool {
+        switch self {
+        case .unavailable(let reason):
+            AppLog.info("PasteHelper insertion check skipped reason=\(reason)")
+            return false
+        case .nonTextInput(let role, let subrole):
+            AppLog.info(
+                "PasteHelper insertion check failed reason=non_text_input role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
+            )
+            return true
+        case .textValue(let pid, let element, let previousValue, let role, let subrole):
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                AppLog.info("PasteHelper insertion check skipped reason=frontmost_app_changed")
+                return false
+            }
+            guard let currentValue = TextInputFocusCheck.attributeString(kAXValueAttribute, in: element) else {
+                AppLog.info(
+                    "PasteHelper insertion check skipped reason=current_text_value_unavailable role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
+                )
+                return false
+            }
+            let failed = currentValue == previousValue
+            AppLog.info(
+                "PasteHelper insertion check result=\(failed ? "failed" : "changed") previousChars=\(previousValue.count) currentChars=\(currentValue.count) role=\(Self.logValue(role)) subrole=\(Self.logValue(subrole))"
+            )
+            return failed
+        }
+    }
+
+    private static func logValue(_ value: String) -> String {
+        TextInputFocusCheck.logValue(value)
     }
 }
 

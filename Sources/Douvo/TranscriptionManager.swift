@@ -18,6 +18,14 @@ final class TranscriptionManager {
         L10n.text(en: "Select 500 chars or fewer.", zh: "选中文本不超过 500 字。")
     }
 
+    private static var focusTextInputMessage: String {
+        L10n.text(en: "Focus a text field first.", zh: "请先聚焦在输入框中")
+    }
+
+    private static var focusTextInputCopiedMessage: String {
+        L10n.text(en: "No text field found. Copied to clipboard.", zh: "未找到输入框，已复制到剪贴板")
+    }
+
     private let appState: AppState
     private let webViewManager: WebViewManager
     private let overlayPanel: OverlayPanel
@@ -383,6 +391,14 @@ final class TranscriptionManager {
         selectionEditTarget = nil
         translationSessionActive = false
         appState.overlayMode = .dictation
+
+        let inputFocus = TextInputFocusCheck.capture()
+        transcriptionTrace?.event("input_focus.checked", metadata: inputFocus.traceMetadata)
+        guard inputFocus.isTextInput else {
+            blockStartForMissingTextInput(inputFocus)
+            return
+        }
+
         if LocalLLMSettingsStore.selectionEditingEnabled {
             let selectionPreparation = prepareSelectionEditingTarget()
             if selectionPreparation == .tooLong {
@@ -821,11 +837,24 @@ final class TranscriptionManager {
         appState.lastTranscript = finalText
         transcriptionTrace?.set("corrected_text", finalText)
         transcriptionTrace?.startSpan("paste.enqueue")
-        PasteHelper.copyAndPaste(finalText)
-        transcriptionTrace?.finishSpan("paste.enqueue", metadata: ["final_chars": String(finalText.count)])
-        finishCurrentTrace(outcome: "completed", metadata: ["final_chars": String(finalText.count)])
+        let pasteOutcome = PasteHelper.copyAndPaste(finalText)
+        transcriptionTrace?.finishSpan("paste.enqueue", metadata: [
+            "final_chars": String(finalText.count),
+            "paste_outcome": pasteOutcome.traceValue
+        ])
+        finishCurrentTrace(outcome: "completed", metadata: [
+            "final_chars": String(finalText.count),
+            "paste_outcome": pasteOutcome.traceValue
+        ])
         appState.transcript = ""
-        resetToIdle(after: 0)
+        switch pasteOutcome {
+        case .copiedOnly:
+            appState.errorMessage = Self.focusTextInputCopiedMessage
+            setRecordingState(.idle)
+            resetToIdle(after: 1.8)
+        case .enqueuedPaste, .skippedEmpty:
+            resetToIdle(after: 0)
+        }
     }
 
     private func handleAuthFailure(provider failedProvider: String) {
@@ -906,6 +935,22 @@ final class TranscriptionManager {
         usingCachedParams = false
         isHandlingConnectionError = false
         isCompletingTranscription = false
+    }
+
+    private func blockStartForMissingTextInput(_ inputFocus: TextInputFocusCheck.Result) {
+        let reason = inputFocus.blockedReason ?? "unknown"
+        AppLog.info("Start blocked: no focused text input reason=\(reason)")
+        appState.errorMessage = Self.focusTextInputMessage
+        appState.transcript = ""
+        appState.resetAudioLevels()
+        transcriptionTrace?.event("input_focus.blocked", metadata: inputFocus.traceMetadata)
+        setRecordingState(.idle)
+        overlayPanel.show()
+        finishCurrentTrace(outcome: "blocked", metadata: [
+            "reason": "no_focused_text_input",
+            "focus_reason": reason
+        ])
+        resetToIdle(after: 1.5)
     }
 
     private func setRecordingState(_ state: RecordingState) {

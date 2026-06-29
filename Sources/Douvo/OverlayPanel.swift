@@ -233,8 +233,10 @@ private struct OverlayView: View {
                         .id("live-subtitle")
                         .transition(.opacity)
                 }
-                pill
-                    .transition(.opacity)
+                if shouldShowPill {
+                    pill
+                        .transition(.opacity)
+                }
             }
         }
         .frame(
@@ -693,6 +695,10 @@ private struct OverlayView: View {
         appState.recordingState == .idle && appState.errorMessage?.isEmpty == false
     }
 
+    private var shouldShowPill: Bool {
+        appState.recordingState != .idle
+    }
+
     private var contentFadeAnimation: Animation? {
         guard let duration = animationIntensity.contentFadeDuration else { return nil }
         return .easeInOut(duration: duration)
@@ -998,7 +1004,11 @@ private struct WaveformView: View {
         }
         .frame(height: maxHeight)
         .mask(waveformEdgeFade)
-        .animation(animatesMotion ? .linear(duration: 0.025) : nil, value: levels)
+        .animation(animatesLevelChanges ? .linear(duration: 0.025) : nil, value: levels)
+    }
+
+    private var animatesLevelChanges: Bool {
+        animatesMotion && style != .dots
     }
 
     private func dynamicSpacing(for width: CGFloat, itemWidth: CGFloat, sampleCount: Int) -> CGFloat {
@@ -1033,14 +1043,14 @@ private struct WaveformView: View {
         let verticalGap = min(1.25, max(0.8, size.height / 22))
         let dotSize = max(1.5, min(2.4, (size.height - verticalGap * CGFloat(dotRows - 1)) / CGFloat(dotRows)))
         let columnCount = dotColumnCount(width: size.width, dotSize: dotSize, samples: samples)
+        let levels = samples.discreteLevels(suffixCount: columnCount)
         let horizontalGap = dotHorizontalGap(width: size.width, dotSize: dotSize, columnCount: columnCount)
         return HStack(alignment: .center, spacing: horizontalGap) {
-            ForEach(0..<columnCount, id: \.self) { column in
-                let level = samples.level(at: column, count: columnCount)
+            ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
                 VStack(spacing: verticalGap) {
                     ForEach(0..<dotRows, id: \.self) { row in
                         Circle()
-                            .fill(Color.white.opacity(dotOpacity(row: row, rowCount: dotRows, level: level, samples: samples)))
+                            .fill(Color.white.opacity(dotOpacity(row: row, rowCount: dotRows, level: level)))
                             .frame(width: dotSize, height: dotSize)
                     }
                 }
@@ -1053,8 +1063,7 @@ private struct WaveformView: View {
     private func dotColumnCount(width: CGFloat, dotSize: CGFloat, samples: WaveformSamples) -> Int {
         let minimumGap: CGFloat = 0.9
         let capacity = max(1, Int(((width + minimumGap) / (dotSize + minimumGap)).rounded(.down)))
-        let desired = max(1, Int((CGFloat(samples.count) * 1.35).rounded()))
-        return min(capacity, desired)
+        return min(capacity, max(1, samples.count))
     }
 
     private func dotHorizontalGap(width: CGFloat, dotSize: CGFloat, columnCount: Int) -> CGFloat {
@@ -1093,7 +1102,7 @@ private struct WaveformView: View {
         .compositingGroup()
     }
 
-    private func dotOpacity(row: Int, rowCount: Int, level: CGFloat, samples _: WaveformSamples) -> Double {
+    private func dotOpacity(row: Int, rowCount: Int, level: CGFloat) -> Double {
         let midpoint = CGFloat(rowCount - 1) / 2
         let distance = abs(CGFloat(row) - midpoint) / max(midpoint, 1)
         let isCenterRow = row == Int(midpoint.rounded())
@@ -1250,6 +1259,12 @@ private struct WaveformSamples {
         self.recentPeak = recentLevels.max() ?? 0
         self.recentAverage = recentLevels.reduce(0, +) / CGFloat(max(recentLevels.count, 1))
         self.hasSound = WaveformResponse.hasSound(isActive: isActive, recentPeak: recentPeak)
+    }
+
+    func discreteLevels(suffixCount: Int) -> [CGFloat] {
+        guard !levels.isEmpty else { return [0] }
+        let count = max(1, min(suffixCount, levels.count))
+        return Array(levels.suffix(count))
     }
 
     func level(at column: Int, count columnCount: Int) -> CGFloat {
