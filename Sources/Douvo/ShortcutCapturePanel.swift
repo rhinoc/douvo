@@ -1284,7 +1284,7 @@ private struct SettingsPanelView: View {
                     settingsListRow(L10n.text(en: "Account", zh: "账号")) {
                         if model.selectedASRProvider == .android {
                             Button(L10n.text(en: "Reset Android Credentials", zh: "重置 Android 凭据")) {
-                                DoubaoAndroidCredentialStore.clear()
+                                resetAndroidCredentials()
                             }
                             .focusable(false)
                             .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
@@ -1305,7 +1305,7 @@ private struct SettingsPanelView: View {
                                 }
 
                                 Button(L10n.text(en: "Reset Android", zh: "重置 Android")) {
-                                    DoubaoAndroidCredentialStore.clear()
+                                    resetAndroidCredentials()
                                 }
                                 .focusable(false)
                                 .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
@@ -1330,7 +1330,7 @@ private struct SettingsPanelView: View {
                     settingsDivider()
 
                     settingsListRow(L10n.text(en: "Debug", zh: "调试")) {
-                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: onCopyLoginDebugInfo)
+                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: copyLoginDebugInfo)
                             .focusable(false)
                             .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
                             .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
@@ -1338,6 +1338,27 @@ private struct SettingsPanelView: View {
                 }
             }
         }
+    }
+
+    private func resetAndroidCredentials() {
+        DoubaoAndroidCredentialStore.clear()
+        presentSettingsToast(
+            L10n.text(
+                en: "Android credentials reset. They will be recreated on the next recording.",
+                zh: "Android 凭据已重置，下次录音会重新生成。"
+            ),
+            kind: .success
+        )
+    }
+
+    private func copyLoginDebugInfo() {
+        onCopyLoginDebugInfo()
+        presentSettingsToast(L10n.text(en: "Login debug info copied.", zh: "登录调试信息已复制。"), kind: .success)
+    }
+
+    private func copyLogPath() {
+        onCopyLogPath()
+        presentSettingsToast(L10n.text(en: "Log path copied.", zh: "日志路径已复制。"), kind: .success)
     }
 
     private var featuresTab: some View {
@@ -3280,7 +3301,7 @@ private struct SettingsPanelView: View {
                             Button(L10n.text(en: "Open Log", zh: "打开日志"), action: onOpenLog)
                                 .focusable(false)
 
-                            Button(L10n.text(en: "Copy Log Path", zh: "复制日志路径"), action: onCopyLogPath)
+                            Button(L10n.text(en: "Copy Log Path", zh: "复制日志路径"), action: copyLogPath)
                                 .focusable(false)
                         }
                     }
@@ -3288,7 +3309,7 @@ private struct SettingsPanelView: View {
                     settingsDivider()
 
                     settingsListRow(L10n.text(en: "Account", zh: "账号"), height: 44) {
-                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: onCopyLoginDebugInfo)
+                        Button(L10n.text(en: "Copy Login Debug Info", zh: "复制登录调试信息"), action: copyLoginDebugInfo)
                             .focusable(false)
                             .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
                             .help(L10n.text(en: "Copy redacted login state, cookie names, and local credential paths.", zh: "复制已脱敏的登录状态、cookie 名称和本地凭据路径。"))
