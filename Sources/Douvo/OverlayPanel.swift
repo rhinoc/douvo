@@ -7,7 +7,7 @@ private enum OverlayMetrics {
     static let subtitleMinWidth: CGFloat = 200
     static let subtitleMaxWidth: CGFloat = 360
     static let containerWidth: CGFloat = subtitleMaxWidth
-    static let containerHeight: CGFloat = 104
+    static let containerHeight: CGFloat = 148
 }
 
 private enum OverlayAnimation {
@@ -211,19 +211,30 @@ private struct OverlayView: View {
     var body: some View {
         VStack(spacing: 8) {
             if isMessageOnly {
-                if let subtitle = subtitleText {
+                if let error = errorText {
                     SubtitleView(
-                        text: subtitle,
+                        text: error,
                         maxWidth: subtitleMaxWidth,
                         backgroundOpacity: subtitleBackgroundOpacity,
-                        materialOpacity: overlayMaterialOpacity
+                        materialOpacity: overlayMaterialOpacity,
+                        allowsMultipleLines: true
                     )
-                        .frame(height: pillOuterHeight, alignment: .center)
+                        .frame(minHeight: pillOuterHeight, alignment: .center)
                         .id("message-subtitle")
                         .transition(.opacity)
                 }
             } else {
-                if let subtitle = subtitleText {
+                if let error = errorText {
+                    SubtitleView(
+                        text: error,
+                        maxWidth: subtitleMaxWidth,
+                        backgroundOpacity: subtitleBackgroundOpacity,
+                        materialOpacity: overlayMaterialOpacity,
+                        allowsMultipleLines: true
+                    )
+                        .id("live-subtitle")
+                        .transition(.opacity)
+                } else if let subtitle = transcriptText {
                     SubtitleView(
                         text: subtitle,
                         maxWidth: subtitleMaxWidth,
@@ -244,7 +255,7 @@ private struct OverlayView: View {
             height: OverlayMetrics.containerHeight,
             alignment: .bottom
         )
-        .animation(contentFadeAnimation, value: hasSubtitle)
+        .animation(contentFadeAnimation, value: hasMessage)
         .animation(contentFadeAnimation, value: isMessageOnly)
         .onAppear {
             updateSurfacePhase(for: appState.recordingState)
@@ -679,16 +690,20 @@ private struct OverlayView: View {
         }
     }
 
-    private var subtitleText: String? {
+    private var errorText: String? {
         if let error = appState.errorMessage, !error.isEmpty {
             return error
         }
+        return nil
+    }
+
+    private var transcriptText: String? {
         let transcript = appState.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         return transcript.isEmpty ? nil : transcript
     }
 
-    private var hasSubtitle: Bool {
-        subtitleText != nil
+    private var hasMessage: Bool {
+        errorText != nil || transcriptText != nil
     }
 
     private var isMessageOnly: Bool {
@@ -906,15 +921,17 @@ private struct SubtitleView: View {
     let maxWidth: CGFloat
     let backgroundOpacity: Double
     let materialOpacity: Double
+    var allowsMultipleLines = false
 
     var body: some View {
-        // Single line: head truncation keeps the newest tail visible while older
-        // text scrolls off to the left.
+        // Live subtitles stay single-line with the newest tail visible; status
+        // messages reuse the same surface while allowing multiple lines.
         Text(text)
             .font(.system(size: 12, weight: .regular))
             .foregroundColor(Color.white.opacity(0.9))
-            .lineLimit(1)
-            .truncationMode(.head)
+            .lineLimit(allowsMultipleLines ? nil : 1)
+            .truncationMode(allowsMultipleLines ? .tail : .head)
+            .multilineTextAlignment(.center)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .overlaySurface(
@@ -923,6 +940,7 @@ private struct SubtitleView: View {
                 materialOpacity: materialOpacity
             )
             .frame(maxWidth: maxWidth)
+            .fixedSize(horizontal: false, vertical: allowsMultipleLines)
             .transition(.opacity)
     }
 }

@@ -35,10 +35,15 @@ final class TranscriptionManager {
     }
 
     private static var speechRecognitionServiceTimeoutMessage: String {
-        L10n.text(
-            en: "Speech recognition timed out. Try a shorter recording or switch to Android.",
-            zh: "语音识别服务处理超时，请缩短录音或切换到 Android。"
-        )
+        L10n.text(en: "Speech recognition timed out.", zh: "语音识别超时")
+    }
+
+    private static var recognitionFailedMessage: String {
+        L10n.text(en: "Recognition failed. Try again.", zh: "识别失败，请重试")
+    }
+
+    private static var microphoneFailedMessage: String {
+        L10n.text(en: "Microphone failed.", zh: "麦克风不可用")
     }
 
     private static var focusTextInputCopiedMessage: String {
@@ -474,6 +479,9 @@ final class TranscriptionManager {
         selectionEditTarget = nil
         translationSessionActive = false
         appState.overlayMode = .dictation
+        appState.transcript = ""
+        appState.errorMessage = nil
+        appState.resetAudioLevels()
 
         let inputFocus = TextInputFocusCheck.capture()
         transcriptionTrace?.event("input_focus.checked", metadata: inputFocus.traceMetadata)
@@ -491,7 +499,7 @@ final class TranscriptionManager {
                     "reason": "selection_too_long",
                     "max_chars": String(SelectedTextReader.maxSelectionCharacters)
                 ])
-                setRecordingState(.starting)
+                setRecordingState(.idle)
                 overlayPanel.show()
                 finishCurrentTrace(outcome: "blocked", metadata: ["reason": "selection_too_long"])
                 resetToIdle(after: 1.5)
@@ -505,16 +513,12 @@ final class TranscriptionManager {
             }
         }
 
-        setRecordingState(.starting)
-        appState.transcript = ""
-        appState.errorMessage = nil
-        appState.resetAudioLevels()
-        overlayPanel.show()
-
         var webParams: DoubaoASRParams?
         if provider == .mix, !LocalLLMPostProcessor.isCorrectionEnabled {
             AppLog.error("Start blocked: Dual ASR requires AI Correction")
             appState.errorMessage = L10n.text(en: "Dual recognition requires AI.", zh: "双路识别需要先开启 AI")
+            setRecordingState(.idle)
+            overlayPanel.show()
             finishCurrentTrace(outcome: "blocked", metadata: ["reason": "mix_requires_ai_correction"])
             resetToIdle(after: 1.8)
             return
@@ -524,6 +528,8 @@ final class TranscriptionManager {
             guard appState.loginStatus == .loggedIn else {
                 AppLog.error("Start blocked: not logged in")
                 appState.errorMessage = L10n.text(en: "Please log in to Doubao first.", zh: "请先登录豆包")
+                setRecordingState(.idle)
+                overlayPanel.show()
                 webViewManager.showLoginWindow()
                 finishCurrentTrace(outcome: "blocked", metadata: ["reason": "not_logged_in"])
                 resetToIdle(after: 1.5)
@@ -534,8 +540,10 @@ final class TranscriptionManager {
             guard let params = ASRParamsStore.load() else {
                 transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "missing"])
                 AppLog.error("Start blocked: ASR params missing")
-                appState.errorMessage = L10n.text(en: "Login parameters are missing. Please log in again.", zh: "登录参数缺失，请重新登录")
+                appState.errorMessage = Self.authExpiredMessage
                 appState.loginStatus = .notLoggedIn
+                setRecordingState(.idle)
+                overlayPanel.show()
                 webViewManager.showLoginWindow()
                 finishCurrentTrace(outcome: "blocked", metadata: ["reason": "asr_params_missing"])
                 resetToIdle(after: 1.5)
@@ -557,6 +565,9 @@ final class TranscriptionManager {
                 "active_providers": activeASRProviders.sorted().joined(separator: ",")
             ])
         }
+
+        setRecordingState(.starting)
+        overlayPanel.show()
 
         transcriptionTrace?.startSpan("audio.start_capture")
         usingCachedParams = true
@@ -972,7 +983,7 @@ final class TranscriptionManager {
         appState.transcript = ""
         appState.errorMessage = failedProvider == "web"
             ? Self.authExpiredMessage
-            : L10n.text(en: "Android recognition login expired and will be recreated on the next recording.", zh: "Android 识别登录信息失效，将在下次录音时重新创建")
+            : Self.recognitionFailedMessage
         logASRResultSummary(reason: "auth_failure")
         finishCurrentTrace(outcome: "failed", metadata: ["reason": "auth_expired"])
         resetToIdle(after: 1.5)
@@ -1248,7 +1259,7 @@ final class TranscriptionManager {
         guard activeSessionID == sessionID else { return }
         transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "failed"])
         AppLog.error("Audio capture failed error=\(error.localizedDescription)")
-        appState.errorMessage = L10n.text(en: "Microphone failed: \(error.localizedDescription)", zh: "麦克风失败：\(error.localizedDescription)")
+        appState.errorMessage = Self.microphoneFailedMessage
         finishCurrentTrace(outcome: "failed", metadata: [
             "reason": "audio_capture_failed",
             "error": error.localizedDescription

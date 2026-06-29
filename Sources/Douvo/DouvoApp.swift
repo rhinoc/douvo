@@ -212,6 +212,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        hotkeyManager?.setShortcutHandlingSuspended(true)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        hotkeyManager?.setShortcutHandlingSuspended(false)
+    }
+
     private func rebuildMenu() {
         guard let menu = statusItem.menu else { return }
         Self.rebuildStatusMenu(
