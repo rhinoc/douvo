@@ -144,6 +144,7 @@ enum PasteOutcome: Equatable {
 enum TextInsertionSettingsStore {
     private enum Key {
         static let copyResultWhenInsertionFails = "textInsertion.copyResultWhenInsertionFails"
+        static let checksFocusedTextInputBeforeRecording = "textInsertion.checksFocusedTextInputBeforeRecording"
     }
 
     static var copyResultWhenInsertionFails: Bool {
@@ -152,6 +153,18 @@ enum TextInsertionSettingsStore {
         }
         set {
             UserDefaults.standard.set(newValue, forKey: Key.copyResultWhenInsertionFails)
+        }
+    }
+
+    static var checksFocusedTextInputBeforeRecording: Bool {
+        get {
+            guard UserDefaults.standard.object(forKey: Key.checksFocusedTextInputBeforeRecording) != nil else {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: Key.checksFocusedTextInputBeforeRecording)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.checksFocusedTextInputBeforeRecording)
         }
     }
 }

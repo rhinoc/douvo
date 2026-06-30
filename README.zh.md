@@ -126,6 +126,7 @@ flowchart TD
 
 - Apple Silicon Mac。
 - macOS 14.0 或更新版本。
+- 受测试设备限制，目前 Douvo 只在 macOS Tahoe 26 + Apple Silicon M5 Pro Mac 上持续测试；其他配置可能有兼容性问题。
 
 ## 安装
 

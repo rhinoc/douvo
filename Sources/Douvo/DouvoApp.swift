@@ -95,6 +95,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let bundleURL = Bundle.main.bundleURL
         let resourceURL = Bundle.main.resourceURL
         let candidateURLs = [
+            resourceURL?.appendingPathComponent("MenuBarIcon.pdf"),
+            resourceURL?.appendingPathComponent("Douvo_Douvo.bundle/MenuBarIcon.pdf"),
+            bundleURL.deletingLastPathComponent().appendingPathComponent("Douvo_Douvo.bundle/MenuBarIcon.pdf"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Sources/Douvo/Resources/MenuBarIcon.pdf"),
             resourceURL?.appendingPathComponent("MenuBarIcon.svg"),
             resourceURL?.appendingPathComponent("Douvo_Douvo.bundle/MenuBarIcon.svg"),
             bundleURL.deletingLastPathComponent().appendingPathComponent("Douvo_Douvo.bundle/MenuBarIcon.svg"),
@@ -108,7 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             image.isTemplate = true
             return image
         }
-        return NSImage(systemSymbolName: "waveform", accessibilityDescription: "Douvo")!
+        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Douvo") {
+            image.isTemplate = true
+            return image
+        }
+        return NSImage(size: NSSize(width: 18, height: 18))
     }
 
     private func setupOverlay() {

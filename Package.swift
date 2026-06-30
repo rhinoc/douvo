@@ -35,6 +35,7 @@ let package = Package(
                 "Info.plist"
             ],
             resources: [
+                .process("Resources/MenuBarIcon.pdf"),
                 .process("Resources/MenuBarIcon.svg"),
                 .process("Resources/ASRDemo.aiff"),
                 .copy("Resources/mlx-swift_Cmlx.bundle")

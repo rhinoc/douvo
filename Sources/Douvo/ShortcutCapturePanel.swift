@@ -415,6 +415,7 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var selectedASRProvider: ASRProvider
     @Published var selectedLanguage: AppLanguage
     @Published var copyResultWhenInsertionFails = TextInsertionSettingsStore.copyResultWhenInsertionFails
+    @Published var checksFocusedTextInputBeforeRecording = TextInsertionSettingsStore.checksFocusedTextInputBeforeRecording
     @Published var launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
     @Published var overlayShowsCancelControl = OverlayAppearanceStore.showsCancelControl
     @Published var overlayShowsSubmitControl = OverlayAppearanceStore.showsSubmitControl
@@ -566,6 +567,15 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
+    var fallbackIconName: String {
+        switch self {
+        case .features:
+            return "square.grid.2x2"
+        default:
+            return iconName
+        }
+    }
+
     var iconTint: Color {
         switch self {
         case .general:
@@ -616,6 +626,25 @@ private struct SettingsToast: Identifiable, Equatable {
     let id = UUID()
     let message: String
     let kind: SettingsToastKind
+}
+
+private struct CompatibleSystemImage: View {
+    let systemName: String
+    let fallbackSystemName: String
+
+    var body: some View {
+        Image(nsImage: resolvedImage)
+    }
+
+    private var resolvedImage: NSImage {
+        for name in [systemName, fallbackSystemName] {
+            if let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+                image.isTemplate = true
+                return image
+            }
+        }
+        return NSImage()
+    }
 }
 
 private struct SettingsToastView: View {
@@ -773,7 +802,7 @@ private struct SettingsPanelView: View {
             selectedTab = tab
         } label: {
             VStack(spacing: 5) {
-                Image(systemName: tab.iconName)
+                CompatibleSystemImage(systemName: tab.iconName, fallbackSystemName: tab.fallbackIconName)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(tabIconColor(for: tab))
                     .frame(width: 20, height: 18, alignment: .center)
@@ -1174,6 +1203,16 @@ private struct SettingsPanelView: View {
         )
     }
 
+    private var checksFocusedTextInputBeforeRecordingBinding: Binding<Bool> {
+        Binding(
+            get: { model.checksFocusedTextInputBeforeRecording },
+            set: { newValue in
+                model.checksFocusedTextInputBeforeRecording = newValue
+                TextInsertionSettingsStore.checksFocusedTextInputBeforeRecording = newValue
+            }
+        )
+    }
+
     private var overlayShowsCancelControlBinding: Binding<Bool> {
         Binding(
             get: { model.overlayShowsCancelControl },
@@ -1525,6 +1564,20 @@ private struct SettingsPanelView: View {
                 settingsTitle(L10n.text(en: "Insertion", zh: "插入"))
 
                 settingsSection {
+                    correctionListRow(
+                        L10n.text(en: "Input Check", zh: "输入框检查"),
+                        labelWidth: 160,
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: checksFocusedTextInputBeforeRecordingBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .help(L10n.text(en: "Check whether the focused element can accept text before recording starts.", zh: "录音开始前检查当前焦点是否可输入文字。"))
+                    }
+
+                    settingsDivider()
+
                     correctionListRow(
                         L10n.text(en: "Copy on Failure", zh: "失败时复制"),
                         labelWidth: 160,

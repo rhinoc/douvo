@@ -11,13 +11,13 @@ private enum OverlayMetrics {
 }
 
 private enum OverlayAnimation {
-    static let fadeInDuration: TimeInterval = 0.14
+    static let fadeInDuration: TimeInterval = 0.1
     static let fadeOutDuration: TimeInterval = 0.12
     static let contentFadeDuration: TimeInterval = 0.14
     static let reducedFadeInDuration: TimeInterval = 0.06
     static let reducedFadeOutDuration: TimeInterval = 0.05
     static let reducedContentFadeDuration: TimeInterval = 0.06
-    static let surfaceSettleDuration: TimeInterval = 0.28
+    static let surfaceDuration: TimeInterval = 0.18
 }
 
 private enum OverlaySurfaceStyle {
@@ -77,8 +77,14 @@ private extension OverlayAppearanceStore.AnimationIntensity {
 }
 
 @MainActor
+private final class OverlayVisibilityState: ObservableObject {
+    @Published var isDismissing = false
+}
+
+@MainActor
 final class OverlayPanel {
     private let appState: AppState
+    private let visibilityState = OverlayVisibilityState()
     private var panel: NSPanel?
     private var animationGeneration = 0
 
@@ -87,8 +93,10 @@ final class OverlayPanel {
     }
 
     func show() {
+        visibilityState.isDismissing = false
+
         if panel == nil {
-            let view = OverlayView(appState: appState)
+            let view = OverlayView(appState: appState, visibilityState: visibilityState)
                 .environment(\.colorScheme, .dark)
             let hosting = NSHostingView(rootView: view)
             hosting.appearance = NSAppearance(named: .darkAqua)
@@ -113,6 +121,7 @@ final class OverlayPanel {
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hasShadow = false
+            panel.animationBehavior = .none
             panel.ignoresMouseEvents = false
             self.panel = panel
         }
@@ -134,7 +143,7 @@ final class OverlayPanel {
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animationIntensity.panelFadeInDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
     }
@@ -147,18 +156,21 @@ final class OverlayPanel {
         guard shouldAnimate else {
             panel.orderOut(nil)
             panel.alphaValue = 1
+            visibilityState.isDismissing = false
             return
         }
 
+        visibilityState.isDismissing = true
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animationIntensity.panelFadeOutDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self, weak panel] in
             Task { @MainActor in
                 guard let self, let panel, self.panel === panel, self.animationGeneration == generation else { return }
                 panel.orderOut(nil)
                 panel.alphaValue = 1
+                self.visibilityState.isDismissing = false
             }
         }
     }
@@ -185,6 +197,7 @@ final class OverlayPanel {
 
 private struct OverlayView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject var visibilityState: OverlayVisibilityState
     @AppStorage(OverlayAppearanceStore.showCancelControlKey) private var showCancelControl = true
     @AppStorage(OverlayAppearanceStore.showSubmitControlKey) private var showSubmitControl = true
     @AppStorage(OverlayAppearanceStore.showBorderLightKey) private var showBorderLight = true
@@ -198,8 +211,9 @@ private struct OverlayView: View {
     @State private var pillContentGeneration = 0
     @State private var surfacePhase: OverlaySurfacePhase
 
-    init(appState: AppState) {
+    init(appState: AppState, visibilityState: OverlayVisibilityState) {
         self.appState = appState
+        self.visibilityState = visibilityState
         let usesCompactLoadingSurface = Self.usesCompactLoadingSurface(
             for: appState.recordingState,
             animationIntensity: Self.initialAnimationIntensity
@@ -266,6 +280,16 @@ private struct OverlayView: View {
             scheduleSpinnerVisibility(for: newValue)
             schedulePillContentVisibility(isLoading: newValue == .starting || newValue == .stopping)
         }
+        .onChange(of: appState.errorMessage) {
+            updateSurfacePhase(for: appState.recordingState)
+        }
+        .onChange(of: appState.transcript) {
+            updateSurfacePhase(for: appState.recordingState)
+        }
+        .onChange(of: visibilityState.isDismissing) { _, isDismissing in
+            guard !isDismissing else { return }
+            updateSurfacePhase(for: appState.recordingState)
+        }
         .onChange(of: overlaySizeRawValue) {
             appState.resetAudioLevels()
         }
@@ -306,68 +330,9 @@ private struct OverlayView: View {
                     spinnerOrPlaceholder(accessibilityLabel: loadingAccessibilityLabel)
                         .frame(width: overlaySurfaceWidth, height: overlaySurfaceHeight)
                         .transition(.opacity)
-                } else if isLoading {
-                    expandedLoadingContent
-                        .transition(.opacity)
-                } else if showPillContent {
-                    HStack(spacing: overlayControlGap) {
-                        if showCancelControl {
-                            Button(action: { appState.onCancelTapped?() }) {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: overlayControlIconSize + 1, weight: .bold))
-                                    .foregroundColor(Color.white.opacity(0.76))
-                                    .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .help(L10n.text(en: "Cancel (Esc)", zh: "取消 (Esc)"))
-                        }
-
-                        WaveformView(
-                            levels: appState.audioLevels,
-                            isActive: appState.recordingState == .recording,
-                            style: waveformStyle,
-                            barWidth: overlaySize.waveformBarWidth,
-                            maxHeight: overlayWaveformHeight,
-                            animatesMotion: systemAllowsMotion
-                        )
-                            .frame(width: overlayWaveformWidth)
-
-                        if showSubmitControl {
-                            Button(action: { appState.onSubmitTapped?() }) {
-                                Group {
-                                    if allowsMotionAnimation {
-                                        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                                            OverlayIconCircle(
-                                                systemName: submitButtonSystemName,
-                                                iconSize: submitButtonIconSize,
-                                                iconWeight: .bold,
-                                                isPrimary: true,
-                                                sheenAngle: borderLightAngle(at: timeline.date),
-                                                diameter: overlayControlButtonSize,
-                                                tint: overlayTint
-                                            )
-                                        }
-                                    } else {
-                                        OverlayIconCircle(
-                                            systemName: submitButtonSystemName,
-                                            iconSize: submitButtonIconSize,
-                                            iconWeight: .bold,
-                                            isPrimary: true,
-                                            sheenAngle: .degrees(70),
-                                            diameter: overlayControlButtonSize,
-                                            tint: overlayTint
-                                        )
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .help(L10n.text(en: "Submit (Enter)", zh: "提交 (Enter)"))
-                        }
-                    }
-                    .padding(.horizontal, overlayHorizontalPadding)
-                    .frame(width: overlaySurfaceWidth, height: overlaySurfaceHeight)
-                    .transition(.opacity)
+                } else if isLoading || showPillContent {
+                    expandedPillContent
+                        .transition(expandedContentTransition)
                 } else {
                     Color.clear
                         .frame(width: overlaySurfaceWidth, height: overlaySurfaceHeight)
@@ -376,7 +341,7 @@ private struct OverlayView: View {
 
             if showBorderLight {
                 Group {
-                    if allowsBorderLightAnimation {
+                    if allowsAmbientMotion {
                         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                             BorderFlowLightView(angle: borderLightAngle(at: timeline.date), tint: overlayTint)
                         }
@@ -402,26 +367,76 @@ private struct OverlayView: View {
         .animation(contentFadeAnimation, value: overlaySurfaceOpacity)
     }
 
-    private var expandedLoadingContent: some View {
+    private var expandedPillContent: some View {
         HStack(spacing: overlayControlGap) {
             if showCancelControl {
-                Color.clear
-                    .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
+                Group {
+                    if isLoading {
+                        Color.clear
+                    } else {
+                        Button(action: { appState.onCancelTapped?() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: overlayControlIconSize + 1, weight: .bold))
+                                .foregroundColor(Color.white.opacity(0.76))
+                                .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text(en: "Cancel (Esc)", zh: "取消 (Esc)"))
+                    }
+                }
+                .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
             }
 
             WaveformView(
-                levels: silentWaveformLevels,
-                isActive: false,
+                levels: isLoading ? silentWaveformLevels : appState.audioLevels,
+                isActive: appState.recordingState == .recording,
                 style: waveformStyle,
                 barWidth: overlaySize.waveformBarWidth,
                 maxHeight: overlayWaveformHeight,
-                animatesMotion: systemAllowsMotion
+                animatesMotion: allowsMotionAnimation
             )
                 .frame(width: overlayWaveformWidth)
 
             if showSubmitControl {
-                spinnerOrPlaceholder(accessibilityLabel: loadingAccessibilityLabel)
-                    .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
+                Group {
+                    if isLoading {
+                        spinnerOrPlaceholder(accessibilityLabel: loadingAccessibilityLabel)
+                    } else {
+                        Button(action: { appState.onSubmitTapped?() }) {
+                            Group {
+                                if allowsAmbientMotion {
+                                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                                        OverlayIconCircle(
+                                            systemName: submitButtonSystemName,
+                                            fallbackSystemName: submitButtonFallbackSystemName,
+                                            iconSize: submitButtonIconSize,
+                                            iconWeight: .bold,
+                                            isPrimary: true,
+                                            sheenAngle: borderLightAngle(at: timeline.date),
+                                            diameter: overlayControlButtonSize,
+                                            tint: overlayTint
+                                        )
+                                    }
+                                } else {
+                                    OverlayIconCircle(
+                                        systemName: submitButtonSystemName,
+                                        fallbackSystemName: submitButtonFallbackSystemName,
+                                        iconSize: submitButtonIconSize,
+                                        iconWeight: .bold,
+                                        isPrimary: true,
+                                        sheenAngle: .degrees(70),
+                                        diameter: overlayControlButtonSize,
+                                        tint: overlayTint
+                                    )
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text(en: "Submit (Enter)", zh: "提交 (Enter)"))
+                    }
+                }
+                .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
             }
         }
         .padding(.horizontal, overlayHorizontalPadding)
@@ -435,13 +450,15 @@ private struct OverlayView: View {
                 accessibilityLabel: accessibilityLabel,
                 showsLightEffect: showBorderLight,
                 tint: overlayTint,
-                animatesMotion: systemAllowsMotion
+                diameter: loadingIndicatorDiameter,
+                lineWidth: loadingIndicatorLineWidth,
+                animatesMotion: allowsAmbientMotion
             )
-                .frame(width: 20, height: 20)
+                .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
                 .transition(.opacity)
         } else {
             Color.clear
-                .frame(width: 20, height: 20)
+                .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
         }
     }
 
@@ -480,7 +497,7 @@ private struct OverlayView: View {
         animationIntensity.allowsMotionAnimation
     }
 
-    private var allowsBorderLightAnimation: Bool {
+    private var allowsAmbientMotion: Bool {
         selectedAnimationIntensity != .none && systemAllowsMotion
     }
 
@@ -559,6 +576,14 @@ private struct OverlayView: View {
         max(10, overlayControlButtonSize - 12)
     }
 
+    private var loadingIndicatorDiameter: CGFloat {
+        max(14, overlayControlButtonSize - 6)
+    }
+
+    private var loadingIndicatorLineWidth: CGFloat {
+        max(1, (loadingIndicatorDiameter / 9).rounded(.toNearestOrAwayFromZero))
+    }
+
     private var overlayControlGap: CGFloat {
         overlaySize.controlGap
     }
@@ -593,6 +618,15 @@ private struct OverlayView: View {
             "character.cursor.ibeam"
         case .translation:
             "translate"
+        }
+    }
+
+    private var submitButtonFallbackSystemName: String {
+        switch appState.overlayMode {
+        case .translation:
+            "globe"
+        default:
+            submitButtonSystemName
         }
     }
 
@@ -652,7 +686,10 @@ private struct OverlayView: View {
         if usesCompactLoadingSurface(for: state) {
             surfacePhase = .loading
             showPillContent = false
-        } else if state == .idle, surfacePhase == .loading, appState.errorMessage?.isEmpty != false {
+        } else if state == .idle, !hasMessage {
+            if !visibilityState.isDismissing {
+                surfacePhase = .loading
+            }
             showPillContent = false
         } else {
             surfacePhase = .expanded
@@ -671,7 +708,7 @@ private struct OverlayView: View {
             return
         }
 
-        let delay = allowsMotionAnimation ? OverlayAnimation.surfaceSettleDuration : 0
+        let delay = allowsMotionAnimation ? OverlayAnimation.surfaceDuration : 0
         guard delay > 0 else {
             withAnimation(contentFadeAnimation) {
                 showPillContent = true
@@ -711,28 +748,33 @@ private struct OverlayView: View {
     }
 
     private var shouldShowPill: Bool {
-        appState.recordingState != .idle
+        appState.recordingState != .idle || (visibilityState.isDismissing && !isMessageOnly)
     }
 
     private var contentFadeAnimation: Animation? {
         guard let duration = animationIntensity.contentFadeDuration else { return nil }
-        return .easeInOut(duration: duration)
+        return .easeOut(duration: duration)
     }
 
     private var surfaceAnimation: Animation? {
         allowsMotionAnimation
-            ? .spring(response: 0.28, dampingFraction: 0.86)
+            ? .timingCurve(0.16, 0.84, 0.24, 1, duration: OverlayAnimation.surfaceDuration)
             : nil
+    }
+
+    private var expandedContentTransition: AnyTransition {
+        allowsMotionAnimation ? .opacity : .identity
     }
 
     private var spinnerAppearanceAnimation: Animation? {
         guard let duration = animationIntensity.contentFadeDuration else { return nil }
-        return .easeInOut(duration: min(0.08, duration))
+        return .easeOut(duration: min(0.08, duration))
     }
 }
 
 private struct OverlayIconCircle: View {
     let systemName: String
+    var fallbackSystemName: String?
     let iconSize: CGFloat
     let iconWeight: Font.Weight
     var isPrimary = false
@@ -764,12 +806,23 @@ private struct OverlayIconCircle: View {
                     .blendMode(.screen)
             }
 
-            Image(systemName: systemName)
+            Image(nsImage: resolvedImage)
                 .font(.system(size: iconSize, weight: iconWeight))
                 .foregroundColor(Color.white.opacity(isPrimary ? 0.96 : 0.82))
         }
         .frame(width: diameter, height: diameter)
         .contentShape(Circle())
+    }
+
+    private var resolvedImage: NSImage {
+        let names = [systemName, fallbackSystemName].compactMap { $0 }
+        for name in names {
+            if let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+                image.isTemplate = true
+                return image
+            }
+        }
+        return NSImage()
     }
 }
 
@@ -857,6 +910,8 @@ private struct ProcessingIndicatorView: View {
     let accessibilityLabel: String
     let showsLightEffect: Bool
     let tint: Color
+    let diameter: CGFloat
+    let lineWidth: CGFloat
     let animatesMotion: Bool
     @State private var rotation: Double = 0
     @State private var pulse = false
@@ -873,9 +928,10 @@ private struct ProcessingIndicatorView: View {
 
             Circle()
                 .trim(from: 0, to: showsLightEffect ? 0.68 : 0.58)
-                .stroke(spinnerStroke, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                .stroke(spinnerStroke, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(rotation))
         }
+        .frame(width: diameter, height: diameter)
         .accessibilityLabel(accessibilityLabel)
         .onAppear {
             updateAnimation()

@@ -10,7 +10,8 @@ enum SelectedTextReadResult: Equatable {
 
 enum SelectedTextReader {
     static let maxSelectionCharacters = 500
-    private static let copyFallbackDelay: TimeInterval = 0.08
+    private static let copyFallbackMaxDelay: TimeInterval = 0.04
+    private static let copyFallbackPollInterval: TimeInterval = 0.005
 
     static func currentSelection(maxCharacters: Int = maxSelectionCharacters) -> SelectedTextReadResult {
         let axTrusted = AXIsProcessTrusted()
@@ -38,6 +39,12 @@ enum SelectedTextReader {
         let subrole = attributeString(kAXSubroleAttribute, in: focusedElement) ?? "unknown"
         let selectedResult = selectedText(in: focusedElement)
         guard selectedResult.axError == .success else {
+            if selectedTextRangeLength(in: focusedElement) == 0 {
+                AppLog.info(
+                    "Selection edit read result=none reason=empty_selected_range selectedAX=\(selectedResult.axErrorDescription) role=\(logValue(role)) subrole=\(logValue(subrole))"
+                )
+                return .none
+            }
             AppLog.info(
                 "Selection edit read result=none reason=selected_text_unavailable selectedAX=\(selectedResult.axErrorDescription) role=\(logValue(role)) subrole=\(logValue(subrole))"
             )
@@ -47,6 +54,12 @@ enum SelectedTextReader {
         let result = validate(selectedResult.text, maxCharacters: maxCharacters)
         switch result {
         case .none:
+            if selectedTextRangeLength(in: focusedElement) == 0 {
+                AppLog.info(
+                    "Selection edit read result=none reason=empty_selected_range role=\(logValue(role)) subrole=\(logValue(subrole))"
+                )
+                return .none
+            }
             AppLog.info(
                 "Selection edit read result=none reason=empty_selected_text role=\(logValue(role)) subrole=\(logValue(subrole))"
             )
@@ -110,7 +123,10 @@ enum SelectedTextReader {
         )
 
         postCommandC()
-        RunLoop.current.run(until: Date().addingTimeInterval(copyFallbackDelay))
+        let deadline = Date().addingTimeInterval(copyFallbackMaxDelay)
+        while pasteboard.changeCount == snapshot.changeCount, Date() < deadline {
+            RunLoop.current.run(until: min(Date().addingTimeInterval(copyFallbackPollInterval), deadline))
+        }
 
         let copiedChangeCount = pasteboard.changeCount
         guard copiedChangeCount != snapshot.changeCount else {
@@ -216,6 +232,26 @@ enum SelectedTextReader {
             return SelectedTextResult(text: nil, axError: result)
         }
         return SelectedTextResult(text: selectedValue as? String, axError: result)
+    }
+
+    private static func selectedTextRangeLength(in element: AXUIElement) -> Int? {
+        var rangeValue: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeValue
+        )
+        guard result == .success,
+              let rangeValue,
+              CFGetTypeID(rangeValue) == AXValueGetTypeID() else {
+            return nil
+        }
+
+        let axValue = rangeValue as! AXValue
+        guard AXValueGetType(axValue) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range) else { return nil }
+        return range.length
     }
 
     private static func attributeString(_ attribute: String, in element: AXUIElement) -> String? {

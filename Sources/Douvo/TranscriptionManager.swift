@@ -108,14 +108,18 @@ final class TranscriptionManager {
     func start() {
         AppLog.info("Transcription hotkey handler installing")
         hotkeyManager.onHotkeyEvent = { [weak self] event in
+            let receivedAt = ProcessInfo.processInfo.systemUptime
+            AppLog.info("Hotkey event received event=\(event)")
             guard let self else {
                 AppLog.error("Hotkey event dropped: TranscriptionManager released event=\(event)")
                 return
             }
             if Thread.isMainThread {
+                AppLog.info("Hotkey event handling on main event=\(event)")
                 self.handleHotkeyEvent(event)
             } else {
                 DispatchQueue.main.async { [self] in
+                    AppLog.info("Hotkey event dispatched to main event=\(event) dispatch_ms=\(Self.milliseconds(since: receivedAt))")
                     self.handleHotkeyEvent(event)
                 }
             }
@@ -454,6 +458,7 @@ final class TranscriptionManager {
     }
 
     private func startRecording() {
+        let startupStartedAt = ProcessInfo.processInfo.systemUptime
         let provider = ASRProviderStore.selected
         AppLog.info("Start recording requested provider=\(provider.rawValue) loginStatus=\(appState.loginStatus)")
         if transcriptionTrace != nil {
@@ -483,15 +488,30 @@ final class TranscriptionManager {
         appState.errorMessage = nil
         appState.resetAudioLevels()
 
-        let inputFocus = TextInputFocusCheck.capture()
-        transcriptionTrace?.event("input_focus.checked", metadata: inputFocus.traceMetadata)
-        guard inputFocus.isTextInput else {
-            blockStartForMissingTextInput(inputFocus)
-            return
+        setRecordingState(.starting)
+        AppLog.info("Recording startup stage=before_overlay_show total_ms=\(Self.milliseconds(since: startupStartedAt))")
+        overlayPanel.show()
+        AppLog.info("Recording startup stage=after_overlay_show show_ms=\(Self.milliseconds(since: startupStartedAt))")
+
+        if TextInsertionSettingsStore.checksFocusedTextInputBeforeRecording {
+            let focusStartedAt = ProcessInfo.processInfo.systemUptime
+            let inputFocus = TextInputFocusCheck.capture()
+            AppLog.info("Recording startup stage=focus_check ms=\(Self.milliseconds(since: focusStartedAt)) total_ms=\(Self.milliseconds(since: startupStartedAt))")
+            transcriptionTrace?.event("input_focus.checked", metadata: inputFocus.traceMetadata)
+            guard inputFocus.isTextInput else {
+                AppLog.info("Recording startup blocked stage=focus_check total_ms=\(Self.milliseconds(since: startupStartedAt))")
+                blockStartForMissingTextInput(inputFocus)
+                return
+            }
+        } else {
+            AppLog.info("Recording startup stage=focus_check result=skipped reason=disabled total_ms=\(Self.milliseconds(since: startupStartedAt))")
+            transcriptionTrace?.event("input_focus.skipped", metadata: ["reason": "disabled"])
         }
 
         if LocalLLMSettingsStore.selectionEditingEnabled {
+            let selectionStartedAt = ProcessInfo.processInfo.systemUptime
             let selectionPreparation = prepareSelectionEditingTarget()
+            AppLog.info("Recording startup stage=selection_edit_read result=\(Self.selectionReadResultName(selectionPreparation)) ms=\(Self.milliseconds(since: selectionStartedAt)) total_ms=\(Self.milliseconds(since: startupStartedAt))")
             if selectionPreparation == .tooLong {
                 AppLog.info("Start blocked: selected text too long")
                 appState.errorMessage = Self.selectionTooLongMessage
@@ -511,6 +531,8 @@ final class TranscriptionManager {
                 transcriptionTrace?.set("selection_edit.enabled", true)
                 transcriptionTrace?.set("selection_edit.selected_chars", selectedText.count)
             }
+        } else {
+            AppLog.info("Recording startup stage=selection_edit_read result=skipped reason=disabled total_ms=\(Self.milliseconds(since: startupStartedAt))")
         }
 
         var webParams: DoubaoASRParams?
@@ -537,7 +559,9 @@ final class TranscriptionManager {
             }
 
             transcriptionTrace?.startSpan("asr.load_params")
+            let loadParamsStartedAt = ProcessInfo.processInfo.systemUptime
             guard let params = ASRParamsStore.load() else {
+                AppLog.info("Recording startup stage=asr_load_params result=missing ms=\(Self.milliseconds(since: loadParamsStartedAt)) total_ms=\(Self.milliseconds(since: startupStartedAt))")
                 transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "missing"])
                 AppLog.error("Start blocked: ASR params missing")
                 appState.errorMessage = Self.authExpiredMessage
@@ -549,6 +573,7 @@ final class TranscriptionManager {
                 resetToIdle(after: 1.5)
                 return
             }
+            AppLog.info("Recording startup stage=asr_load_params result=loaded ms=\(Self.milliseconds(since: loadParamsStartedAt)) total_ms=\(Self.milliseconds(since: startupStartedAt))")
             webParams = params
             transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "loaded"])
             AppLog.info("Connecting Web ASR params cookieCount=\(params.cookies.count) deviceIdSet=\(!params.deviceId.isEmpty) webIdSet=\(!params.webId.isEmpty)")
@@ -565,9 +590,6 @@ final class TranscriptionManager {
                 "active_providers": activeASRProviders.sorted().joined(separator: ",")
             ])
         }
-
-        setRecordingState(.starting)
-        overlayPanel.show()
 
         transcriptionTrace?.startSpan("audio.start_capture")
         usingCachedParams = true
@@ -1030,6 +1052,7 @@ final class TranscriptionManager {
 
     private func resetToIdleNow() {
         AppLog.info("Reset to idle now")
+        overlayPanel.hide()
         awaitingFinalResult = false
         cancelActiveSession()
         selectionEditTarget = nil
@@ -1037,7 +1060,6 @@ final class TranscriptionManager {
         holdRecordingStartedAt = nil
         appState.overlayMode = .dictation
         setRecordingState(.idle)
-        overlayPanel.hide()
         appState.errorMessage = nil
         appState.transcript = ""
         appState.resetAudioLevels()
@@ -1080,6 +1102,21 @@ final class TranscriptionManager {
     ) {
         transcriptionTrace?.finish(outcome: outcome, metadata: metadata)
         transcriptionTrace = nil
+    }
+
+    private static func milliseconds(since start: TimeInterval) -> Int {
+        Int(((ProcessInfo.processInfo.systemUptime - start) * 1000).rounded())
+    }
+
+    private static func selectionReadResultName(_ result: SelectedTextReadResult) -> String {
+        switch result {
+        case .none:
+            "none"
+        case .text:
+            "text"
+        case .tooLong:
+            "too_long"
+        }
     }
 
     private func recordASRResultProgress(
