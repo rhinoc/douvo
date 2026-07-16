@@ -126,7 +126,7 @@ actor TranscriptionSession {
         }
     }
 
-    func start(webParams: DoubaoASRParams?) async throws {
+    func start(webParams: DoubaoASRParams?, androidContext: String = "") async throws {
         audioStartTask?.cancel()
         audioStartTask = nil
 
@@ -160,7 +160,7 @@ actor TranscriptionSession {
                 throw NSError(domain: "Douvo.ASR", code: 11, userInfo: [NSLocalizedDescriptionKey: "Android recognition client is unavailable"])
             }
             let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
-            androidASRClient.connect(credentials: credentials)
+            androidASRClient.connect(credentials: credentials, context: androidContext)
             let audioCapture = self.audioCapture
             let weakSelf = WeakRef(self)
             audioStartTask = Task.detached {
@@ -193,7 +193,7 @@ actor TranscriptionSession {
             }
             webASRClient.connect(params: webParams)
             if let androidCredentials {
-                androidASRClient.connect(credentials: androidCredentials)
+                androidASRClient.connect(credentials: androidCredentials, context: androidContext)
             }
             let weakSelf = WeakRef(self)
             let audioCapture = self.audioCapture

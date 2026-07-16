@@ -80,6 +80,7 @@ final class TranscriptionManager {
     private var finishedASRProviders = Set<String>()
     private var selectionEditTarget: String?
     private var translationSessionActive = false
+    private var activeContextSnapshot = DictationContextSnapshot.empty
     private var holdRecordingStartedAt: TimeInterval?
     private static let maxASRResultSummarySamples = 12
     private let minimumHoldRecordingDuration: TimeInterval = 0.45
@@ -460,6 +461,12 @@ final class TranscriptionManager {
     private func startRecording() {
         let startupStartedAt = ProcessInfo.processInfo.systemUptime
         let provider = ASRProviderStore.selected
+        // Capture app/window context before Douvo shows its recording overlay.
+        let shouldCaptureContext = LocalLLMPostProcessor.isCorrectionEnabled
+            || (provider.usesAndroidASR && AndroidASRSettingsStore.sendContext)
+        let environmentContext = shouldCaptureContext ? PromptEnvironmentContext.current() : ""
+        let includeRecentDictationContext = shouldCaptureContext
+            && LocalLLMSettingsStore.includeRecentDictationContext
         AppLog.info("Start recording requested provider=\(provider.rawValue) loginStatus=\(appState.loginStatus)")
         if transcriptionTrace != nil {
             finishCurrentTrace(outcome: "superseded", metadata: ["reason": "new_recording_started"])
@@ -483,6 +490,7 @@ final class TranscriptionManager {
         isHandlingConnectionError = false
         selectionEditTarget = nil
         translationSessionActive = false
+        activeContextSnapshot = .empty
         appState.overlayMode = .dictation
         appState.transcript = ""
         appState.errorMessage = nil
@@ -604,12 +612,36 @@ final class TranscriptionManager {
         scheduleStartTimeout(sessionID: sessionID)
         sessionStartTask?.cancel()
         sessionStartTask = Task { [weak self, session] in
+            guard let self else { return }
             do {
-                try await session.start(webParams: webParams)
+                let recentDictationContext = includeRecentDictationContext
+                    ? await RecentDictationContext.shared.fetchContext()
+                    : ""
+                try Task.checkCancellation()
+                guard self.activeSessionID == sessionID else { return }
+
+                let contextSnapshot = DictationContextSnapshot(
+                    environmentContext: environmentContext,
+                    recentDictationContext: recentDictationContext
+                )
+                self.activeContextSnapshot = contextSnapshot
+                let androidContext = AndroidASRContextBuilder.make(
+                    snapshot: contextSnapshot,
+                    vocabulary: LocalLLMSettingsStore.vocabulary,
+                    includeContext: provider.usesAndroidASR && AndroidASRSettingsStore.sendContext,
+                    includeVocabularyHints: provider.usesAndroidASR && AndroidASRSettingsStore.sendVocabularyHints
+                )
+                self.transcriptionTrace?.set("asr.android.context_payload_enabled", !androidContext.isEmpty)
+                self.transcriptionTrace?.set("asr.android.shared_context_chars", contextSnapshot.androidText.count)
+                self.transcriptionTrace?.set(
+                    "asr.android.vocabulary_hints_enabled",
+                    provider.usesAndroidASR && AndroidASRSettingsStore.sendVocabularyHints
+                )
+                try await session.start(webParams: webParams, androidContext: androidContext)
             } catch {
                 AppLog.error("Session start failed: \(error)")
                 await MainActor.run {
-                    self?.handleAudioStartFailure(error, sessionID: sessionID)
+                    self.handleAudioStartFailure(error, sessionID: sessionID)
                 }
             }
         }
@@ -746,11 +778,15 @@ final class TranscriptionManager {
             completionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 let finalText: String
+                var correctionOutcome: String = ""
                 do {
+                    let promptConfig = (
+                        correctionRequest.promptConfiguration ?? LocalLLMPromptConfiguration.current
+                    ).withContextSnapshot(self.activeContextSnapshot)
                     let result = try await CorrectionPostProcessor.shared.correctedTextWithTrace(
                         for: correctionRequest.promptText,
                         requiresEnabled: true,
-                        promptConfiguration: correctionRequest.promptConfiguration,
+                        promptConfiguration: promptConfig,
                         generationProfile: correctionRequest.generationProfile,
                         fallbackText: correctionRequest.fallbackText
                     )
@@ -759,6 +795,7 @@ final class TranscriptionManager {
                         self.transcriptionTrace?.set("correction.\(key)", value)
                     }
                     finalText = result.text
+                    correctionOutcome = result.metadata["outcome"] ?? ""
                 } catch {
                     self.transcriptionTrace?.event("correction.failed", metadata: ["error": error.localizedDescription])
                     AppLog.error("Local LLM postprocess failed; using raw text error=\(error.localizedDescription)")
@@ -766,6 +803,10 @@ final class TranscriptionManager {
                 }
 
                 guard !Task.isCancelled, self.isCompletingTranscription else { return }
+                // Record successful dictation for future context (after cancellation check)
+                if correctionOutcome == "corrected" || correctionOutcome == "unchanged" {
+                    await RecentDictationContext.shared.record(finalText)
+                }
                 self.finishTranscription(with: finalText)
             }
         }
@@ -1360,7 +1401,8 @@ final class TranscriptionManager {
             environmentContext: current.environmentContext,
             userIdentity: current.userIdentity,
             selectedText: current.selectedText,
-            translationLanguage: current.translationLanguage
+            translationLanguage: current.translationLanguage,
+            recentDictationContext: current.recentDictationContext
         )
     }
 
@@ -1379,7 +1421,8 @@ final class TranscriptionManager {
             environmentContext: current.environmentContext,
             userIdentity: current.userIdentity,
             selectedText: selectedText,
-            translationLanguage: ""
+            translationLanguage: "",
+            recentDictationContext: current.recentDictationContext
         )
     }
 
@@ -1398,7 +1441,8 @@ final class TranscriptionManager {
             environmentContext: current.environmentContext,
             userIdentity: current.userIdentity,
             selectedText: "",
-            translationLanguage: targetLanguage
+            translationLanguage: targetLanguage,
+            recentDictationContext: current.recentDictationContext
         )
     }
 
@@ -1428,7 +1472,8 @@ final class TranscriptionManager {
             environmentContext: current.environmentContext,
             userIdentity: current.userIdentity,
             selectedText: current.selectedText,
-            translationLanguage: current.translationLanguage
+            translationLanguage: current.translationLanguage,
+            recentDictationContext: current.recentDictationContext
         )
     }
 

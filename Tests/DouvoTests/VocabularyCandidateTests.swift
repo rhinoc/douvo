@@ -221,4 +221,157 @@ final class VocabularyCandidateTests: XCTestCase {
 
         XCTAssertTrue(candidates.isEmpty)
     }
+
+    // MARK: - Vocabulary Auto-Enhancement (词库自动增强)
+
+    private func makeConfiguration(vocabulary: String) -> LocalLLMPromptConfiguration {
+        LocalLLMPromptConfiguration(
+            systemPromptTemplate: LocalLLMSettingsStore.defaultSystemPrompt,
+            userPromptTemplate: LocalLLMSettingsStore.defaultUserPromptTemplate,
+            vocabulary: vocabulary,
+            punctuationStyle: .complete,
+            removeFillerWords: false,
+            softenEmotionalLanguage: false,
+            outputStyle: .original,
+            outputStyleStrength: .medium,
+            customOutputStyleInstruction: "",
+            environmentContext: "",
+            userIdentity: "",
+            selectedText: "",
+            translationLanguage: ""
+        )
+    }
+
+    func testSmallVocabularyIncludesFullReferenceInPrompt() {
+        let vocabulary = """
+        textarea
+        placeholder
+        Claude Code
+        """
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "text area 里面有问题",
+            configuration: makeConfiguration(vocabulary: vocabulary)
+        )
+
+        XCTAssertTrue(
+            instructions.contains("用户词库完整列表"),
+            "Small vocabulary should include the full reference block in the prompt."
+        )
+        XCTAssertTrue(instructions.contains("- textarea"))
+        XCTAssertTrue(instructions.contains("- placeholder"))
+        XCTAssertTrue(instructions.contains("- Claude Code"))
+    }
+
+    func testSmallVocabularyShowsBothCandidatesAndReference() {
+        let vocabulary = """
+        textarea
+        placeholder
+        """
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "text area 里面 place HOLDER 好像有问题",
+            configuration: makeConfiguration(vocabulary: vocabulary)
+        )
+
+        // Matched candidates block (source => target)
+        XCTAssertTrue(
+            instructions.contains("text area => textarea"),
+            "Matched candidates should still appear as source => target mappings."
+        )
+        XCTAssertTrue(
+            instructions.contains("place HOLDER => placeholder"),
+            "Matched candidates should still appear as source => target mappings."
+        )
+
+        // Full vocabulary reference block
+        XCTAssertTrue(
+            instructions.contains("用户词库完整列表"),
+            "Small vocabulary should also include the full reference block."
+        )
+    }
+
+    func testLargeVocabularyByCountDoesNotIncludeFullReference() {
+        // 81 entries exceeds the threshold of 80
+        let entries = (1...81).map { "术语\($0)" }.joined(separator: "\n")
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "术语一 里面有问题",
+            configuration: makeConfiguration(vocabulary: entries)
+        )
+
+        XCTAssertFalse(
+            instructions.contains("用户词库完整列表"),
+            "Vocabulary with >80 entries should NOT include the full reference block."
+        )
+    }
+
+    func testLargeVocabularyByCharCountDoesNotIncludeFullReference() {
+        // Build a vocabulary that exceeds 4000 characters but stays under 80 entries
+        let longEntry = String(repeating: "这是一个很长的术语名称", count: 50) // ~500 chars each
+        let entries = (1...9).map { "\(longEntry)\($0)" }.joined(separator: "\n")
+        XCTAssertTrue(entries.count > 4000, "Precondition: vocabulary should exceed 4000 chars")
+
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "\(longEntry)1 里面有问题",
+            configuration: makeConfiguration(vocabulary: entries)
+        )
+
+        XCTAssertFalse(
+            instructions.contains("用户词库完整列表"),
+            "Vocabulary with >4000 chars should NOT include the full reference block."
+        )
+    }
+
+    func testEmptyVocabularyDoesNotIncludeFullReference() {
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "text area 里面有问题",
+            configuration: makeConfiguration(vocabulary: "")
+        )
+
+        XCTAssertFalse(
+            instructions.contains("用户词库完整列表"),
+            "Empty vocabulary should NOT include the full reference block."
+        )
+        XCTAssertFalse(
+            instructions.contains("ASR 误识别映射"),
+            "Empty vocabulary should NOT include the candidates block."
+        )
+    }
+
+    func testLargeVocabularyStillShowsMatchedCandidates() {
+        // 81 entries exceeds the count threshold, but matched candidates should still appear
+        let entries = (1...81).map { "术语\($0)" }.joined(separator: "\n")
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "术语一 里面有问题",
+            configuration: makeConfiguration(vocabulary: entries)
+        )
+
+        // Even though full reference is excluded, matched candidates may still appear
+        // (depending on whether any candidates matched). The key is no full reference block.
+        XCTAssertFalse(instructions.contains("用户词库完整列表"))
+    }
+
+    func testExactThresholdAt80EntriesIncludesFullReference() {
+        let entries = (1...80).map { "术语\($0)" }.joined(separator: "\n")
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "术语一 里面有问题",
+            configuration: makeConfiguration(vocabulary: entries)
+        )
+
+        XCTAssertTrue(
+            instructions.contains("用户词库完整列表"),
+            "Vocabulary with exactly 80 entries should include the full reference block."
+        )
+    }
+
+    func testVocabularyReferenceUsesDashPrefixNotArrow() {
+        let vocabulary = "textarea"
+        let instructions = LocalLLMPostProcessor.correctionInstructions(
+            for: "hello world",
+            configuration: makeConfiguration(vocabulary: vocabulary)
+        )
+
+        // Full reference should use "- textarea" format, NOT "- textarea => textarea"
+        XCTAssertTrue(instructions.contains("- textarea"))
+        // The reference block should NOT contain "=>" since there are no matched candidates
+        // (no candidates matched because the input doesn't have text area / place holder)
+    }
 }

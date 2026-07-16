@@ -29,6 +29,7 @@ enum AppLog {
 }
 
 private final class AppLogWriter: @unchecked Sendable {
+    // 单个日志文件上限为 1 MB，超出后触发轮转
     private static let maxFileBytes: UInt64 = 1 * 1024 * 1024
     private static let maxArchivedFiles = 3
 
