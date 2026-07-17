@@ -1,0 +1,34 @@
+import XCTest
+@testable import Douvo
+
+final class ASRLabCommandTests: XCTestCase {
+    func testOptionsDefaultToAndroidProvider() throws {
+        let options = try ASRLabCommand.options(from: ["Douvo", "--asr-lab", "/tmp/test.aiff"])
+
+        XCTAssertEqual(options.audioURL.path, "/tmp/test.aiff")
+        XCTAssertEqual(options.provider, .android)
+        XCTAssertEqual(options.context, "")
+    }
+
+    func testOptionsAcceptExplicitProvider() throws {
+        let options = try ASRLabCommand.options(from: [
+            "Douvo", "--asr-lab", "/tmp/test.aiff", "--provider", "mix"
+        ])
+
+        XCTAssertEqual(options.provider, .mix)
+    }
+
+    func testOptionsAcceptAndroidContext() throws {
+        let options = try ASRLabCommand.options(from: [
+            "Douvo", "--asr-lab", "/tmp/test.aiff", "--context", "worktree, FinishSession"
+        ])
+
+        XCTAssertEqual(options.context, "worktree, FinishSession")
+    }
+
+    func testOptionsRejectInvalidProvider() {
+        XCTAssertThrowsError(try ASRLabCommand.options(from: [
+            "Douvo", "--asr-lab", "/tmp/test.aiff", "--provider", "invalid"
+        ]))
+    }
+}

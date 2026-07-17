@@ -15,6 +15,10 @@ struct DouvoMain {
             runPromptLabAndExit(configURL: configURL)
         }
 
+        if CommandLine.arguments.contains("--asr-lab") {
+            runASRLabAndExit(arguments: CommandLine.arguments)
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -34,6 +38,15 @@ struct DouvoMain {
     private static func runTraceReplayAndExit(traceURL: URL) -> Never {
         Task {
             let exitCode = await TraceReplayCommand.run(traceURL: traceURL)
+            exit(exitCode)
+        }
+
+        dispatchMain()
+    }
+
+    private static func runASRLabAndExit(arguments: [String]) -> Never {
+        Task {
+            let exitCode = await ASRLabCommand.run(arguments: arguments)
             exit(exitCode)
         }
 

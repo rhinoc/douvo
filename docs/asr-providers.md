@@ -171,6 +171,21 @@ Server responses are also Protobuf-encoded. Douvo parses `message_type` and `res
 
 Trace metadata records the Android segment shape (`android_result_segments`, `android_text_segments`, `android_interim_segments`, `android_final_segments`, `android_vad_finished_segments`, `android_result_keys`, `android_segment_ids`, `android_assembled_segments`, and `android_assembled_segment_ids`) so provider behavior can be diagnosed from a failed trace.
 
+### Headless ASR Lab
+
+Generate an audio fixture with `say`, then send it through the same conversion,
+streaming, and finalization path without opening the app or using the microphone:
+
+```bash
+say -v Tingting -o /tmp/douvo-asr-lab.aiff '请创建一个 worktree，然后提交 pull request。'
+swift run Douvo --asr-lab /tmp/douvo-asr-lab.aiff --provider android
+```
+
+Use `--provider web|android|mix` to select a route. Android experiments can add
+`--context 'worktree, pull request'`. The command prints the final transcript and
+returns a nonzero exit status when a selected route fails to open, finish, or
+produce text.
+
 ## Dual Provider
 
 The Dual provider runs the Web and Android providers at the same time, then asks AI post-processing to merge the two recognition results into one final text.

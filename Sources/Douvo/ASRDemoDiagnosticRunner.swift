@@ -5,6 +5,7 @@ struct ASRDemoDiagnosticResult: Sendable {
     let openedProviders: [String]
     let finishedProviders: [String]
     let resultCharactersByProvider: [String: Int]
+    let transcriptsByProvider: [String: String]
     let errorsByProvider: [String: String]
     let audioPath: String
     let durationMilliseconds: Int
@@ -38,6 +39,14 @@ struct ASRDemoDiagnosticResult: Sendable {
 enum ASRDemoDiagnosticRunner {
     static func run(provider: ASRProvider) async throws -> ASRDemoDiagnosticResult {
         let audioURL = try DemoAudioStore.url()
+        return try await run(provider: provider, audioURL: audioURL)
+    }
+
+    static func run(
+        provider: ASRProvider,
+        audioURL: URL,
+        androidContext: String = ""
+    ) async throws -> ASRDemoDiagnosticResult {
         let packets = try DemoASRAudioPipeline.packets(from: audioURL, provider: provider)
         AppLog.info("ASR demo diagnostic audio prepared provider=\(provider.rawValue) path=\(audioURL.path) samples=\(packets.sampleCount) webPackets=\(packets.webPCM.count) androidPackets=\(packets.androidOpus.count)")
 
@@ -58,6 +67,7 @@ enum ASRDemoDiagnosticRunner {
         return try await session.run(
             webParams: webParams,
             androidCredentials: androidCredentials,
+            androidContext: androidContext,
             packets: packets
         )
     }
@@ -85,10 +95,15 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     func run(
         webParams: DoubaoASRParams?,
         androidCredentials: DoubaoAndroidCredentials?,
+        androidContext: String,
         packets: DemoASRAudioPackets
     ) async throws -> ASRDemoDiagnosticResult {
         configureClients()
-        connect(webParams: webParams, androidCredentials: androidCredentials)
+        connect(
+            webParams: webParams,
+            androidCredentials: androidCredentials,
+            androidContext: androidContext
+        )
         defer {
             disconnect()
         }
@@ -142,12 +157,16 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         }
     }
 
-    private func connect(webParams: DoubaoASRParams?, androidCredentials: DoubaoAndroidCredentials?) {
+    private func connect(
+        webParams: DoubaoASRParams?,
+        androidCredentials: DoubaoAndroidCredentials?,
+        androidContext: String
+    ) {
         if let webParams {
             webClient?.connect(params: webParams)
         }
         if let androidCredentials {
-            androidClient?.connect(credentials: androidCredentials)
+            androidClient?.connect(credentials: androidCredentials, context: androidContext)
         }
     }
 
@@ -291,6 +310,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             openedProviders: opened,
             finishedProviders: finished,
             resultCharactersByProvider: resultCharacters,
+            transcriptsByProvider: latestTextByProvider,
             errorsByProvider: errors,
             audioPath: audioURL.path,
             durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1000)
