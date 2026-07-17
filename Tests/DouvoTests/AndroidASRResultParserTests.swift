@@ -50,6 +50,92 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertTrue(extra.isEmpty)
     }
 
+    func testFinishCoordinatorWaitsForFinalResultAfterFinalAudioFrame() {
+        var coordinator = AndroidASRFinishCoordinator()
+        coordinator.beginFinalization()
+
+        XCTAssertNil(coordinator.finalFrameDidSend())
+        XCTAssertTrue(coordinator.isWaitingForFinalResult)
+        XCTAssertFalse(coordinator.finishSessionRequested)
+    }
+
+    func testFinishCoordinatorEndsAfterServerFinalResult() throws {
+        var coordinator = AndroidASRFinishCoordinator()
+        coordinator.beginFinalization()
+        XCTAssertNil(coordinator.finalFrameDidSend())
+
+        let finalResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "从最新主干创建一个 worktree。",
+              "is_interim": false,
+              "is_vad_finished": true,
+              "extra": { "nonstream_result": true }
+            }
+          ]
+        }
+        """))
+
+        XCTAssertEqual(coordinator.receive(finalResult), .serverFinal)
+        XCTAssertTrue(coordinator.finalResultReceived)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+        XCTAssertNil(coordinator.finalResultWaitTimedOut())
+    }
+
+    func testFinishCoordinatorDefersEarlyFinalUntilFinalAudioFrameIsSent() throws {
+        var coordinator = AndroidASRFinishCoordinator()
+        coordinator.beginFinalization()
+        let finalResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "服务端先返回最终结果。",
+              "is_interim": false,
+              "is_vad_finished": true
+            }
+          ]
+        }
+        """))
+
+        XCTAssertNil(coordinator.receive(finalResult))
+        XCTAssertTrue(coordinator.finalResultReceived)
+        XCTAssertFalse(coordinator.finishSessionRequested)
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .serverFinal)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+    }
+
+    func testFinishCoordinatorIgnoresInterimResultWhileWaiting() throws {
+        var coordinator = AndroidASRFinishCoordinator()
+        coordinator.beginFinalization()
+        XCTAssertNil(coordinator.finalFrameDidSend())
+
+        let interimResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "从最新的主干拉个 walk tree",
+              "is_interim": true
+            }
+          ]
+        }
+        """))
+
+        XCTAssertNil(coordinator.receive(interimResult))
+        XCTAssertFalse(coordinator.finalResultReceived)
+        XCTAssertFalse(coordinator.finishSessionRequested)
+    }
+
+    func testFinishCoordinatorFallsBackOnceAfterTimeout() {
+        var coordinator = AndroidASRFinishCoordinator()
+        coordinator.beginFinalization()
+        XCTAssertNil(coordinator.finalFrameDidSend())
+
+        XCTAssertEqual(coordinator.finalResultWaitTimedOut(), .finalResultTimeout)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+        XCTAssertNil(coordinator.finalResultWaitTimedOut())
+    }
+
     func testParserJoinsLegacySegmentedResults() {
         let json = """
         {

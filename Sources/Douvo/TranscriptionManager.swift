@@ -658,13 +658,18 @@ final class TranscriptionManager {
         let session = transcriptionSession
         Task { _ = await session?.stop() }
         transcriptionTrace?.startSpan("asr.final_wait")
-        // Complete on server finish, or after quiet/hard timeout if the server keeps sending empty results.
+        // Android owns its shorter final-result timeout so it can wait for the
+        // two-pass/nonstream revision before sending FinishSession. The manager's
+        // hard timeout remains the last-resort guard for a stuck provider.
         scheduleQuietCompletion()
         scheduleHardCompletion()
     }
 
     private func scheduleQuietCompletion() {
         quietCompletionWork?.cancel()
+        quietCompletionWork = nil
+        guard !isWaitingForAndroidFinalization else { return }
+
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.awaitingFinalResult, self.appState.recordingState == .stopping else { return }
             AppLog.info("Final quiet timeout; completing chars=\(self.appState.transcript.count)")
@@ -673,6 +678,13 @@ final class TranscriptionManager {
         }
         quietCompletionWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + finalQuietInterval, execute: work)
+    }
+
+    private var isWaitingForAndroidFinalization: Bool {
+        awaitingFinalResult
+            && activeASRProviders.contains("android")
+            && !finishedASRProviders.contains("android")
+            && !failedASRProviders.contains("android")
     }
 
     private func scheduleHardCompletion() {

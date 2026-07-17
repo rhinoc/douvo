@@ -56,6 +56,67 @@ enum AndroidASRTaskRequestPayload {
     }
 }
 
+enum AndroidASRFinishTrigger: String, Equatable {
+    case serverFinal = "server_final"
+    case finalResultTimeout = "final_result_timeout"
+    case noFinalAudio = "no_final_audio"
+}
+
+struct AndroidASRFinishCoordinator {
+    private(set) var finalizationStarted = false
+    private(set) var finalFrameSent = false
+    private(set) var finalResultReceived = false
+    private(set) var finishSessionRequested = false
+    private(set) var finishTrigger: AndroidASRFinishTrigger?
+
+    var isWaitingForFinalResult: Bool {
+        finalizationStarted
+            && finalFrameSent
+            && !finalResultReceived
+            && !finishSessionRequested
+    }
+
+    mutating func beginFinalization() {
+        finalizationStarted = true
+        finalFrameSent = false
+        finalResultReceived = false
+        finishSessionRequested = false
+        finishTrigger = nil
+    }
+
+    mutating func receive(_ result: ASRRecognitionResult) -> AndroidASRFinishTrigger? {
+        guard finalizationStarted, result.isFinal else { return nil }
+        finalResultReceived = true
+        guard finalFrameSent else { return nil }
+        return requestFinish(.serverFinal)
+    }
+
+    mutating func finalFrameDidSend() -> AndroidASRFinishTrigger? {
+        guard finalizationStarted else { return nil }
+        finalFrameSent = true
+        guard finalResultReceived else { return nil }
+        return requestFinish(.serverFinal)
+    }
+
+    mutating func finalResultWaitTimedOut() -> AndroidASRFinishTrigger? {
+        guard isWaitingForFinalResult else { return nil }
+        return requestFinish(.finalResultTimeout)
+    }
+
+    mutating func finishWithoutAudio() -> AndroidASRFinishTrigger? {
+        guard finalizationStarted else { return nil }
+        finalFrameSent = true
+        return requestFinish(.noFinalAudio)
+    }
+
+    private mutating func requestFinish(_ trigger: AndroidASRFinishTrigger) -> AndroidASRFinishTrigger? {
+        guard !finishSessionRequested else { return nil }
+        finishSessionRequested = true
+        finishTrigger = trigger
+        return trigger
+    }
+}
+
 final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     enum State: String, Sendable {
         case idle
@@ -85,7 +146,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var isSendingAudio = false
     private var finishRequested = false
     private var finishFramesSent = false
-    private var finishSessionSent = false
+    private var finishCoordinator = AndroidASRFinishCoordinator()
+    private var finalResultTimeoutWork: DispatchWorkItem?
     private var frameIndex: Int64 = 0
     private var startedAtMillis: Int64 = 0
     private var receivedMessageCount = 0
@@ -100,6 +162,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var transcriptAssembler = AndroidASRTranscriptAssembler()
     private let lock = NSLock()
     private static let maxSummarySamples = 12
+    private static let finalResultWaitMillis = 3_000
 
     var onOpen: (() -> Void)?
     var onResult: ((ASRRecognitionResult) -> Void)?
@@ -144,7 +207,9 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         isSendingAudio = false
         finishRequested = false
         finishFramesSent = false
-        finishSessionSent = false
+        finishCoordinator = AndroidASRFinishCoordinator()
+        finalResultTimeoutWork?.cancel()
+        finalResultTimeoutWork = nil
         frameIndex = 0
         receivedMessageCount = 0
         recognitionMessageCount = 0
@@ -199,6 +264,9 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
     func finishSending() {
         lock.lock()
+        if !finishRequested {
+            finishCoordinator.beginFinalization()
+        }
         finishRequested = true
         if state == .connecting {
             let pendingCount = pendingAudio.count
@@ -227,7 +295,9 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         isSendingAudio = false
         finishRequested = false
         finishFramesSent = false
-        finishSessionSent = false
+        finishCoordinator = AndroidASRFinishCoordinator()
+        finalResultTimeoutWork?.cancel()
+        finalResultTimeoutWork = nil
         lock.unlock()
 
         task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
@@ -364,11 +434,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
         guard let finalAudioFrame else {
             AppLog.info("Android ASR final Opus frame skipped; no encoded audio available")
-            sendFinishSession(
-                socket: socket,
-                credentials: credentials,
-                reason: "no_final_audio"
-            )
+            lock.lock()
+            let trigger = finishCoordinator.finishWithoutAudio()
+            lock.unlock()
+            if let trigger {
+                sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+            }
             return
         }
 
@@ -392,28 +463,62 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 return
             }
             AppLog.info("Android ASR final Opus frame sent finishAudio=true forceTwopass=true bytes=\(finalAudioFrame.count)")
-            self.sendFinishSession(
-                socket: socket,
-                credentials: credentials,
-                reason: "final_frame_sent"
-            )
+            self.lock.lock()
+            let trigger = self.finishCoordinator.finalFrameDidSend()
+            self.lock.unlock()
+            if let trigger {
+                self.sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+            } else {
+                self.scheduleFinalResultTimeout(socket: socket, credentials: credentials)
+            }
         }
+    }
+
+    private func scheduleFinalResultTimeout(
+        socket: URLSessionWebSocketTask,
+        credentials: DoubaoAndroidCredentials
+    ) {
+        lock.lock()
+        guard state == .finishing, finishCoordinator.isWaitingForFinalResult else {
+            lock.unlock()
+            return
+        }
+        finalResultTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let trigger = self.finishCoordinator.finalResultWaitTimedOut()
+            self.finalResultTimeoutWork = nil
+            self.lock.unlock()
+            guard let trigger else { return }
+            AppLog.info("Android ASR final result wait timed out timeoutMs=\(Self.finalResultWaitMillis)")
+            self.sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+        }
+        finalResultTimeoutWork = work
+        lock.unlock()
+
+        AppLog.info("Android ASR waiting for final result timeoutMs=\(Self.finalResultWaitMillis)")
+        DispatchQueue.global().asyncAfter(
+            deadline: .now() + .milliseconds(Self.finalResultWaitMillis),
+            execute: work
+        )
     }
 
     private func sendFinishSession(
         socket: URLSessionWebSocketTask,
         credentials: DoubaoAndroidCredentials,
-        reason: String
+        trigger: AndroidASRFinishTrigger
     ) {
         lock.lock()
-        guard state == .finishing, !finishSessionSent else {
+        guard state == .finishing, finishCoordinator.finishSessionRequested else {
             lock.unlock()
             return
         }
-        finishSessionSent = true
+        finalResultTimeoutWork?.cancel()
+        finalResultTimeoutWork = nil
         lock.unlock()
 
-        AppLog.info("Android ASR sending FinishSession reason=\(reason)")
+        AppLog.info("Android ASR sending FinishSession reason=\(trigger.rawValue)")
         let finish = AndroidASRProtobuf.request(
             token: credentials.token,
             methodName: "FinishSession",
@@ -476,6 +581,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             lock.lock()
             recognitionMessageCount += 1
             let recognitionCount = recognitionMessageCount
+            let finishTrigger = finishCoordinator.receive(assembledResult)
             if Self.shouldSampleProgress(recognitionCount) {
                 Self.appendSummarySample(
                     "\(count):chars=\(assembledResult.text.count):kind=\(assembledResult.kind):segments=\(assembledResult.segmentCount):assembled=\(assembledResult.metadata["android_assembled_segments"] ?? "0")",
@@ -484,6 +590,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             }
             lock.unlock()
             onResult?(assembledResult)
+            if assembledResult.isFinal {
+                AppLog.info("Android ASR final result received chars=\(assembledResult.text.count) kind=\(assembledResult.kind) nonstream=\(assembledResult.metadata["android_nonstream_result"] ?? "false")")
+            }
+            if let finishTrigger, let socket = task, let credentials {
+                sendFinishSession(socket: socket, credentials: credentials, trigger: finishTrigger)
+            }
         case .heartbeat:
             break
         case .error(let message, let responseMetadata):
@@ -508,6 +620,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private func markFinished() {
         lock.lock()
         state = .finished
+        finalResultTimeoutWork?.cancel()
+        finalResultTimeoutWork = nil
         lock.unlock()
     }
 
@@ -515,6 +629,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         lock.lock()
         state = .failed
         isSendingAudio = false
+        finalResultTimeoutWork?.cancel()
+        finalResultTimeoutWork = nil
         lock.unlock()
         if notify {
             onError?(asrError(error, stage: "transport_failed"))
@@ -566,6 +682,9 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let sentFrames = frameIndex
         let receivedCount = receivedMessageCount
         let recognitionCount = recognitionMessageCount
+        let finalFrameSent = finishCoordinator.finalFrameSent
+        let finalResultReceived = finishCoordinator.finalResultReceived
+        let finishTrigger = finishCoordinator.finishTrigger?.rawValue ?? ""
         lock.unlock()
 
         return [
@@ -577,7 +696,10 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             "android_queued_audio_count": String(queuedCount),
             "android_sent_frames": String(sentFrames),
             "android_received_messages": String(receivedCount),
-            "android_recognition_messages": String(recognitionCount)
+            "android_recognition_messages": String(recognitionCount),
+            "android_final_frame_sent": String(finalFrameSent),
+            "android_final_result_received": String(finalResultReceived),
+            "android_finish_trigger": finishTrigger
         ]
     }
 
@@ -609,9 +731,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let queuedSamples = Self.formatSamples(queuedAudioSamples)
         let sentSamples = Self.formatSamples(sentFrameSamples)
         let resultSamples = Self.formatSamples(recognitionSamples)
+        let finalFrameSent = finishCoordinator.finalFrameSent
+        let finalResultReceived = finishCoordinator.finalResultReceived
+        let finishTrigger = finishCoordinator.finishTrigger?.rawValue ?? "none"
         lock.unlock()
 
-        AppLog.info("Android ASR summary reason=\(reason) state=\(state) pending=\(pendingCount) queued=\(queuedCount) pendingAudio=\(pendingTotal) queuedAudio=\(queuedTotal) sentFrames=\(sentFrames) receivedMessages=\(receivedCount) recognitionMessages=\(recognitionCount) pendingSamples=\(pendingSamples) queuedSamples=\(queuedSamples) sentSamples=\(sentSamples) recognitionSamples=\(resultSamples)")
+        AppLog.info("Android ASR summary reason=\(reason) state=\(state) pending=\(pendingCount) queued=\(queuedCount) pendingAudio=\(pendingTotal) queuedAudio=\(queuedTotal) sentFrames=\(sentFrames) receivedMessages=\(receivedCount) recognitionMessages=\(recognitionCount) finalFrameSent=\(finalFrameSent) finalResultReceived=\(finalResultReceived) finishTrigger=\(finishTrigger) pendingSamples=\(pendingSamples) queuedSamples=\(queuedSamples) sentSamples=\(sentSamples) recognitionSamples=\(resultSamples)")
     }
 
     private static func shouldSampleProgress(_ count: Int) -> Bool {
