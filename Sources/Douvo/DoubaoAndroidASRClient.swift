@@ -1213,16 +1213,17 @@ enum AndroidASRProtobuf {
         // finalize the full stream represented by results[0].
         let finalizationResults = isCumulativeWithDetails ? Array(results.prefix(1)) : results
         let finalizationFinalCount = finalizationResults.filter { $0["is_interim"] as? Bool == false }.count
-        let finalizationVADFinished = finalizationResults.contains { $0["is_vad_finished"] as? Bool == true }
         let nonstreamResult = finalizationResults.contains {
             guard let extra = $0["extra"] as? [String: Any] else { return false }
             return extra["nonstream_result"] as? Bool == true
         }
         let text = joinedSegmentText(segments.map(\.text))
+        // `last_post_process` returns the whole-transcript revision with
+        // `is_interim=false`, but without `is_vad_finished`. Requiring both flags
+        // mislabels the server's final corrected snapshot as interim.
         let isFinal = nonstreamResult || (
             finalizationFinalCount > 0
                 && finalizationFinalCount == finalizationResults.count
-                && finalizationVADFinished
         )
         let kind = isFinal ? "final" : "interim"
         let resultModel: String

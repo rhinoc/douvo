@@ -314,6 +314,28 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(result?.metadata["android_nonstream_result"], "true")
     }
 
+    func testParserMarksLastPostProcessSnapshotFinalWithoutVADFlag() {
+        let json = """
+        {
+          "results": [
+            {
+              "text": "今天这个方案已经确定了，我们明天开始实施。",
+              "start_time": 0,
+              "end_time": 5.74,
+              "is_interim": false
+            }
+          ]
+        }
+        """
+
+        let result = AndroidASRProtobuf.parseRecognitionResultJSON(json)
+
+        XCTAssertEqual(result?.text, "今天这个方案已经确定了，我们明天开始实施。")
+        XCTAssertEqual(result?.kind, "final")
+        XCTAssertEqual(result?.isFinal, true)
+        XCTAssertEqual(result?.metadata["android_vad_finished_segments"], "0")
+    }
+
     func testAssemblerReplacesSameIndexedSegmentInsteadOfAppendingDuplicate() {
         var assembler = AndroidASRTranscriptAssembler()
         let first = AndroidASRProtobuf.parseRecognitionResultJSON("""
