@@ -50,19 +50,18 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertTrue(extra.isEmpty)
     }
 
-    func testFinishCoordinatorWaitsForFinalResultAfterFinalAudioFrame() {
+    func testFinishCoordinatorRequestsFinishImmediatelyAfterFinalAudioFrame() {
         var coordinator = AndroidASRFinishCoordinator()
-        coordinator.beginFinalization()
 
-        XCTAssertNil(coordinator.finalFrameDidSend())
-        XCTAssertTrue(coordinator.isWaitingForFinalResult)
-        XCTAssertFalse(coordinator.finishSessionRequested)
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
+        XCTAssertTrue(coordinator.finalFrameSent)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+        XCTAssertEqual(coordinator.finishTrigger, .finalFrameSent)
     }
 
-    func testFinishCoordinatorEndsAfterServerFinalResult() throws {
+    func testFinishCoordinatorRecordsFinalResultAfterFinishWasRequested() throws {
         var coordinator = AndroidASRFinishCoordinator()
-        coordinator.beginFinalization()
-        XCTAssertNil(coordinator.finalFrameDidSend())
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
 
         let finalResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
         {
@@ -77,38 +76,14 @@ final class AndroidASRResultParserTests: XCTestCase {
         }
         """))
 
-        XCTAssertEqual(coordinator.receive(finalResult), .serverFinal)
+        coordinator.receive(finalResult)
         XCTAssertTrue(coordinator.finalResultReceived)
         XCTAssertTrue(coordinator.finishSessionRequested)
-        XCTAssertNil(coordinator.finalResultWaitTimedOut())
+        XCTAssertEqual(coordinator.finishTrigger, .finalFrameSent)
     }
 
-    func testFinishCoordinatorDefersEarlyFinalUntilFinalAudioFrameIsSent() throws {
+    func testFinishCoordinatorDoesNotRecordInterimAsFinal() throws {
         var coordinator = AndroidASRFinishCoordinator()
-        coordinator.beginFinalization()
-        let finalResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
-        {
-          "results": [
-            {
-              "text": "服务端先返回最终结果。",
-              "is_interim": false,
-              "is_vad_finished": true
-            }
-          ]
-        }
-        """))
-
-        XCTAssertNil(coordinator.receive(finalResult))
-        XCTAssertTrue(coordinator.finalResultReceived)
-        XCTAssertFalse(coordinator.finishSessionRequested)
-        XCTAssertEqual(coordinator.finalFrameDidSend(), .serverFinal)
-        XCTAssertTrue(coordinator.finishSessionRequested)
-    }
-
-    func testFinishCoordinatorIgnoresInterimResultWhileWaiting() throws {
-        var coordinator = AndroidASRFinishCoordinator()
-        coordinator.beginFinalization()
-        XCTAssertNil(coordinator.finalFrameDidSend())
 
         let interimResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
         {
@@ -121,19 +96,17 @@ final class AndroidASRResultParserTests: XCTestCase {
         }
         """))
 
-        XCTAssertNil(coordinator.receive(interimResult))
+        coordinator.receive(interimResult)
         XCTAssertFalse(coordinator.finalResultReceived)
         XCTAssertFalse(coordinator.finishSessionRequested)
     }
 
-    func testFinishCoordinatorFallsBackOnceAfterTimeout() {
+    func testFinishCoordinatorRequestsFinishOnlyOnce() {
         var coordinator = AndroidASRFinishCoordinator()
-        coordinator.beginFinalization()
-        XCTAssertNil(coordinator.finalFrameDidSend())
 
-        XCTAssertEqual(coordinator.finalResultWaitTimedOut(), .finalResultTimeout)
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
         XCTAssertTrue(coordinator.finishSessionRequested)
-        XCTAssertNil(coordinator.finalResultWaitTimedOut())
+        XCTAssertNil(coordinator.finalFrameDidSend())
     }
 
     func testParserJoinsLegacySegmentedResults() {

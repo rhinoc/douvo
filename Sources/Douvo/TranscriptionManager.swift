@@ -658,9 +658,9 @@ final class TranscriptionManager {
         let session = transcriptionSession
         Task { _ = await session?.stop() }
         transcriptionTrace?.startSpan("asr.final_wait")
-        // Android owns its shorter final-result timeout so it can wait for the
-        // two-pass/nonstream revision before sending FinishSession. The manager's
-        // hard timeout remains the last-resort guard for a stuck provider.
+        // Android sends FinishSession immediately after its final audio frame,
+        // then keeps receiving the two-pass/nonstream revision until the server
+        // ends the session. The hard timeout remains the stuck-provider guard.
         scheduleQuietCompletion()
         scheduleHardCompletion()
     }
