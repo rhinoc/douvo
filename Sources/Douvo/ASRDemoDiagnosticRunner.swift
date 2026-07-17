@@ -45,7 +45,8 @@ enum ASRDemoDiagnosticRunner {
     static func run(
         provider: ASRProvider,
         audioURL: URL,
-        androidContext: String = ""
+        androidContext: String = "",
+        androidVocabulary: String = ""
     ) async throws -> ASRDemoDiagnosticResult {
         let packets = try DemoASRAudioPipeline.packets(from: audioURL, provider: provider)
         AppLog.info("ASR demo diagnostic audio prepared provider=\(provider.rawValue) path=\(audioURL.path) samples=\(packets.sampleCount) webPackets=\(packets.webPCM.count) androidPackets=\(packets.androidOpus.count)")
@@ -59,8 +60,19 @@ enum ASRDemoDiagnosticRunner {
         }
 
         var androidCredentials: DoubaoAndroidCredentials?
+        var usePersonalLexicon = false
         if provider.usesAndroidASR {
-            androidCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+            let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+            androidCredentials = credentials
+            let words = DoubaoAndroidPersonalLexicon.words(from: androidVocabulary)
+            if !words.isEmpty {
+                let sync = try await DoubaoAndroidPersonalLexiconSynchronizer.shared.sync(
+                    vocabulary: androidVocabulary,
+                    credentials: credentials
+                )
+                usePersonalLexicon = true
+                AppLog.info("ASR demo personal lexicon ready words=\(sync.wordCount) uploaded=\(sync.uploaded)")
+            }
         }
 
         let session = ASRDemoDiagnosticSession(provider: provider, audioURL: audioURL)
@@ -68,6 +80,7 @@ enum ASRDemoDiagnosticRunner {
             webParams: webParams,
             androidCredentials: androidCredentials,
             androidContext: androidContext,
+            usePersonalLexicon: usePersonalLexicon,
             packets: packets
         )
     }
@@ -96,13 +109,15 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         webParams: DoubaoASRParams?,
         androidCredentials: DoubaoAndroidCredentials?,
         androidContext: String,
+        usePersonalLexicon: Bool,
         packets: DemoASRAudioPackets
     ) async throws -> ASRDemoDiagnosticResult {
         configureClients()
         connect(
             webParams: webParams,
             androidCredentials: androidCredentials,
-            androidContext: androidContext
+            androidContext: androidContext,
+            usePersonalLexicon: usePersonalLexicon
         )
         defer {
             disconnect()
@@ -160,13 +175,18 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     private func connect(
         webParams: DoubaoASRParams?,
         androidCredentials: DoubaoAndroidCredentials?,
-        androidContext: String
+        androidContext: String,
+        usePersonalLexicon: Bool
     ) {
         if let webParams {
             webClient?.connect(params: webParams)
         }
         if let androidCredentials {
-            androidClient?.connect(credentials: androidCredentials, context: androidContext)
+            androidClient?.connect(
+                credentials: androidCredentials,
+                context: androidContext,
+                usePersonalLexicon: usePersonalLexicon
+            )
         }
     }
 

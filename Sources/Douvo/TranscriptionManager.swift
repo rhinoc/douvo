@@ -627,17 +627,30 @@ final class TranscriptionManager {
                 self.activeContextSnapshot = contextSnapshot
                 let androidContext = AndroidASRContextBuilder.make(
                     snapshot: contextSnapshot,
-                    vocabulary: LocalLLMSettingsStore.vocabulary,
-                    includeContext: provider.usesAndroidASR && AndroidASRSettingsStore.sendContext,
-                    includeVocabularyHints: provider.usesAndroidASR && AndroidASRSettingsStore.sendVocabularyHints
+                    includeContext: provider.usesAndroidASR && AndroidASRSettingsStore.sendContext
                 )
+                let androidVocabulary = provider.usesAndroidASR
+                    && AndroidASRSettingsStore.personalLexiconEnabled
+                    ? LocalLLMSettingsStore.vocabulary
+                    : ""
+                let androidVocabularyCount = DoubaoAndroidPersonalLexicon.words(
+                    from: androidVocabulary
+                ).count
                 self.transcriptionTrace?.set("asr.android.context_payload_enabled", !androidContext.isEmpty)
                 self.transcriptionTrace?.set("asr.android.shared_context_chars", contextSnapshot.androidText.count)
                 self.transcriptionTrace?.set(
-                    "asr.android.vocabulary_hints_enabled",
-                    provider.usesAndroidASR && AndroidASRSettingsStore.sendVocabularyHints
+                    "asr.android.personal_lexicon_enabled",
+                    androidVocabularyCount > 0
                 )
-                try await session.start(webParams: webParams, androidContext: androidContext)
+                self.transcriptionTrace?.set(
+                    "asr.android.personal_lexicon_words",
+                    androidVocabularyCount
+                )
+                try await session.start(
+                    webParams: webParams,
+                    androidContext: androidContext,
+                    androidVocabulary: androidVocabulary
+                )
             } catch {
                 AppLog.error("Session start failed: \(error)")
                 await MainActor.run {

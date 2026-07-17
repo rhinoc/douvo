@@ -4,13 +4,14 @@ struct ASRLabOptions: Equatable {
     let audioURL: URL
     let provider: ASRProvider
     let context: String
+    let vocabulary: String
 }
 
 enum ASRLabCommand {
     static func options(from arguments: [String]) throws -> ASRLabOptions {
         guard let commandIndex = arguments.firstIndex(of: "--asr-lab"),
               arguments.indices.contains(commandIndex + 1) else {
-            throw commandError("Usage: Douvo --asr-lab <audio-file> [--provider web|android|mix]")
+            throw commandError("Usage: Douvo --asr-lab <audio-file> [--provider web|android|mix] [--vocabulary <terms>]")
         }
 
         let audioURL = URL(fileURLWithPath: arguments[commandIndex + 1])
@@ -35,7 +36,22 @@ enum ASRLabCommand {
             context = ""
         }
 
-        return ASRLabOptions(audioURL: audioURL, provider: provider, context: context)
+        let vocabulary: String
+        if let vocabularyIndex = arguments.firstIndex(of: "--vocabulary") {
+            guard arguments.indices.contains(vocabularyIndex + 1) else {
+                throw commandError("Missing value after --vocabulary")
+            }
+            vocabulary = arguments[vocabularyIndex + 1]
+        } else {
+            vocabulary = ""
+        }
+
+        return ASRLabOptions(
+            audioURL: audioURL,
+            provider: provider,
+            context: context,
+            vocabulary: vocabulary
+        )
     }
 
     static func run(arguments: [String]) async -> Int32 {
@@ -48,7 +64,8 @@ enum ASRLabCommand {
             let result = try await ASRDemoDiagnosticRunner.run(
                 provider: options.provider,
                 audioURL: options.audioURL,
-                androidContext: options.context
+                androidContext: options.context,
+                androidVocabulary: options.vocabulary
             )
             print("ASR lab result: \(result.summary)")
             for provider in result.transcriptsByProvider.keys.sorted() {

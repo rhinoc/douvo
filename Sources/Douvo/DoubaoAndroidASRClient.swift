@@ -15,7 +15,11 @@ struct AndroidASRResponse {
 }
 
 enum AndroidASRSessionConfig {
-    static func make(deviceID: String, context: String = "") -> [String: Any] {
+    static func make(
+        deviceID: String,
+        context: String = "",
+        usePersonalLexicon: Bool = false
+    ) -> [String: Any] {
         var extra: [String: Any] = [
             "app_name": "com.android.chrome",
             "cell_compress_rate": 8,
@@ -23,6 +27,7 @@ enum AndroidASRSessionConfig {
             "enable_asr_threepass": true,
             "enable_asr_twopass": true,
             "enable_print_chinese": false,
+            "disable_user_words": !usePersonalLexicon,
             // Runs one final whole-transcript correction after FinishSession.
             "enable_text_post_process": true,
             "asr_text_post_process_type": "last_post_process",
@@ -113,6 +118,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var state: State = .idle
     private var credentials: DoubaoAndroidCredentials?
     private var sessionContext = ""
+    private var usePersonalLexicon = false
     private var requestID = ""
     private var pendingAudio: [Data] = []
     private var queuedAudio: [Data] = []
@@ -142,7 +148,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     var onError: ((Error?) -> Void)?
     var onAuthError: (() -> Void)?
 
-    func connect(credentials: DoubaoAndroidCredentials, context: String = "") {
+    func connect(
+        credentials: DoubaoAndroidCredentials,
+        context: String = "",
+        usePersonalLexicon: Bool = false
+    ) {
         var components = URLComponents(url: Self.webSocketURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "aid", value: Self.aid),
@@ -156,6 +166,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         requestID = UUID().uuidString
         startedAtMillis = Self.currentTimeMillis()
         sessionContext = context
+        self.usePersonalLexicon = usePersonalLexicon
 
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
@@ -293,7 +304,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         guard let task, let credentials else { return }
         let config = AndroidASRSessionConfig.make(
             deviceID: credentials.deviceId,
-            context: sessionContext
+            context: sessionContext,
+            usePersonalLexicon: usePersonalLexicon
         )
         let payloadData = (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
         let payload = String(data: payloadData, encoding: .utf8) ?? "{}"

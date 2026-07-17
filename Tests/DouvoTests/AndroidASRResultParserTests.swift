@@ -17,7 +17,18 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(extra["use_twopass_retry"] as? Bool, true)
         XCTAssertEqual(extra["enable_text_post_process"] as? Bool, true)
         XCTAssertEqual(extra["asr_text_post_process_type"] as? String, "last_post_process")
+        XCTAssertEqual(extra["disable_user_words"] as? Bool, true)
         XCTAssertEqual(extra["enable_print_chinese"] as? Bool, false)
+    }
+
+    func testSessionConfigEnablesUploadedPersonalLexicon() throws {
+        let config = AndroidASRSessionConfig.make(
+            deviceID: "123",
+            usePersonalLexicon: true
+        )
+        let extra = try XCTUnwrap(config["extra"] as? [String: Any])
+
+        XCTAssertEqual(extra["disable_user_words"] as? Bool, false)
     }
 
     func testSessionConfigOmitsEmptyContext() throws {

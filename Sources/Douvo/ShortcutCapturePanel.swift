@@ -414,7 +414,7 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var selectedMicrophoneUID: String?
     @Published var selectedASRProvider: ASRProvider
     @Published var sendContextToAndroidASR = AndroidASRSettingsStore.sendContext
-    @Published var sendVocabularyHintsToAndroidASR = AndroidASRSettingsStore.sendVocabularyHints
+    @Published var androidPersonalLexiconEnabled = AndroidASRSettingsStore.personalLexiconEnabled
     @Published var selectedLanguage: AppLanguage
     @Published var copyResultWhenInsertionFails = TextInsertionSettingsStore.copyResultWhenInsertionFails
     @Published var checksFocusedTextInputBeforeRecording = TextInsertionSettingsStore.checksFocusedTextInputBeforeRecording
@@ -1316,12 +1316,12 @@ private struct SettingsPanelView: View {
         )
     }
 
-    private var androidASRVocabularyHintsBinding: Binding<Bool> {
+    private var androidPersonalLexiconBinding: Binding<Bool> {
         Binding(
-            get: { model.sendVocabularyHintsToAndroidASR },
+            get: { model.androidPersonalLexiconEnabled },
             set: { newValue in
-                model.sendVocabularyHintsToAndroidASR = newValue
-                AndroidASRSettingsStore.sendVocabularyHints = newValue
+                model.androidPersonalLexiconEnabled = newValue
+                AndroidASRSettingsStore.personalLexiconEnabled = newValue
             }
         )
     }
@@ -1361,8 +1361,14 @@ private struct SettingsPanelView: View {
 
                         settingsDivider()
 
-                        settingsListRow(L10n.text(en: "Vocabulary", zh: "词库")) {
-                            Toggle("", isOn: androidASRVocabularyHintsBinding)
+                        settingsListRow(
+                            L10n.text(en: "Personal Lexicon", zh: "个人词库"),
+                            help: L10n.text(
+                                en: "Uploads these terms to Doubao and enables its personal lexicon for Android recognition. Uploaded terms may remain on the Doubao service after local removal; turn this off to stop using them.",
+                                zh: "将词条上传到豆包，并在 Android 识别中启用个人词库。上传后的词条在本地删除后仍可能保留在豆包服务端；关闭此开关可停止使用。"
+                            )
+                        ) {
+                            Toggle("", isOn: androidPersonalLexiconBinding)
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .controlSize(.small)

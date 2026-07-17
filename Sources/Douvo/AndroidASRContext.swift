@@ -2,7 +2,7 @@ import Foundation
 
 enum AndroidASRSettingsStore {
     private static let sendContextKey = "androidASR.sendContext"
-    private static let sendVocabularyHintsKey = "androidASR.sendVocabularyHints"
+    private static let personalLexiconKey = "androidASR.sendVocabularyHints"
     private static var defaults: UserDefaults { UserDefaults.standard }
 
     static var sendContext: Bool {
@@ -10,9 +10,9 @@ enum AndroidASRSettingsStore {
         set { defaults.set(newValue, forKey: sendContextKey) }
     }
 
-    static var sendVocabularyHints: Bool {
-        get { defaults.bool(forKey: sendVocabularyHintsKey) }
-        set { defaults.set(newValue, forKey: sendVocabularyHintsKey) }
+    static var personalLexiconEnabled: Bool {
+        get { defaults.bool(forKey: personalLexiconKey) }
+        set { defaults.set(newValue, forKey: personalLexiconKey) }
     }
 }
 
@@ -35,26 +35,13 @@ struct DictationContextSnapshot: Sendable, Equatable {
 
 enum AndroidASRContextBuilder {
     private static let appName = "com.android.chrome"
-    private static let maxVocabularyTerms = 50
-    private static let maxVocabularyCharacters = 500
 
     static func make(
         snapshot: DictationContextSnapshot,
-        vocabulary: String,
         includeContext: Bool,
-        includeVocabularyHints: Bool,
         timestampMillis: Int64 = Int64(Date().timeIntervalSince1970 * 1_000)
     ) -> String {
-        var sections: [String] = []
-        if includeContext, !snapshot.androidText.isEmpty {
-            sections.append(snapshot.androidText)
-        }
-        if includeVocabularyHints,
-           let vocabularyHint = boundedVocabularyHint(from: vocabulary) {
-            sections.append("vocabulary: \(vocabularyHint)")
-        }
-
-        let text = sections.joined(separator: "\n\n")
+        let text = includeContext ? snapshot.androidText : ""
         guard !text.isEmpty else { return "" }
 
         let inputData: [String: Any] = [
@@ -82,28 +69,6 @@ enum AndroidASRContextBuilder {
             return ""
         }
         return contextJSON.base64EncodedString()
-    }
-
-    static func boundedVocabularyHint(from vocabulary: String) -> String? {
-        var seen = Set<String>()
-        var terms: [String] = []
-        var characterCount = 0
-
-        for rawTerm in vocabulary.split(whereSeparator: \.isNewline) {
-            let term = rawTerm.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !term.isEmpty else { continue }
-            let key = term.lowercased()
-            guard !seen.contains(key) else { continue }
-
-            guard terms.count < maxVocabularyTerms else { break }
-            let separatorCount = terms.isEmpty ? 0 : 1
-            guard characterCount + separatorCount + term.count <= maxVocabularyCharacters else { continue }
-            seen.insert(key)
-            terms.append(term)
-            characterCount += separatorCount + term.count
-        }
-
-        return terms.isEmpty ? nil : terms.joined(separator: "、")
     }
 }
 
