@@ -126,7 +126,11 @@ actor TranscriptionSession {
         }
     }
 
-    func start(webParams: DoubaoASRParams?) async throws {
+    func start(
+        webParams: DoubaoASRParams?,
+        androidContext: String = "",
+        androidVocabulary: String = ""
+    ) async throws {
         audioStartTask?.cancel()
         audioStartTask = nil
 
@@ -160,7 +164,15 @@ actor TranscriptionSession {
                 throw NSError(domain: "Douvo.ASR", code: 11, userInfo: [NSLocalizedDescriptionKey: "Android recognition client is unavailable"])
             }
             let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
-            androidASRClient.connect(credentials: credentials)
+            let usePersonalLexicon = await preparePersonalLexicon(
+                vocabulary: androidVocabulary,
+                credentials: credentials
+            )
+            androidASRClient.connect(
+                credentials: credentials,
+                context: androidContext,
+                usePersonalLexicon: usePersonalLexicon
+            )
             let audioCapture = self.audioCapture
             let weakSelf = WeakRef(self)
             audioStartTask = Task.detached {
@@ -193,7 +205,15 @@ actor TranscriptionSession {
             }
             webASRClient.connect(params: webParams)
             if let androidCredentials {
-                androidASRClient.connect(credentials: androidCredentials)
+                let usePersonalLexicon = await preparePersonalLexicon(
+                    vocabulary: androidVocabulary,
+                    credentials: androidCredentials
+                )
+                androidASRClient.connect(
+                    credentials: androidCredentials,
+                    context: androidContext,
+                    usePersonalLexicon: usePersonalLexicon
+                )
             }
             let weakSelf = WeakRef(self)
             let audioCapture = self.audioCapture
@@ -219,6 +239,29 @@ actor TranscriptionSession {
                 }
             }
         }
+    }
+
+    private func preparePersonalLexicon(
+        vocabulary: String,
+        credentials: DoubaoAndroidCredentials
+    ) async -> Bool {
+        let words = DoubaoAndroidPersonalLexicon.words(from: vocabulary)
+        guard !words.isEmpty else { return false }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        do {
+            let result = try await DoubaoAndroidPersonalLexiconSynchronizer.shared.sync(
+                vocabulary: vocabulary,
+                credentials: credentials
+            )
+            let duration = Int(
+                (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            )
+            AppLog.info("Android personal lexicon ready words=\(result.wordCount) uploaded=\(result.uploaded) durationMs=\(duration)")
+        } catch {
+            AppLog.error("Android personal lexicon sync failed words=\(words.count) error=\(error.localizedDescription)")
+        }
+        // Previously uploaded account words remain useful if a refresh fails.
+        return true
     }
 
     func stop() async -> URL? {

@@ -2,7 +2,125 @@ import XCTest
 @testable import Douvo
 
 final class AndroidASRResultParserTests: XCTestCase {
-    func testParserJoinsMultipleResultSegmentsInsteadOfTakingLastOnly() {
+    func testSessionConfigEnablesAndroidCorrectionPasses() throws {
+        let config = AndroidASRSessionConfig.make(
+            deviceID: "device-123",
+            context: "encoded-context"
+        )
+        let extra = try XCTUnwrap(config["extra"] as? [String: Any])
+
+        XCTAssertEqual(extra["did"] as? String, "device-123")
+        XCTAssertEqual(extra["context"] as? String, "encoded-context")
+        XCTAssertEqual(extra["enable_asr_threepass"] as? Bool, true)
+        XCTAssertEqual(extra["enable_asr_twopass"] as? Bool, true)
+        XCTAssertEqual(extra["strong_ddc"] as? Bool, true)
+        XCTAssertEqual(extra["use_twopass_retry"] as? Bool, true)
+        XCTAssertEqual(extra["enable_text_post_process"] as? Bool, true)
+        XCTAssertEqual(extra["asr_text_post_process_type"] as? String, "last_post_process")
+        XCTAssertEqual(extra["disable_user_words"] as? Bool, true)
+        XCTAssertEqual(extra["enable_print_chinese"] as? Bool, false)
+    }
+
+    func testSessionConfigEnablesUploadedPersonalLexicon() throws {
+        let config = AndroidASRSessionConfig.make(
+            deviceID: "123",
+            usePersonalLexicon: true
+        )
+        let extra = try XCTUnwrap(config["extra"] as? [String: Any])
+
+        XCTAssertEqual(extra["disable_user_words"] as? Bool, false)
+    }
+
+    func testSessionConfigOmitsEmptyContext() throws {
+        let config = AndroidASRSessionConfig.make(deviceID: "device-123")
+        let extra = try XCTUnwrap(config["extra"] as? [String: Any])
+
+        XCTAssertNil(extra["context"])
+    }
+
+    func testFinalTaskRequestPayloadFinishesAudioAndForcesTwoPass() throws {
+        let payload = AndroidASRTaskRequestPayload.make(timestampMillis: 123_456, isFinal: true)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+        )
+        let extra = try XCTUnwrap(object["extra"] as? [String: Any])
+
+        XCTAssertEqual(object["timestamp_ms"] as? Int, 123_456)
+        XCTAssertEqual(extra["finish_audio"] as? Bool, true)
+        XCTAssertEqual(extra["force_asr_twopass"] as? Bool, true)
+    }
+
+    func testStreamingTaskRequestPayloadDoesNotSignalFinish() throws {
+        let payload = AndroidASRTaskRequestPayload.make(timestampMillis: 42, isFinal: false)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+        )
+        let extra = try XCTUnwrap(object["extra"] as? [String: Any])
+
+        XCTAssertEqual(object["timestamp_ms"] as? Int, 42)
+        XCTAssertTrue(extra.isEmpty)
+    }
+
+    func testFinishCoordinatorRequestsFinishImmediatelyAfterFinalAudioFrame() {
+        var coordinator = AndroidASRFinishCoordinator()
+
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
+        XCTAssertTrue(coordinator.finalFrameSent)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+        XCTAssertEqual(coordinator.finishTrigger, .finalFrameSent)
+    }
+
+    func testFinishCoordinatorRecordsFinalResultAfterFinishWasRequested() throws {
+        var coordinator = AndroidASRFinishCoordinator()
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
+
+        let finalResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "从最新主干创建一个 worktree。",
+              "is_interim": false,
+              "is_vad_finished": true,
+              "extra": { "nonstream_result": true }
+            }
+          ]
+        }
+        """))
+
+        coordinator.receive(finalResult)
+        XCTAssertTrue(coordinator.finalResultReceived)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+        XCTAssertEqual(coordinator.finishTrigger, .finalFrameSent)
+    }
+
+    func testFinishCoordinatorDoesNotRecordInterimAsFinal() throws {
+        var coordinator = AndroidASRFinishCoordinator()
+
+        let interimResult = try XCTUnwrap(AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "从最新的主干拉个 walk tree",
+              "is_interim": true
+            }
+          ]
+        }
+        """))
+
+        coordinator.receive(interimResult)
+        XCTAssertFalse(coordinator.finalResultReceived)
+        XCTAssertFalse(coordinator.finishSessionRequested)
+    }
+
+    func testFinishCoordinatorRequestsFinishOnlyOnce() {
+        var coordinator = AndroidASRFinishCoordinator()
+
+        XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
+        XCTAssertTrue(coordinator.finishSessionRequested)
+        XCTAssertNil(coordinator.finalFrameDidSend())
+    }
+
+    func testParserJoinsLegacySegmentedResults() {
         let json = """
         {
           "results": [
@@ -33,6 +151,113 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(result?.segmentCount, 3)
         XCTAssertEqual(result?.metadata["android_result_segments"], "3")
         XCTAssertEqual(result?.metadata["android_text_segments"], "3")
+        XCTAssertEqual(result?.metadata["android_result_model"], "segmented")
+    }
+
+    func testParserUsesCumulativeResultWithoutAppendingSentenceDetails() {
+        let json = """
+        {
+          "results": [
+            {
+              "text": "今天天气真不错。我们",
+              "start_time": 0,
+              "end_time": 7020,
+              "is_interim": true
+            },
+            {
+              "text": "今天天气真不错。",
+              "start_time": 0,
+              "end_time": 2500,
+              "is_interim": false,
+              "stream_asr_finish": true,
+              "extra": { "nonstream_result": true }
+            },
+            {
+              "text": "我们",
+              "start_time": 6520,
+              "end_time": 7020,
+              "is_interim": true,
+              "stream_asr_finish": false
+            }
+          ]
+        }
+        """
+
+        let result = AndroidASRProtobuf.parseRecognitionResultJSON(json)
+
+        XCTAssertEqual(result?.text, "今天天气真不错。我们")
+        XCTAssertEqual(result?.segments.count, 1)
+        XCTAssertEqual(result?.segmentCount, 3)
+        XCTAssertEqual(result?.isFinal, false)
+        XCTAssertEqual(result?.metadata["android_result_model"], "cumulative_with_details")
+        XCTAssertEqual(result?.metadata["android_detail_segments"], "2")
+        XCTAssertEqual(result?.metadata["android_nonstream_result"], "false")
+        XCTAssertEqual(result?.metadata["android_raw_nonstream_result_segments"], "1")
+    }
+
+    func testAssemblerSwitchesToCumulativeSnapshotsAfterDetailedFrame() {
+        var assembler = AndroidASRTranscriptAssembler()
+        let initial = AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "今天天气真不错。",
+              "start_time": 0,
+              "end_time": 2500,
+              "is_interim": true
+            }
+          ]
+        }
+        """)!
+        let detailed = AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "今天天气真不错。我们",
+              "start_time": 0,
+              "end_time": 7020,
+              "is_interim": true
+            },
+            {
+              "text": "今天天气真不错。",
+              "start_time": 0,
+              "end_time": 2500,
+              "is_interim": false,
+              "stream_asr_finish": true,
+              "extra": { "nonstream_result": true }
+            },
+            {
+              "text": "我们",
+              "start_time": 6520,
+              "end_time": 7020,
+              "is_interim": true,
+              "stream_asr_finish": false
+            }
+          ]
+        }
+        """)!
+        let finalRevision = AndroidASRProtobuf.parseRecognitionResultJSON("""
+        {
+          "results": [
+            {
+              "text": "今天天气不错，我们。",
+              "start_time": 0,
+              "end_time": 7200,
+              "is_interim": false,
+              "is_vad_finished": true
+            }
+          ]
+        }
+        """)!
+
+        _ = assembler.update(with: initial)
+        let detailedUpdate = assembler.update(with: detailed)
+        let finalUpdate = assembler.update(with: finalRevision)
+
+        XCTAssertEqual(detailedUpdate.text, "今天天气真不错。我们")
+        XCTAssertEqual(finalUpdate.text, "今天天气不错，我们。")
+        XCTAssertEqual(finalUpdate.metadata["android_transcript_model"], "cumulative")
+        XCTAssertEqual(finalUpdate.isFinal, true)
     }
 
     func testParserRecordsSegmentTimingMetadataForDiagnostics() {
@@ -87,6 +312,28 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(result?.kind, "final")
         XCTAssertEqual(result?.isFinal, true)
         XCTAssertEqual(result?.metadata["android_nonstream_result"], "true")
+    }
+
+    func testParserMarksLastPostProcessSnapshotFinalWithoutVADFlag() {
+        let json = """
+        {
+          "results": [
+            {
+              "text": "今天这个方案已经确定了，我们明天开始实施。",
+              "start_time": 0,
+              "end_time": 5.74,
+              "is_interim": false
+            }
+          ]
+        }
+        """
+
+        let result = AndroidASRProtobuf.parseRecognitionResultJSON(json)
+
+        XCTAssertEqual(result?.text, "今天这个方案已经确定了，我们明天开始实施。")
+        XCTAssertEqual(result?.kind, "final")
+        XCTAssertEqual(result?.isFinal, true)
+        XCTAssertEqual(result?.metadata["android_vad_finished_segments"], "0")
     }
 
     func testAssemblerReplacesSameIndexedSegmentInsteadOfAppendingDuplicate() {

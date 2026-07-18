@@ -237,6 +237,7 @@ struct LocalLLMPromptConfiguration: Sendable {
     let userIdentity: String
     let selectedText: String
     let translationLanguage: String
+    let recentDictationContext: String
 
     var outputStyleInstruction: String {
         outputStyle.instruction(
@@ -258,7 +259,8 @@ struct LocalLLMPromptConfiguration: Sendable {
         environmentContext: String,
         userIdentity: String,
         selectedText: String,
-        translationLanguage: String = ""
+        translationLanguage: String = "",
+        recentDictationContext: String = ""
     ) {
         self.systemPromptTemplate = systemPromptTemplate
         self.userPromptTemplate = userPromptTemplate
@@ -273,6 +275,26 @@ struct LocalLLMPromptConfiguration: Sendable {
         self.userIdentity = userIdentity
         self.selectedText = selectedText
         self.translationLanguage = translationLanguage
+        self.recentDictationContext = recentDictationContext
+    }
+
+    func withRecentDictationContext(_ ctx: String) -> LocalLLMPromptConfiguration {
+        LocalLLMPromptConfiguration(
+            systemPromptTemplate: systemPromptTemplate,
+            userPromptTemplate: userPromptTemplate,
+            vocabulary: vocabulary,
+            punctuationStyle: punctuationStyle,
+            removeFillerWords: removeFillerWords,
+            softenEmotionalLanguage: softenEmotionalLanguage,
+            outputStyle: outputStyle,
+            outputStyleStrength: outputStyleStrength,
+            customOutputStyleInstruction: customOutputStyleInstruction,
+            environmentContext: environmentContext,
+            userIdentity: userIdentity,
+            selectedText: selectedText,
+            translationLanguage: translationLanguage,
+            recentDictationContext: ctx
+        )
     }
 
     static var current: LocalLLMPromptConfiguration {
@@ -1036,11 +1058,13 @@ actor LocalLLMPostProcessor {
         configuration: LocalLLMPromptConfiguration
     ) -> String {
         let formattedVocabulary = formatVocabularyForPrompt(configuration.vocabulary, in: text)
+        let formattedVocabularyReference = formatFullVocabularyForPrompt(configuration.vocabulary)
         let punctuationStyle = configuration.punctuationStyle
         return renderPromptTemplate(
             configuration.systemPromptTemplate,
             original: text,
             formattedVocabulary: formattedVocabulary,
+            formattedVocabularyReference: formattedVocabularyReference,
             punctuationStyle: punctuationStyle,
             removeFillerWords: configuration.removeFillerWords,
             softenEmotionalLanguage: configuration.softenEmotionalLanguage,
@@ -1048,7 +1072,8 @@ actor LocalLLMPostProcessor {
             environmentContext: configuration.environmentContext,
             userIdentity: configuration.userIdentity,
             selectedText: configuration.selectedText,
-            translationLanguage: configuration.translationLanguage
+            translationLanguage: configuration.translationLanguage,
+            recentDictationContext: configuration.recentDictationContext
         )
     }
 
@@ -1061,6 +1086,7 @@ actor LocalLLMPostProcessor {
             configuration.userPromptTemplate,
             original: text,
             formattedVocabulary: formatVocabularyForPrompt(configuration.vocabulary, in: text),
+            formattedVocabularyReference: formatFullVocabularyForPrompt(configuration.vocabulary),
             punctuationStyle: punctuationStyle,
             removeFillerWords: configuration.removeFillerWords,
             softenEmotionalLanguage: configuration.softenEmotionalLanguage,
@@ -1068,7 +1094,8 @@ actor LocalLLMPostProcessor {
             environmentContext: configuration.environmentContext,
             userIdentity: configuration.userIdentity,
             selectedText: configuration.selectedText,
-            translationLanguage: configuration.translationLanguage
+            translationLanguage: configuration.translationLanguage,
+            recentDictationContext: configuration.recentDictationContext
         )
     }
 
@@ -1076,6 +1103,7 @@ actor LocalLLMPostProcessor {
         _ template: String,
         original: String,
         formattedVocabulary: String,
+        formattedVocabularyReference: String,
         punctuationStyle: PunctuationStyle,
         removeFillerWords: Bool,
         softenEmotionalLanguage: Bool,
@@ -1083,7 +1111,8 @@ actor LocalLLMPostProcessor {
         environmentContext: String,
         userIdentity: String,
         selectedText: String,
-        translationLanguage: String
+        translationLanguage: String,
+        recentDictationContext: String = ""
     ) -> String {
         return PromptTemplateRenderer.render(
             template,
@@ -1091,6 +1120,7 @@ actor LocalLLMPostProcessor {
                 "original": original,
                 "selected_text": selectedText,
                 "vocabularies": formattedVocabulary,
+                "vocabulary_reference": formattedVocabularyReference,
                 "punctuation_style": punctuationStyle.promptValue,
                 "punctuation_instruction": punctuationStyle.instruction,
                 "remove_filler_words": removeFillerWords ? "true" : "",
@@ -1098,7 +1128,8 @@ actor LocalLLMPostProcessor {
                 "output_style_instruction": outputStyleInstruction,
                 "environment_context": environmentContext,
                 "user_identity": userIdentity,
-                "translation_language": translationLanguage
+                "translation_language": translationLanguage,
+                "recent_dictation_context": recentDictationContext
             ]
         )
     }
@@ -1113,6 +1144,12 @@ actor LocalLLMPostProcessor {
         return candidates
             .map { "- \($0.source) => \($0.target)" }
             .joined(separator: "\n")
+    }
+
+    private static func formatFullVocabularyForPrompt(_ vocabulary: String) -> String {
+        let phrases = vocabularyPhrases(from: vocabulary)
+        guard !phrases.isEmpty, phrases.count <= 80, vocabulary.count <= 4000 else { return "" }
+        return phrases.map { "- \($0)" }.joined(separator: "\n")
     }
 
     private static func fallbackText(

@@ -199,6 +199,7 @@ enum LocalLLMSettingsStore {
         static let includeCurrentTimeContext = "localLLM.includeCurrentTimeContext"
         static let includeFrontmostAppContext = "localLLM.includeFrontmostAppContext"
         static let includeWindowTitleContext = "localLLM.includeWindowTitleContext"
+        static let includeRecentDictationContext = "localLLM.includeRecentDictationContext"
         static let translationTargetLanguage = "localLLM.translationTargetLanguage"
         static let selectionEditingEnabled = "localLLM.selectionEditingEnabled"
         static let reasoningMode = "localLLM.reasoningMode"
@@ -251,6 +252,13 @@ enum LocalLLMSettingsStore {
     {{vocabularies}}
     {{/if}}
 
+    {{#if vocabulary_reference}}
+    - 下面是用户词库完整列表，仅作术语参考
+    - 遇到发音相近的 ASR 识别错误时可参照纠正，但不要强制插入、联想扩写或改变原文意思
+
+    {{vocabulary_reference}}
+    {{/if}}
+
     {{#if remove_filler_words}}
     - 删除“嗯”“额”“好像”等不影响语义的填充词
       - 例：“嗯我想先看一下” => “我想先看一下”
@@ -297,6 +305,14 @@ enum LocalLLMSettingsStore {
     - 只用于消歧、术语判断、日期时间理解和输出场景判断
 
     {{environment_context}}
+    {{/if}}
+
+    {{#if recent_dictation_context}}
+    # 最近口述上下文
+    - 以下是你最近处理过的口述内容，仅用于理解指代、术语和上下文
+    - 不要复述、合并或引用这些历史内容到当前输出中
+
+    {{recent_dictation_context}}
     {{/if}}
 
     {{#if selected_text}}
@@ -461,6 +477,15 @@ enum LocalLLMSettingsStore {
         }
         set {
             defaults.set(newValue, forKey: Key.includeWindowTitleContext)
+        }
+    }
+
+    static var includeRecentDictationContext: Bool {
+        get {
+            defaults.object(forKey: Key.includeRecentDictationContext) as? Bool ?? true
+        }
+        set {
+            defaults.set(newValue, forKey: Key.includeRecentDictationContext)
         }
     }
 

@@ -87,6 +87,7 @@ This project depends on observed Doubao web and IME client behavior. It is **not
 - You need a valid Doubao account and must log in yourself.
 - Doubao may change its website, authentication flow, device registration, WebSocket protocols, ASR payload formats, rate limits, or access policy at any time.
 - Audio sent for recognition is processed by Doubao's service. Review Doubao's own terms and privacy policy before using this app.
+- Enabling Android Personal Lexicon uploads the configured vocabulary terms to Doubao; uploaded terms may persist remotely after local removal.
 - Web login parameters and Android ASR credentials are stored locally so the selected provider can connect without keeping a browser window open.
 - If remote AI post-processing is enabled, transcript text is sent to the provider and endpoint you configure.
 - Local AI post-processing uses MLX models downloaded from Hugging Face or loaded from a local model folder.

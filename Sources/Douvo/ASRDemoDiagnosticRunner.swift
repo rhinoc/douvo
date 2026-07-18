@@ -5,6 +5,7 @@ struct ASRDemoDiagnosticResult: Sendable {
     let openedProviders: [String]
     let finishedProviders: [String]
     let resultCharactersByProvider: [String: Int]
+    let transcriptsByProvider: [String: String]
     let errorsByProvider: [String: String]
     let audioPath: String
     let durationMilliseconds: Int
@@ -38,6 +39,15 @@ struct ASRDemoDiagnosticResult: Sendable {
 enum ASRDemoDiagnosticRunner {
     static func run(provider: ASRProvider) async throws -> ASRDemoDiagnosticResult {
         let audioURL = try DemoAudioStore.url()
+        return try await run(provider: provider, audioURL: audioURL)
+    }
+
+    static func run(
+        provider: ASRProvider,
+        audioURL: URL,
+        androidContext: String = "",
+        androidVocabulary: String = ""
+    ) async throws -> ASRDemoDiagnosticResult {
         let packets = try DemoASRAudioPipeline.packets(from: audioURL, provider: provider)
         AppLog.info("ASR demo diagnostic audio prepared provider=\(provider.rawValue) path=\(audioURL.path) samples=\(packets.sampleCount) webPackets=\(packets.webPCM.count) androidPackets=\(packets.androidOpus.count)")
 
@@ -50,14 +60,27 @@ enum ASRDemoDiagnosticRunner {
         }
 
         var androidCredentials: DoubaoAndroidCredentials?
+        var usePersonalLexicon = false
         if provider.usesAndroidASR {
-            androidCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+            let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+            androidCredentials = credentials
+            let words = DoubaoAndroidPersonalLexicon.words(from: androidVocabulary)
+            if !words.isEmpty {
+                let sync = try await DoubaoAndroidPersonalLexiconSynchronizer.shared.sync(
+                    vocabulary: androidVocabulary,
+                    credentials: credentials
+                )
+                usePersonalLexicon = true
+                AppLog.info("ASR demo personal lexicon ready words=\(sync.wordCount) uploaded=\(sync.uploaded)")
+            }
         }
 
         let session = ASRDemoDiagnosticSession(provider: provider, audioURL: audioURL)
         return try await session.run(
             webParams: webParams,
             androidCredentials: androidCredentials,
+            androidContext: androidContext,
+            usePersonalLexicon: usePersonalLexicon,
             packets: packets
         )
     }
@@ -85,10 +108,17 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     func run(
         webParams: DoubaoASRParams?,
         androidCredentials: DoubaoAndroidCredentials?,
+        androidContext: String,
+        usePersonalLexicon: Bool,
         packets: DemoASRAudioPackets
     ) async throws -> ASRDemoDiagnosticResult {
         configureClients()
-        connect(webParams: webParams, androidCredentials: androidCredentials)
+        connect(
+            webParams: webParams,
+            androidCredentials: androidCredentials,
+            androidContext: androidContext,
+            usePersonalLexicon: usePersonalLexicon
+        )
         defer {
             disconnect()
         }
@@ -142,12 +172,21 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         }
     }
 
-    private func connect(webParams: DoubaoASRParams?, androidCredentials: DoubaoAndroidCredentials?) {
+    private func connect(
+        webParams: DoubaoASRParams?,
+        androidCredentials: DoubaoAndroidCredentials?,
+        androidContext: String,
+        usePersonalLexicon: Bool
+    ) {
         if let webParams {
             webClient?.connect(params: webParams)
         }
         if let androidCredentials {
-            androidClient?.connect(credentials: androidCredentials)
+            androidClient?.connect(
+                credentials: androidCredentials,
+                context: androidContext,
+                usePersonalLexicon: usePersonalLexicon
+            )
         }
     }
 
@@ -291,6 +330,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             openedProviders: opened,
             finishedProviders: finished,
             resultCharactersByProvider: resultCharacters,
+            transcriptsByProvider: latestTextByProvider,
             errorsByProvider: errors,
             audioPath: audioURL.path,
             durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1000)

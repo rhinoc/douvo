@@ -70,6 +70,7 @@ enum DoubaoAndroidCredentialStore {
 
     static func clear() {
         try? FileManager.default.removeItem(at: fileURL)
+        DoubaoAndroidPersonalLexicon.clearCache()
         AppLog.info("Android ASR credentials cleared path=\(fileURL.path)")
     }
 

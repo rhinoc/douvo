@@ -413,6 +413,8 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var microphoneDevices: [AudioInputDevice]
     @Published var selectedMicrophoneUID: String?
     @Published var selectedASRProvider: ASRProvider
+    @Published var sendContextToAndroidASR = AndroidASRSettingsStore.sendContext
+    @Published var androidPersonalLexiconEnabled = AndroidASRSettingsStore.personalLexiconEnabled
     @Published var selectedLanguage: AppLanguage
     @Published var copyResultWhenInsertionFails = TextInsertionSettingsStore.copyResultWhenInsertionFails
     @Published var checksFocusedTextInputBeforeRecording = TextInsertionSettingsStore.checksFocusedTextInputBeforeRecording
@@ -441,6 +443,7 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var includeCurrentTimeContext = LocalLLMSettingsStore.includeCurrentTimeContext
     @Published var includeFrontmostAppContext = LocalLLMSettingsStore.includeFrontmostAppContext
     @Published var includeWindowTitleContext = LocalLLMSettingsStore.includeWindowTitleContext
+    @Published var includeRecentDictationContext = LocalLLMSettingsStore.includeRecentDictationContext
     @Published var selectionEditingEnabled = LocalLLMSettingsStore.selectionEditingEnabled
     @Published var translationTargetLanguage = LocalLLMSettingsStore.translationTargetLanguage
     @Published var localIncrementalSystemPrompt = LocalLLMSettingsStore.incrementalSystemPrompt
@@ -1303,6 +1306,26 @@ private struct SettingsPanelView: View {
         )
     }
 
+    private var androidASRContextBinding: Binding<Bool> {
+        Binding(
+            get: { model.sendContextToAndroidASR },
+            set: { newValue in
+                model.sendContextToAndroidASR = newValue
+                AndroidASRSettingsStore.sendContext = newValue
+            }
+        )
+    }
+
+    private var androidPersonalLexiconBinding: Binding<Bool> {
+        Binding(
+            get: { model.androidPersonalLexiconEnabled },
+            set: { newValue in
+                model.androidPersonalLexiconEnabled = newValue
+                AndroidASRSettingsStore.personalLexiconEnabled = newValue
+            }
+        )
+    }
+
     private var accountTab: some View {
         settingsPage {
             VStack(alignment: .leading, spacing: Self.settingsGroupSpacing) {
@@ -1324,6 +1347,33 @@ private struct SettingsPanelView: View {
                         .pickerStyle(.segmented)
                         .frame(width: 220, alignment: .trailing)
                         .focusable(false)
+                    }
+
+                    if model.selectedASRProvider.usesAndroidASR {
+                        settingsDivider()
+
+                        settingsListRow(L10n.text(en: "Context", zh: "上下文")) {
+                            Toggle("", isOn: androidASRContextBinding)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
+
+                        settingsDivider()
+
+                        settingsListRow(
+                            L10n.text(en: "Personal Lexicon", zh: "个人词库"),
+                            help: L10n.text(
+                                en: "Uploads these terms to Doubao and enables its personal lexicon for Android recognition. Uploaded terms may remain on the Doubao service after local removal; turn this off to stop using them.",
+                                zh: "将词条上传到豆包，并在 Android 识别中启用个人词库。上传后的词条在本地删除后仍可能保留在豆包服务端；关闭此开关可停止使用。"
+                            )
+                        ) {
+                            Toggle("", isOn: androidPersonalLexiconBinding)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .disabled(vocabularyPhrases.isEmpty)
+                        }
                     }
 
                     settingsDivider()
@@ -1386,6 +1436,7 @@ private struct SettingsPanelView: View {
                                 .focusable(false)
                         }
                     }
+
                 }
             }
         }
@@ -1558,6 +1609,65 @@ private struct SettingsPanelView: View {
                             .disabled(!aiDependentFeaturesEnabled || model.localOutputStyle == .original)
                             .opacity(aiDependentFeaturesEnabled ? 1 : Self.disabledFeatureOpacity)
                         }
+                    }
+                }
+
+                settingsTitle(
+                    L10n.text(en: "Context", zh: "上下文"),
+                    help: L10n.text(
+                        en: "Used for Android recognition and AI correction.",
+                        zh: "用于 Android 识别和 AI 矫正。"
+                    )
+                )
+
+                settingsSection {
+                    correctionListRow(
+                        L10n.text(en: "Current Time", zh: "当前时间"),
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: includeCurrentTimeContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        L10n.text(en: "Frontmost App", zh: "前台应用"),
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: includeFrontmostAppContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        L10n.text(en: "Window Title", zh: "窗口标题"),
+                        labelWidth: 120,
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: includeWindowTitleContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(!model.includeFrontmostAppContext)
+                    }
+
+                    settingsDivider()
+
+                    correctionListRow(
+                        L10n.text(en: "Recent Dictation", zh: "最近口述"),
+                        labelWidth: 120,
+                        contentAlignment: .trailing
+                    ) {
+                        Toggle("", isOn: includeRecentDictationContextBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
                     }
                 }
 
@@ -1743,52 +1853,6 @@ private struct SettingsPanelView: View {
                     } else {
                         remoteModelSettings
                     }
-                }
-
-                settingsTitle(L10n.text(en: "Context", zh: "上下文"))
-
-                settingsSection {
-                    correctionListRow(
-                        L10n.text(en: "Current Time", zh: "当前时间"),
-                        contentAlignment: .trailing
-                    ) {
-                        Toggle("", isOn: includeCurrentTimeContextBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow(
-                        L10n.text(en: "Frontmost App", zh: "前台应用"),
-                        contentAlignment: .trailing
-                    ) {
-                        Toggle("", isOn: includeFrontmostAppContextBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                    }
-
-                    settingsDivider()
-
-                    correctionListRow(
-                        L10n.text(en: "Window Title", zh: "窗口标题"),
-                        help: L10n.text(
-                            en: "May include document, page, chat, or project names.\nTurn it off if that context is sensitive.",
-                            zh: "可能包含文档、网页、聊天或项目名称。\n如果这些上下文敏感，可以关闭。"
-                        ),
-                        labelWidth: 120,
-                        contentAlignment: .trailing
-                    ) {
-                        Toggle("", isOn: includeWindowTitleContextBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .disabled(!model.includeFrontmostAppContext)
-                            .help(L10n.text(en: "Optionally send the active window title. This may include document, page, chat, or project names.", zh: "可选传入当前窗口标题；标题可能包含文档、网页、聊天或项目名称。"))
-                    }
-
                 }
 
                 settingsTitle(L10n.text(en: "Advanced", zh: "高级"))
@@ -2677,6 +2741,18 @@ private struct SettingsPanelView: View {
                 let enabled = newValue && model.includeFrontmostAppContext
                 model.includeWindowTitleContext = enabled
                 LocalLLMSettingsStore.includeWindowTitleContext = enabled
+            }
+        )
+    }
+
+    private var includeRecentDictationContextBinding: Binding<Bool> {
+        Binding(
+            get: {
+                model.includeRecentDictationContext
+            },
+            set: { newValue in
+                model.includeRecentDictationContext = newValue
+                LocalLLMSettingsStore.includeRecentDictationContext = newValue
             }
         )
     }
@@ -3878,10 +3954,16 @@ private struct SettingsPanelView: View {
             .padding(.bottom, Self.settingsPageBottomPadding)
     }
 
-    private func settingsTitle(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.secondary)
+    private func settingsTitle(_ title: String, help: String? = nil) -> some View {
+        HStack(spacing: 5) {
+            Text(title)
+
+            if let help {
+                QuickInfoIcon(text: help)
+            }
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundColor(.secondary)
     }
 
     private func settingsRow<Content: View>(
@@ -4519,11 +4601,11 @@ private struct HighlightedPromptTextEditor: NSViewRepresentable {
         }
 
         private static let variablePattern = try? NSRegularExpression(
-            pattern: #"\{\{\s*(original|selected_text|translation_language|vocabularies|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)\s*\}\}"#
+            pattern: #"\{\{\s*(original|selected_text|translation_language|vocabularies|vocabulary_reference|recent_dictation_context|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)\s*\}\}"#
         )
 
         private static let controlPattern = try? NSRegularExpression(
-            pattern: #"\{\{\s*(#if\s+(original|selected_text|translation_language|vocabularies|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)|else|/if)\s*\}\}"#
+            pattern: #"\{\{\s*(#if\s+(original|selected_text|translation_language|vocabularies|vocabulary_reference|recent_dictation_context|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)|else|/if)\s*\}\}"#
         )
 
         private static var baseAttributes: [NSAttributedString.Key: Any] {

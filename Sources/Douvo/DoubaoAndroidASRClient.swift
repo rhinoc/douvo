@@ -14,6 +14,88 @@ struct AndroidASRResponse {
     let type: AndroidASRResponseType
 }
 
+enum AndroidASRSessionConfig {
+    static func make(
+        deviceID: String,
+        context: String = "",
+        usePersonalLexicon: Bool = false
+    ) -> [String: Any] {
+        var extra: [String: Any] = [
+            "app_name": "com.android.chrome",
+            "cell_compress_rate": 8,
+            "did": deviceID,
+            "enable_asr_threepass": true,
+            "enable_asr_twopass": true,
+            "enable_print_chinese": false,
+            "disable_user_words": !usePersonalLexicon,
+            // Runs one final whole-transcript correction after FinishSession.
+            "enable_text_post_process": true,
+            "asr_text_post_process_type": "last_post_process",
+            "input_mode": "tool",
+            "strong_ddc": true,
+            "use_twopass_retry": true
+        ]
+        if !context.isEmpty {
+            extra["context"] = context
+        }
+
+        return [
+            "audio_info": [
+                "channel": 1,
+                "format": "speech_opus",
+                "sample_rate": 16000
+            ],
+            "enable_punctuation": true,
+            "enable_speech_rejection": false,
+            "extra": extra
+        ]
+    }
+}
+
+enum AndroidASRTaskRequestPayload {
+    static func make(timestampMillis: Int64, isFinal: Bool) -> String {
+        if isFinal {
+            return #"{"extra":{"finish_audio":true,"force_asr_twopass":true},"timestamp_ms":\#(timestampMillis)}"#
+        }
+        return #"{"extra":{},"timestamp_ms":\#(timestampMillis)}"#
+    }
+}
+
+enum AndroidASRFinishTrigger: String, Equatable {
+    case finalFrameSent = "final_frame_sent"
+    case noFinalAudio = "no_final_audio"
+}
+
+struct AndroidASRFinishCoordinator {
+    private(set) var finalFrameSent = false
+    private(set) var finalResultReceived = false
+    private(set) var finishSessionRequested = false
+    private(set) var finishTrigger: AndroidASRFinishTrigger?
+
+    mutating func receive(_ result: ASRRecognitionResult) {
+        if result.isFinal {
+            finalResultReceived = true
+        }
+    }
+
+    mutating func finalFrameDidSend() -> AndroidASRFinishTrigger? {
+        finalFrameSent = true
+        return requestFinish(.finalFrameSent)
+    }
+
+    mutating func finishWithoutAudio() -> AndroidASRFinishTrigger? {
+        finalFrameSent = true
+        return requestFinish(.noFinalAudio)
+    }
+
+    private mutating func requestFinish(_ trigger: AndroidASRFinishTrigger) -> AndroidASRFinishTrigger? {
+        guard !finishSessionRequested else { return nil }
+        finishSessionRequested = true
+        finishTrigger = trigger
+        return trigger
+    }
+}
+
 final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     enum State: String, Sendable {
         case idle
@@ -30,23 +112,21 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private static let aid = "401734"
     private static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
     private static let frameDurationMillis: Int64 = 20
-    private static let finishSessionDrainQuietMillis = 300
-    private static let finishSessionDrainMaxMillis = 1_200
 
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     private var task: URLSessionWebSocketTask?
     private var state: State = .idle
     private var credentials: DoubaoAndroidCredentials?
+    private var sessionContext = ""
+    private var usePersonalLexicon = false
     private var requestID = ""
     private var pendingAudio: [Data] = []
     private var queuedAudio: [Data] = []
+    private var latestAudioFrame: Data?
     private var isSendingAudio = false
     private var finishRequested = false
     private var finishFramesSent = false
-    private var drainingResultsBeforeFinishSession = false
-    private var finishSessionSent = false
-    private var finishSessionDrainQuietWork: DispatchWorkItem?
-    private var finishSessionDrainMaxWork: DispatchWorkItem?
+    private var finishCoordinator = AndroidASRFinishCoordinator()
     private var frameIndex: Int64 = 0
     private var startedAtMillis: Int64 = 0
     private var receivedMessageCount = 0
@@ -68,7 +148,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     var onError: ((Error?) -> Void)?
     var onAuthError: (() -> Void)?
 
-    func connect(credentials: DoubaoAndroidCredentials) {
+    func connect(
+        credentials: DoubaoAndroidCredentials,
+        context: String = "",
+        usePersonalLexicon: Bool = false
+    ) {
         var components = URLComponents(url: Self.webSocketURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "aid", value: Self.aid),
@@ -81,6 +165,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
         requestID = UUID().uuidString
         startedAtMillis = Self.currentTimeMillis()
+        sessionContext = context
+        self.usePersonalLexicon = usePersonalLexicon
 
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
@@ -100,15 +186,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         task = socket
         pendingAudio.removeAll()
         queuedAudio.removeAll()
+        latestAudioFrame = nil
         isSendingAudio = false
         finishRequested = false
         finishFramesSent = false
-        drainingResultsBeforeFinishSession = false
-        finishSessionSent = false
-        finishSessionDrainQuietWork?.cancel()
-        finishSessionDrainQuietWork = nil
-        finishSessionDrainMaxWork?.cancel()
-        finishSessionDrainMaxWork = nil
+        finishCoordinator = AndroidASRFinishCoordinator()
         frameIndex = 0
         receivedMessageCount = 0
         recognitionMessageCount = 0
@@ -137,6 +219,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         }
 
         if state == .open || state == .finishing {
+            latestAudioFrame = data
             queuedAudio.append(data)
             queuedAudioCount += 1
             if Self.shouldSampleProgress(queuedAudioCount) {
@@ -148,6 +231,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 sendNextAudio()
             }
         } else if state == .connecting {
+            latestAudioFrame = data
             pendingAudio.append(data)
             pendingAudioCount += 1
             if Self.shouldSampleProgress(pendingAudioCount) {
@@ -185,15 +269,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         state = .disconnected
         pendingAudio.removeAll()
         queuedAudio.removeAll()
+        latestAudioFrame = nil
         isSendingAudio = false
         finishRequested = false
         finishFramesSent = false
-        drainingResultsBeforeFinishSession = false
-        finishSessionSent = false
-        finishSessionDrainQuietWork?.cancel()
-        finishSessionDrainQuietWork = nil
-        finishSessionDrainMaxWork?.cancel()
-        finishSessionDrainMaxWork = nil
+        finishCoordinator = AndroidASRFinishCoordinator()
         lock.unlock()
 
         task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
@@ -222,23 +302,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
     private func sendStartSession() {
         guard let task, let credentials else { return }
-        let config: [String: Any] = [
-            "audio_info": [
-                "channel": 1,
-                "format": "speech_opus",
-                "sample_rate": 16000
-            ],
-            "enable_punctuation": true,
-            "enable_speech_rejection": false,
-            "extra": [
-                "app_name": "com.android.chrome",
-                "cell_compress_rate": 8,
-                "did": credentials.deviceId,
-                "enable_asr_threepass": true,
-                "enable_asr_twopass": true,
-                "input_mode": "tool"
-            ]
-        ]
+        let config = AndroidASRSessionConfig.make(
+            deviceID: credentials.deviceId,
+            context: sessionContext,
+            usePersonalLexicon: usePersonalLexicon
+        )
         let payloadData = (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
         let payload = String(data: payloadData, encoding: .utf8) ?? "{}"
         let message = AndroidASRProtobuf.request(
@@ -310,7 +378,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let message = AndroidASRProtobuf.request(
             token: "",
             methodName: "TaskRequest",
-            payload: #"{"extra":{},"timestamp_ms":\#(timestamp)}"#,
+            payload: AndroidASRTaskRequestPayload.make(timestampMillis: timestamp, isFinal: false),
             audioData: audio,
             requestID: requestID,
             frameState: isFirst ? 1 : 3
@@ -337,12 +405,29 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
     private func sendFinishFrames(socket: URLSessionWebSocketTask) {
         guard let credentials else { return }
+        lock.lock()
+        let finalAudioFrame = latestAudioFrame
+        lock.unlock()
+
+        guard let finalAudioFrame else {
+            AppLog.info("Android ASR final Opus frame skipped; no encoded audio available")
+            lock.lock()
+            let trigger = finishCoordinator.finishWithoutAudio()
+            lock.unlock()
+            if let trigger {
+                sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+            }
+            return
+        }
+
         let timestamp = startedAtMillis + frameIndex * Self.frameDurationMillis
         let lastFrame = AndroidASRProtobuf.request(
             token: "",
             methodName: "TaskRequest",
-            payload: #"{"extra":{},"timestamp_ms":\#(timestamp)}"#,
-            audioData: Data(repeating: 0, count: 100),
+            payload: AndroidASRTaskRequestPayload.make(timestampMillis: timestamp, isFinal: true),
+            // AudioCaptureManager appends encoded Opus silence before finishSending().
+            // Reuse its final packet so the protocol's last frame remains valid Opus.
+            audioData: finalAudioFrame,
             requestID: requestID,
             frameState: 9
         )
@@ -354,99 +439,29 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 self.logSummary(reason: "last_frame_failed")
                 return
             }
-            self.beginFinishSessionResultDrain(socket: socket, credentials: credentials)
+            AppLog.info("Android ASR final Opus frame sent finishAudio=true forceTwopass=true bytes=\(finalAudioFrame.count)")
+            self.lock.lock()
+            let trigger = self.finishCoordinator.finalFrameDidSend()
+            self.lock.unlock()
+            if let trigger {
+                self.sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+            }
         }
     }
 
-    private func beginFinishSessionResultDrain(
-        socket: URLSessionWebSocketTask,
-        credentials: DoubaoAndroidCredentials
-    ) {
-        lock.lock()
-        guard state == .finishing, !finishSessionSent else {
-            lock.unlock()
-            return
-        }
-        drainingResultsBeforeFinishSession = true
-        finishSessionDrainQuietWork?.cancel()
-        finishSessionDrainMaxWork?.cancel()
-        let quietWork = DispatchWorkItem { [weak self] in
-            self?.sendFinishSessionIfNeeded(
-                socket: socket,
-                credentials: credentials,
-                reason: "result_drain_quiet"
-            )
-        }
-        let maxWork = DispatchWorkItem { [weak self] in
-            self?.sendFinishSessionIfNeeded(
-                socket: socket,
-                credentials: credentials,
-                reason: "result_drain_max"
-            )
-        }
-        finishSessionDrainQuietWork = quietWork
-        finishSessionDrainMaxWork = maxWork
-        lock.unlock()
-
-        AppLog.info("Android ASR final frame sent; draining results before FinishSession quietMs=\(Self.finishSessionDrainQuietMillis) maxMs=\(Self.finishSessionDrainMaxMillis)")
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + .milliseconds(Self.finishSessionDrainQuietMillis),
-            execute: quietWork
-        )
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + .milliseconds(Self.finishSessionDrainMaxMillis),
-            execute: maxWork
-        )
-    }
-
-    private func rescheduleFinishSessionDrainQuietIfNeeded() {
-        lock.lock()
-        guard let socket = task,
-              let credentials,
-              state == .finishing,
-              drainingResultsBeforeFinishSession,
-              !finishSessionSent else {
-            lock.unlock()
-            return
-        }
-        finishSessionDrainQuietWork?.cancel()
-        let quietWork = DispatchWorkItem { [weak self] in
-            self?.sendFinishSessionIfNeeded(
-                socket: socket,
-                credentials: credentials,
-                reason: "result_drain_quiet"
-            )
-        }
-        finishSessionDrainQuietWork = quietWork
-        lock.unlock()
-
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + .milliseconds(Self.finishSessionDrainQuietMillis),
-            execute: quietWork
-        )
-    }
-
-    private func sendFinishSessionIfNeeded(
+    private func sendFinishSession(
         socket: URLSessionWebSocketTask,
         credentials: DoubaoAndroidCredentials,
-        reason: String
+        trigger: AndroidASRFinishTrigger
     ) {
         lock.lock()
-        guard state == .finishing,
-              drainingResultsBeforeFinishSession,
-              !finishSessionSent else {
+        guard state == .finishing, finishCoordinator.finishSessionRequested else {
             lock.unlock()
             return
         }
-        drainingResultsBeforeFinishSession = false
-        finishSessionSent = true
-        finishSessionDrainQuietWork?.cancel()
-        finishSessionDrainQuietWork = nil
-        finishSessionDrainMaxWork?.cancel()
-        finishSessionDrainMaxWork = nil
         lock.unlock()
 
-        AppLog.info("Android ASR sending FinishSession reason=\(reason)")
+        AppLog.info("Android ASR sending FinishSession reason=\(trigger.rawValue)")
         let finish = AndroidASRProtobuf.request(
             token: credentials.token,
             methodName: "FinishSession",
@@ -509,6 +524,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             lock.lock()
             recognitionMessageCount += 1
             let recognitionCount = recognitionMessageCount
+            finishCoordinator.receive(assembledResult)
             if Self.shouldSampleProgress(recognitionCount) {
                 Self.appendSummarySample(
                     "\(count):chars=\(assembledResult.text.count):kind=\(assembledResult.kind):segments=\(assembledResult.segmentCount):assembled=\(assembledResult.metadata["android_assembled_segments"] ?? "0")",
@@ -518,9 +534,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             lock.unlock()
             onResult?(assembledResult)
             if assembledResult.isFinal {
-                sendFinishSessionAfterPreFinishFinalIfNeeded()
-            } else {
-                rescheduleFinishSessionDrainQuietIfNeeded()
+                AppLog.info("Android ASR final result received chars=\(assembledResult.text.count) kind=\(assembledResult.kind) nonstream=\(assembledResult.metadata["android_nonstream_result"] ?? "false")")
             }
         case .heartbeat:
             break
@@ -546,11 +560,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private func markFinished() {
         lock.lock()
         state = .finished
-        drainingResultsBeforeFinishSession = false
-        finishSessionDrainQuietWork?.cancel()
-        finishSessionDrainQuietWork = nil
-        finishSessionDrainMaxWork?.cancel()
-        finishSessionDrainMaxWork = nil
         lock.unlock()
     }
 
@@ -558,11 +567,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         lock.lock()
         state = .failed
         isSendingAudio = false
-        drainingResultsBeforeFinishSession = false
-        finishSessionDrainQuietWork?.cancel()
-        finishSessionDrainQuietWork = nil
-        finishSessionDrainMaxWork?.cancel()
-        finishSessionDrainMaxWork = nil
         lock.unlock()
         if notify {
             onError?(asrError(error, stage: "transport_failed"))
@@ -614,6 +618,9 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let sentFrames = frameIndex
         let receivedCount = receivedMessageCount
         let recognitionCount = recognitionMessageCount
+        let finalFrameSent = finishCoordinator.finalFrameSent
+        let finalResultReceived = finishCoordinator.finalResultReceived
+        let finishTrigger = finishCoordinator.finishTrigger?.rawValue ?? ""
         lock.unlock()
 
         return [
@@ -625,27 +632,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             "android_queued_audio_count": String(queuedCount),
             "android_sent_frames": String(sentFrames),
             "android_received_messages": String(receivedCount),
-            "android_recognition_messages": String(recognitionCount)
+            "android_recognition_messages": String(recognitionCount),
+            "android_final_frame_sent": String(finalFrameSent),
+            "android_final_result_received": String(finalResultReceived),
+            "android_finish_trigger": finishTrigger
         ]
-    }
-
-    private func sendFinishSessionAfterPreFinishFinalIfNeeded() {
-        lock.lock()
-        guard let socket = task,
-              let credentials,
-              state == .finishing,
-              drainingResultsBeforeFinishSession,
-              !finishSessionSent else {
-            lock.unlock()
-            return
-        }
-        lock.unlock()
-
-        sendFinishSessionIfNeeded(
-            socket: socket,
-            credentials: credentials,
-            reason: "server_final"
-        )
     }
 
     private func isExpectedClose(_ error: Error) -> Bool {
@@ -676,9 +667,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let queuedSamples = Self.formatSamples(queuedAudioSamples)
         let sentSamples = Self.formatSamples(sentFrameSamples)
         let resultSamples = Self.formatSamples(recognitionSamples)
+        let finalFrameSent = finishCoordinator.finalFrameSent
+        let finalResultReceived = finishCoordinator.finalResultReceived
+        let finishTrigger = finishCoordinator.finishTrigger?.rawValue ?? "none"
         lock.unlock()
 
-        AppLog.info("Android ASR summary reason=\(reason) state=\(state) pending=\(pendingCount) queued=\(queuedCount) pendingAudio=\(pendingTotal) queuedAudio=\(queuedTotal) sentFrames=\(sentFrames) receivedMessages=\(receivedCount) recognitionMessages=\(recognitionCount) pendingSamples=\(pendingSamples) queuedSamples=\(queuedSamples) sentSamples=\(sentSamples) recognitionSamples=\(resultSamples)")
+        AppLog.info("Android ASR summary reason=\(reason) state=\(state) pending=\(pendingCount) queued=\(queuedCount) pendingAudio=\(pendingTotal) queuedAudio=\(queuedTotal) sentFrames=\(sentFrames) receivedMessages=\(receivedCount) recognitionMessages=\(recognitionCount) finalFrameSent=\(finalFrameSent) finalResultReceived=\(finalResultReceived) finishTrigger=\(finishTrigger) pendingSamples=\(pendingSamples) queuedSamples=\(queuedSamples) sentSamples=\(sentSamples) recognitionSamples=\(resultSamples)")
     }
 
     private static func shouldSampleProgress(_ count: Int) -> Bool {
@@ -705,6 +699,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 struct AndroidASRTranscriptAssembler {
     private var committedSegments: [ASRRecognitionSegment] = []
     private var activeSegment: ASRRecognitionSegment?
+    private var usesCumulativeSnapshots = false
     private var activeRewriteCount = 0
     private var activeCommitCount = 0
     private var overlappedSegmentUpdateCount = 0
@@ -712,6 +707,7 @@ struct AndroidASRTranscriptAssembler {
     mutating func reset() {
         committedSegments.removeAll(keepingCapacity: true)
         activeSegment = nil
+        usesCumulativeSnapshots = false
         activeRewriteCount = 0
         activeCommitCount = 0
         overlappedSegmentUpdateCount = 0
@@ -719,6 +715,30 @@ struct AndroidASRTranscriptAssembler {
 
     mutating func update(with result: ASRRecognitionResult) -> ASRRecognitionResult {
         guard !result.segments.isEmpty else { return result }
+
+        if result.metadata["android_result_model"] == "cumulative_with_details" {
+            // This frame proves results[0] is the full snapshot. Future single-result
+            // frames in the same session must also replace, not append to, that text.
+            usesCumulativeSnapshots = true
+            committedSegments.removeAll(keepingCapacity: true)
+            activeSegment = nil
+        }
+
+        if usesCumulativeSnapshots {
+            var metadata = result.metadata
+            metadata["android_transcript_model"] = "cumulative"
+            metadata["android_assembled_segments"] = String(result.segments.count)
+            metadata["android_assembled_segment_ids"] = result.segments.map(\.id).joined(separator: ",")
+            metadata["android_assembled_segment_final_count"] = String(result.segments.filter(\.isFinal).count)
+            return .android(
+                text: result.text,
+                kind: result.kind,
+                segmentCount: result.segmentCount,
+                isFinal: result.isFinal,
+                metadata: metadata,
+                segments: result.segments
+            )
+        }
 
         for segment in result.segments.sorted(by: segmentSort) {
             if segment.isFinal {
@@ -1131,6 +1151,7 @@ enum AndroidASRProtobuf {
             return nil
         }
 
+        let isCumulativeWithDetails = isCumulativeWithSentenceDetails(results)
         var segments: [ASRRecognitionSegment] = []
         var resultKeys = Set<String>()
         var indices: [String] = []
@@ -1140,9 +1161,9 @@ enum AndroidASRProtobuf {
         var interimCount = 0
         var finalCount = 0
         var vadFinishedCount = 0
-        var vadFinished = false
-        var nonstreamResult = false
-        for result in results {
+        var streamASRFinishedCount = 0
+        var rawNonstreamResultCount = 0
+        for (resultOffset, result) in results.enumerated() {
             resultKeys.formUnion(result.keys)
             if let value = result["text"] as? String {
                 let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1158,15 +1179,17 @@ enum AndroidASRProtobuf {
                     } else {
                         timeRanges.append("-")
                     }
-                    let isSegmentFinal = result["is_interim"] as? Bool == false
-                    segments.append(ASRRecognitionSegment(
-                        id: segmentID(index: index, startTime: startTime, endTime: endTime, fallbackIndex: segments.count),
-                        text: text,
-                        index: index,
-                        startTime: startTime,
-                        endTime: endTime,
-                        isFinal: isSegmentFinal
-                    ))
+                    if !isCumulativeWithDetails || resultOffset == 0 {
+                        let isSegmentFinal = result["is_interim"] as? Bool == false
+                        segments.append(ASRRecognitionSegment(
+                            id: segmentID(index: index, startTime: startTime, endTime: endTime, fallbackIndex: segments.count),
+                            text: text,
+                            index: index,
+                            startTime: startTime,
+                            endTime: endTime,
+                            isFinal: isSegmentFinal
+                        ))
+                    }
                 }
             }
             if result["is_interim"] as? Bool == false {
@@ -1176,24 +1199,52 @@ enum AndroidASRProtobuf {
             }
             if result["is_vad_finished"] as? Bool == true {
                 vadFinishedCount += 1
-                vadFinished = true
+            }
+            if result["stream_asr_finish"] as? Bool == true {
+                streamASRFinishedCount += 1
             }
             if let extra = result["extra"] as? [String: Any],
                extra["nonstream_result"] as? Bool == true {
-                nonstreamResult = true
+                rawNonstreamResultCount += 1
             }
         }
 
+        // Sentence-detail nonstream flags finalize only that sentence. They must not
+        // finalize the full stream represented by results[0].
+        let finalizationResults = isCumulativeWithDetails ? Array(results.prefix(1)) : results
+        let finalizationFinalCount = finalizationResults.filter { $0["is_interim"] as? Bool == false }.count
+        let nonstreamResult = finalizationResults.contains {
+            guard let extra = $0["extra"] as? [String: Any] else { return false }
+            return extra["nonstream_result"] as? Bool == true
+        }
         let text = joinedSegmentText(segments.map(\.text))
-        let isFinal = nonstreamResult || (finalCount > 0 && finalCount == results.count && vadFinished)
+        // `last_post_process` returns the whole-transcript revision with
+        // `is_interim=false`, but without `is_vad_finished`. Requiring both flags
+        // mislabels the server's final corrected snapshot as interim.
+        let isFinal = nonstreamResult || (
+            finalizationFinalCount > 0
+                && finalizationFinalCount == finalizationResults.count
+        )
         let kind = isFinal ? "final" : "interim"
+        let resultModel: String
+        if isCumulativeWithDetails {
+            resultModel = "cumulative_with_details"
+        } else if results.count == 1 {
+            resultModel = "single"
+        } else {
+            resultModel = "segmented"
+        }
         let metadata: [String: String] = [
+            "android_result_model": resultModel,
             "android_result_segments": String(results.count),
             "android_text_segments": String(segments.count),
+            "android_detail_segments": String(isCumulativeWithDetails ? max(0, results.count - 1) : 0),
             "android_interim_segments": String(interimCount),
             "android_final_segments": String(finalCount),
             "android_vad_finished_segments": String(vadFinishedCount),
+            "android_stream_asr_finished_segments": String(streamASRFinishedCount),
             "android_nonstream_result": String(nonstreamResult),
+            "android_raw_nonstream_result_segments": String(rawNonstreamResultCount),
             "android_result_keys": resultKeys.sorted().joined(separator: ","),
             "android_segment_ids": segments.map(\.id).joined(separator: ","),
             "android_segment_indices": indices.joined(separator: ","),
@@ -1209,6 +1260,44 @@ enum AndroidASRProtobuf {
             metadata: metadata,
             segments: segments
         )
+    }
+
+    private static func isCumulativeWithSentenceDetails(_ results: [[String: Any]]) -> Bool {
+        guard results.count > 1,
+              let cumulativeValue = results[0]["text"] as? String else {
+            return false
+        }
+        let cumulativeText = cumulativeValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cumulativeText.isEmpty else { return false }
+
+        let detailResults = results.dropFirst()
+        let detailTexts = detailResults.compactMap { result -> String? in
+            guard let value = result["text"] as? String else { return nil }
+            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        guard !detailTexts.isEmpty else { return false }
+
+        if normalizedFrameText(joinedSegmentText(detailTexts)) == normalizedFrameText(cumulativeText) {
+            return true
+        }
+
+        // Captured Android frames identify sentence breakdown entries with these
+        // fields while the cumulative entry starts at the beginning of the stream.
+        let firstStartsAtZero = intValue(results[0]["start_time"]) == 0
+        let hasSentenceDetailSignal = detailResults.contains { result in
+            if result["stream_asr_finish"] != nil { return true }
+            guard let extra = result["extra"] as? [String: Any] else { return false }
+            return extra["nonstream_result"] != nil
+        }
+        return firstStartsAtZero && hasSentenceDetailSignal
+    }
+
+    private static func normalizedFrameText(_ text: String) -> String {
+        text.unicodeScalars
+            .filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
+            .map(String.init)
+            .joined()
     }
 
     private static func segmentID(

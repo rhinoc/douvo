@@ -140,12 +140,33 @@ The important `StartSession` config is:
   "enable_punctuation": true,
   "extra": {
     "did": "<deviceId>",
+    "disable_user_words": false,
     "enable_asr_twopass": true,
     "enable_asr_threepass": true,
     "input_mode": "tool"
   }
 }
 ```
+
+### Personal Lexicon
+
+The Android provider can upload the vocabulary configured in Douvo to Doubao's
+device-scoped personal lexicon. This is separate from `extra.context`: context is
+a soft conversation-history hint, while the personal lexicon is enabled by
+`disable_user_words=false` in `StartSession`.
+
+When the feature is enabled and the local vocabulary changes, Douvo performs:
+
+1. `POST https://ime.oceancloudapi.com/api/v1/user/get_config` to obtain a short-lived context token.
+2. A P-256 Wave handshake with `https://keyhub.zijieapi.com/handshake`.
+3. A ChaCha20-encrypted upload to `https://speech.bytedance.com/api/v3/context/ime/user_words`.
+
+Only a device id and per-word SHA-256 digests are cached locally after a successful
+upload; the word list is not duplicated into that cache. Only missing terms are
+uploaded on later runs. The protocol has no verified per-word deletion operation, so a
+locally removed term may remain on Doubao's service. Turning Personal Lexicon off
+sends `disable_user_words=true`, preventing those remote terms from being used by
+new Android recognition sessions.
 
 ### Audio and Results
 
@@ -170,6 +191,22 @@ Server responses are also Protobuf-encoded. Douvo parses `message_type` and `res
 `results` can contain multiple text segments. Douvo parses all non-empty `results[].text` segments for one recognition update instead of taking only the last segment. The Android provider then maintains an in-session segment map keyed by provider segment identity (`index`, falling back to time range or result order). A newer interim/final update for the same segment replaces the old text instead of being appended again; distinct segment ids are ordered and joined into the current transcript.
 
 Trace metadata records the Android segment shape (`android_result_segments`, `android_text_segments`, `android_interim_segments`, `android_final_segments`, `android_vad_finished_segments`, `android_result_keys`, `android_segment_ids`, `android_assembled_segments`, and `android_assembled_segment_ids`) so provider behavior can be diagnosed from a failed trace.
+
+### Headless ASR Lab
+
+Generate an audio fixture with `say`, then send it through the same conversion,
+streaming, and finalization path without opening the app or using the microphone:
+
+```bash
+say -v Tingting -o /tmp/douvo-asr-lab.aiff '请创建一个 worktree，然后提交 pull request。'
+swift run Douvo --asr-lab /tmp/douvo-asr-lab.aiff --provider android
+```
+
+Use `--provider web|android|mix` to select a route. Android experiments can add
+`--context 'prior conversation'`. Use `--vocabulary 'worktree,Claude Code'` to
+upload and enable the personal lexicon before recognition. The command prints the
+final transcript and returns a nonzero exit status when a selected route fails to
+open, finish, or produce text.
 
 ## Dual Provider
 
@@ -218,6 +255,9 @@ The Android provider needs these domains to be reachable:
 log.snssdk.com
 is.snssdk.com
 frontier-audio-ime-ws.doubao.com
+ime.oceancloudapi.com
+keyhub.zijieapi.com
+speech.bytedance.com
 ```
 
 `log.snssdk.com` is commonly matched by ad-blocking rules. If a router, proxy, OpenClash, or fake-ip setup redirects or blocks it, device registration can fail. In the app log, this often appears as a TLS connection failure. When this happens, check ad filters, rule sets, and DNS fake-ip policies for the domains above.
@@ -227,6 +267,7 @@ The Web provider needs normal access to Doubao Web and `ws-samantha.doubao.com`,
 ## Privacy and Risk
 
 - Both providers send microphone audio to Doubao servers for recognition.
+- Enabling Android Personal Lexicon uploads the configured vocabulary terms to Doubao and may persist them remotely after local removal.
 - The Web provider stores web login parameters; the Android provider stores IME-style device credentials and an ASR token.
 - Do not commit or share `asr_params.json`, `android_asr_credentials.json`, or credential values copied from logs.
 - Neither provider is an official stable API, so both may require future maintenance when Doubao changes client or server behavior.
