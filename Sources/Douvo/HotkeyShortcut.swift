@@ -62,7 +62,7 @@ struct HotkeyShortcut: Codable, Equatable {
         return "\(localizedName) \(symbol)"
     }
 
-    private var localizedDisplayName: String {
+    var localizedDisplayName: String {
         switch displayName {
         case "Left Command":
             L10n.text(en: "Left Command", zh: "左 Command")

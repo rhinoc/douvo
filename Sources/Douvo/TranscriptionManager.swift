@@ -1044,6 +1044,7 @@ final class TranscriptionManager {
         translationSessionActive = false
         appState.overlayMode = .dictation
         completionTask = nil
+        appState.transcriptHistory = TranscriptHistoryStore.record(finalText)
         appState.lastTranscript = finalText
         transcriptionTrace?.set("corrected_text", finalText)
         transcriptionTrace?.startSpan("paste.enqueue")

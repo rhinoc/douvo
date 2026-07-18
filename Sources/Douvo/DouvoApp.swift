@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupTranscription()
         requestMicrophonePermission()
         rebuildMenu()
+        scheduleStatusItemVisibilityCheck()
         prewarmSelectedLocalLLMModel(reason: "launch")
     }
 
@@ -102,6 +103,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    private func scheduleStatusItemVisibilityCheck() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.checkStatusItemVisibilityAfterLaunch()
+        }
+    }
+
+    private func checkStatusItemVisibilityAfterLaunch() {
+        guard let button = statusItem?.button,
+              let itemFrame = StatusItemVisibilityDetector.frameInScreenCoordinates(for: button),
+              let screen = button.window?.screen ?? NSScreen.screens.first else {
+            AppLog.info("Status item visibility check skipped reason=layout_unavailable")
+            return
+        }
+
+        let isLikelyObscured = StatusItemVisibilityDetector.isLikelyObscured(
+            itemFrame: itemFrame,
+            screenFrame: screen.frame,
+            auxiliaryTopRightArea: screen.auxiliaryTopRightArea
+        )
+        AppLog.info(
+            "Status item visibility checked likelyObscured=\(isLikelyObscured) hasCameraHousing=\(screen.auxiliaryTopRightArea != nil)"
+        )
+        guard isLikelyObscured else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.icon = loadApplicationIcon()
+        alert.messageText = StatusItemVisibilityAlertContent.title()
+        let shortcutNames = [
+            hotkeyManager.translationShortcut,
+            hotkeyManager.holdShortcut,
+            hotkeyManager.toggleShortcut
+        ].compactMap { $0?.localizedDisplayName }
+        alert.informativeText = StatusItemVisibilityAlertContent.informativeText(
+            shortcutNames: shortcutNames
+        )
+        alert.addButton(withTitle: L10n.text(en: "OK", zh: "知道了"))
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    private func loadApplicationIcon() -> NSImage {
+        let candidateURLs = [
+            Bundle.main.url(forResource: "Douvo", withExtension: "icns"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("assets/Douvo.icns")
+        ]
+        for case let url? in candidateURLs {
+            if let image = NSImage(contentsOf: url) {
+                return image
+            }
+        }
+        return NSApp.applicationIconImage
     }
 
     private func loadStatusBarIcon() -> NSImage {
@@ -248,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu,
             provider: ASRProviderStore.selected,
             loginStatus: appState.loginStatus,
-            lastTranscript: appState.lastTranscript,
+            transcriptHistory: appState.transcriptHistory,
             canCheckForUpdates: updaterController.updater.canCheckForUpdates,
             target: self
         )
@@ -258,7 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ menu: NSMenu,
         provider: ASRProvider,
         loginStatus: LoginStatus,
-        lastTranscript: String,
+        transcriptHistory: [String],
         canCheckForUpdates: Bool,
         target: AnyObject?
     ) {
@@ -286,9 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
             }
         }
-        let copyItem = menuItem(title: L10n.text(en: "Copy Last Transcript", zh: "复制上一段转写"), action: #selector(copyLastTranscript), keyEquivalent: "c", target: target)
-        copyItem.isEnabled = !lastTranscript.isEmpty
-        menu.addItem(copyItem)
+        menu.addItem(transcriptHistoryItem(transcriptHistory, target: target))
         menu.addItem(menuItem(title: L10n.text(en: "Settings", zh: "设置"), action: #selector(showSettings), keyEquivalent: ",", target: target))
         let updateItem = menuItem(title: L10n.text(en: "Check for Updates…", zh: "检查更新…"), action: #selector(checkForUpdates), keyEquivalent: "", target: target)
         updateItem.isEnabled = canCheckForUpdates
@@ -306,6 +360,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
         item.target = target
         return item
+    }
+
+    private static func transcriptHistoryItem(_ history: [String], target: AnyObject?) -> NSMenuItem {
+        let parent = NSMenuItem(
+            title: L10n.text(en: "Copy Transcript", zh: "复制转写记录"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        let submenu = NSMenu(title: parent.title)
+        let recentEntries = history.suffix(TranscriptHistoryStore.maxCount).reversed()
+
+        if recentEntries.isEmpty {
+            parent.isEnabled = false
+        } else {
+            for (index, transcript) in recentEntries.enumerated() {
+                let item = menuItem(
+                    title: transcriptHistoryTitle(transcript),
+                    action: #selector(copyTranscriptFromHistory(_:)),
+                    keyEquivalent: index == 0 ? "c" : "",
+                    target: target
+                )
+                item.representedObject = transcript
+                item.toolTip = transcript
+                submenu.addItem(item)
+            }
+        }
+
+        if !recentEntries.isEmpty {
+            parent.submenu = submenu
+        }
+        return parent
+    }
+
+    private static func transcriptHistoryTitle(_ transcript: String) -> String {
+        let singleLine = transcript
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let maxCharacters = 42
+        let preview = singleLine.count > maxCharacters
+            ? String(singleLine.prefix(maxCharacters)) + "…"
+            : singleLine
+        return preview
     }
 
     @objc private func showLogin() {
@@ -326,9 +423,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func copyLastTranscript() {
-        AppLog.info("Copy last transcript requested chars=\(appState.lastTranscript.count)")
-        PasteHelper.copyOnly(appState.lastTranscript)
+    @objc private func copyTranscriptFromHistory(_ sender: NSMenuItem) {
+        guard let transcript = sender.representedObject as? String else { return }
+        AppLog.info("Copy transcript history requested chars=\(transcript.count)")
+        PasteHelper.copyOnly(transcript)
     }
 
     @objc private func requestAccessibility() {

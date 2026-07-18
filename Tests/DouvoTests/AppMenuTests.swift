@@ -57,7 +57,7 @@ final class AppMenuTests: XCTestCase {
             menu,
             provider: .web,
             loginStatus: .loggedIn,
-            lastTranscript: "",
+            transcriptHistory: [],
             canCheckForUpdates: true,
             target: nil
         )
@@ -68,6 +68,63 @@ final class AppMenuTests: XCTestCase {
         XCTAssertFalse(settingsItem?.title.contains("...") ?? true)
         XCTAssertFalse(settingsItem?.title.contains("…") ?? true)
         XCTAssertEqual(updateItem?.title, "Check for Updates…")
+    }
+
+    func testStatusMenuShowsNewestTranscriptFirstInHistorySubmenu() {
+        let menu = NSMenu()
+
+        AppDelegate.rebuildStatusMenu(
+            menu,
+            provider: .web,
+            loginStatus: .loggedIn,
+            transcriptHistory: ["older transcript", "newest transcript"],
+            canCheckForUpdates: true,
+            target: nil
+        )
+
+        let historyItem = menu.items.first { $0.title == "Copy Transcript" }
+        let entries = historyItem?.submenu?.items ?? []
+        XCTAssertEqual(
+            entries.compactMap { $0.representedObject as? String },
+            ["newest transcript", "older transcript"]
+        )
+        XCTAssertEqual(entries.map(\.title), ["newest transcript", "older transcript"])
+        XCTAssertEqual(entries.first?.keyEquivalent, "c")
+    }
+
+    func testStatusMenuDisablesTranscriptHistoryWhenEmpty() {
+        let menu = NSMenu()
+
+        AppDelegate.rebuildStatusMenu(
+            menu,
+            provider: .web,
+            loginStatus: .loggedIn,
+            transcriptHistory: [],
+            canCheckForUpdates: true,
+            target: nil
+        )
+
+        let historyItem = menu.items.first { $0.title == "Copy Transcript" }
+        XCTAssertEqual(historyItem?.isEnabled, false)
+        XCTAssertNil(historyItem?.submenu)
+    }
+
+    func testStatusMenuLimitsTranscriptHistoryToTwentyEntries() {
+        let menu = NSMenu()
+
+        AppDelegate.rebuildStatusMenu(
+            menu,
+            provider: .android,
+            loginStatus: .loggedIn,
+            transcriptHistory: (1...25).map { "transcript \($0)" },
+            canCheckForUpdates: true,
+            target: nil
+        )
+
+        let historyItem = menu.items.first { $0.title == "Copy Transcript" }
+        XCTAssertEqual(historyItem?.submenu?.items.count, 20)
+        XCTAssertEqual(historyItem?.submenu?.items.first?.representedObject as? String, "transcript 25")
+        XCTAssertEqual(historyItem?.submenu?.items.last?.representedObject as? String, "transcript 6")
     }
 
     func testSettingsHostingViewAcceptsFirstMouse() {
