@@ -14,6 +14,14 @@ struct AndroidASRResponse {
     let type: AndroidASRResponseType
 }
 
+enum AndroidASRErrorClassifier {
+    static func isConcurrencyQuotaExceeded(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("concurrency quota exceeded")
+            || normalized.contains("exceedconcurrentquota")
+    }
+}
+
 enum AndroidASRSessionConfig {
     static func make(
         deviceID: String,
@@ -134,6 +142,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var queuedAudioCount = 0
     private var pendingAudioCount = 0
     private var summaryLogged = false
+    private var credentialResetRetryAttempted = false
     private var pendingAudioSamples: [String] = []
     private var queuedAudioSamples: [String] = []
     private var sentFrameSamples: [String] = []
@@ -152,6 +161,20 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         credentials: DoubaoAndroidCredentials,
         context: String = "",
         usePersonalLexicon: Bool = false
+    ) {
+        connect(
+            credentials: credentials,
+            context: context,
+            usePersonalLexicon: usePersonalLexicon,
+            isCredentialResetRetry: false
+        )
+    }
+
+    private func connect(
+        credentials: DoubaoAndroidCredentials,
+        context: String,
+        usePersonalLexicon: Bool,
+        isCredentialResetRetry: Bool
     ) {
         var components = URLComponents(url: Self.webSocketURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -184,11 +207,17 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         lock.lock()
         self.credentials = credentials
         task = socket
-        pendingAudio.removeAll()
-        queuedAudio.removeAll()
-        latestAudioFrame = nil
+        if isCredentialResetRetry {
+            pendingAudio.append(contentsOf: queuedAudio)
+            queuedAudio.removeAll()
+        } else {
+            pendingAudio.removeAll()
+            queuedAudio.removeAll()
+            latestAudioFrame = nil
+            finishRequested = false
+            credentialResetRetryAttempted = false
+        }
         isSendingAudio = false
-        finishRequested = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
         frameIndex = 0
@@ -205,7 +234,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         state = .connecting
         lock.unlock()
 
-        AppLog.info("Android ASR connect begin deviceIdSet=\(!credentials.deviceId.isEmpty)")
+        AppLog.info("Android ASR connect begin deviceIdSet=\(!credentials.deviceId.isEmpty) credentialResetRetry=\(isCredentialResetRetry)")
         socket.resume()
         receive()
         sendStartTask()
@@ -542,8 +571,13 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         case .heartbeat:
             break
         case .error(let message, let responseMetadata):
-            markFailed(nil, notify: false)
             AppLog.error("Android ASR error message=\(message)")
+            if AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(message), beginCredentialResetRetry() {
+                logSummary(reason: "concurrency_quota_credential_reset")
+                retryAfterCredentialReset()
+                return
+            }
+            markFailed(nil, notify: false)
             logSummary(reason: "server_error")
             if message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("token") {
                 onAuthError?()
@@ -574,6 +608,48 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         if notify {
             onError?(asrError(error, stage: "transport_failed"))
         }
+    }
+
+    private func beginCredentialResetRetry() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !credentialResetRetryAttempted, state != .disconnected else { return false }
+        credentialResetRetryAttempted = true
+        state = .connecting
+        isSendingAudio = false
+        return true
+    }
+
+    private func retryAfterCredentialReset() {
+        task?.cancel(with: .normalClosure, reason: "credential-reset-retry".data(using: .utf8))
+        task = nil
+
+        Task { [weak self] in
+            guard let self else { return }
+            DoubaoAndroidCredentialStore.clear()
+            do {
+                let refreshedCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+                guard let snapshot = self.credentialResetRetrySnapshot() else { return }
+                AppLog.info("Android ASR retrying after concurrency quota credential reset")
+                self.connect(
+                    credentials: refreshedCredentials,
+                    context: snapshot.context,
+                    usePersonalLexicon: snapshot.usePersonalLexicon,
+                    isCredentialResetRetry: true
+                )
+            } catch {
+                AppLog.error("Android ASR credential reset retry failed error=\(error.localizedDescription)")
+                self.markFailed(error, notify: false)
+                self.onError?(self.asrError(error, stage: "credential_reset_failed"))
+            }
+        }
+    }
+
+    private func credentialResetRetrySnapshot() -> (context: String, usePersonalLexicon: Bool)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard state == .connecting, credentialResetRetryAttempted else { return nil }
+        return (sessionContext, usePersonalLexicon)
     }
 
     private func asrError(_ error: Error?, stage: String) -> Error? {

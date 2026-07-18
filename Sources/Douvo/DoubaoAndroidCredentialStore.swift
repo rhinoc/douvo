@@ -36,6 +36,14 @@ enum DoubaoAndroidCredentialStore {
     private static let channel = "official"
     private static let package = "com.bytedance.android.doubaoime"
     private static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
+    private static let urlSession = URLSession(configuration: makeURLSessionConfiguration())
+
+    static func makeURLSessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        return configuration
+    }
 
     private static var fileURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -145,7 +153,7 @@ enum DoubaoAndroidCredentialStore {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         try validateHTTPResponse(response, context: "Android recognition device registration")
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -167,7 +175,7 @@ enum DoubaoAndroidCredentialStore {
         request.setValue(md5Hex(body), forHTTPHeaderField: "x-ss-stub")
         request.httpBody = body.data(using: .utf8)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         try validateHTTPResponse(response, context: "Android recognition token request")
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
