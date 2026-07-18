@@ -38,6 +38,13 @@ final class TranscriptionManager {
         L10n.text(en: "Speech recognition timed out.", zh: "语音识别超时")
     }
 
+    private static var androidRecognitionServiceBusyMessage: String {
+        L10n.text(
+            en: "Android recognition service is busy. Please try again later.",
+            zh: "Android 识别服务繁忙，请稍后重试"
+        )
+    }
+
     private static var recognitionFailedMessage: String {
         L10n.text(en: "Recognition failed. Try again.", zh: "识别失败，请重试")
     }
@@ -1527,6 +1534,10 @@ final class TranscriptionManager {
             return L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
         }
         let message = error.localizedDescription.lowercased()
+        if error.domain == "Douvo.AndroidASR",
+           AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(message) {
+            return androidRecognitionServiceBusyMessage
+        }
         if error.domain == "Douvo.WebASR",
            error.code == 710020702 || message.contains("server processing timeout") || message.contains("node execution timeout") {
             return speechRecognitionServiceTimeoutMessage

@@ -46,4 +46,19 @@ final class TranscriptionSessionErrorTests: XCTestCase {
         XCTAssertEqual(sessionError.metadata["android_request_id"], "request-1")
         XCTAssertEqual(sessionError.metadata["android_response_message_type"], "SessionFailed")
     }
+
+    func testAndroidConcurrencyQuotaErrorsAreRecognized() {
+        XCTAssertTrue(AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(
+            "concurrency quota exceeded: key:example,value:5"
+        ))
+        XCTAssertTrue(AndroidASRErrorClassifier.isConcurrencyQuotaExceeded("ExceedConcurrentQuota"))
+        XCTAssertFalse(AndroidASRErrorClassifier.isConcurrencyQuotaExceeded("authentication failed"))
+    }
+
+    func testAndroidCredentialRequestsDoNotReuseCookies() {
+        let configuration = DoubaoAndroidCredentialStore.makeURLSessionConfiguration()
+
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertNil(configuration.httpCookieStorage)
+    }
 }
