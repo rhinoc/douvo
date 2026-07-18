@@ -27,7 +27,8 @@ final class AppState: ObservableObject {
     @Published var recordingState: RecordingState = .idle
     @Published var transcript: String = ""
     @Published var errorMessage: String?
-    @Published var lastTranscript: String = ""
+    @Published var lastTranscript: String
+    @Published var transcriptHistory: [String]
     @Published var overlayMode: OverlayMode = .dictation
     @Published var audioLevels: [Float] = Array(repeating: 0, count: OverlayAppearanceStore.size.waveformBarCount)
 
@@ -59,7 +60,11 @@ final class AppState: ObservableObject {
         audioLevels = Array(repeating: 0, count: OverlayAppearanceStore.size.waveformBarCount)
     }
 
-    private init() {}
+    private init() {
+        let history = TranscriptHistoryStore.load()
+        transcriptHistory = history
+        lastTranscript = history.last ?? ""
+    }
 
     private static func normalizedVoiceLevel(from level: Float) -> Float {
         let noiseFloor = Float(OverlayAppearanceStore.waveformNoiseFloor)
