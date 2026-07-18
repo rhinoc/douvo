@@ -278,6 +278,9 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
         task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
         task = nil
+        // URLSession retains its delegate until invalidated. Each ASR client is
+        // single-use, so closing only the WebSocket task would retain this client.
+        session.invalidateAndCancel()
         AppLog.info("Android ASR disconnected")
         logSummary(reason: "disconnect")
     }

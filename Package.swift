@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "Douvo", targets: ["Douvo"])
     ],
     dependencies: [
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.31.4"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.3")),
         .package(
             url: "https://github.com/mochiexists/swift-huggingface",
@@ -23,6 +24,7 @@ let package = Package(
         .executableTarget(
             name: "Douvo",
             dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
