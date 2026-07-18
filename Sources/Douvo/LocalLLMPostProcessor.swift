@@ -1,5 +1,6 @@
 import Foundation
 import HuggingFace
+import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
@@ -387,6 +388,7 @@ struct LocalLLMGenerationProfile: Sendable {
 actor LocalLLMPostProcessor {
     static let shared = LocalLLMPostProcessor()
     typealias ProgressHandler = @Sendable (Double) -> Void
+    static let mlxCacheLimitBytes = 512 * 1024 * 1024
     private enum State {
         case idle
         case loading(UUID, Task<ModelContainer, Error>)
@@ -407,6 +409,11 @@ actor LocalLLMPostProcessor {
 
     private var states: [LocalLLMModel: State] = [:]
     private var runtimeUnavailableReason: String?
+
+    private init() {
+        Memory.cacheLimit = min(Memory.cacheLimit, Self.mlxCacheLimitBytes)
+        Self.logMLXMemory(reason: "configured")
+    }
 
     func correctedText(
         for rawText: String,
@@ -578,15 +585,6 @@ actor LocalLLMPostProcessor {
                     traceMetadata["prompt_snapshot_path"] = snapshotURL.path
                 }
             }
-            let session = ChatSession(
-                container,
-                instructions: instructions,
-                generateParameters: GenerateParameters(
-                    maxTokens: generationProfile.maxTokens,
-                    temperature: 0
-                ),
-                additionalContext: generationProfile.additionalContext
-            )
             timings.append(TraceTiming(
                 name: "correction.build_prompt",
                 milliseconds: Self.milliseconds(since: promptStart),
@@ -608,7 +606,20 @@ actor LocalLLMPostProcessor {
 
             AppLog.info("Local LLM postprocess start model=\(model.repositoryID) inputChars=\(input.count)")
             let generateStart = Self.now()
-            let response = try await session.respond(to: userPrompt)
+            Self.logMLXMemory(reason: "generation_start")
+            let response: String
+            do {
+                response = try await Self.generateResponse(
+                    container: container,
+                    instructions: instructions,
+                    userPrompt: userPrompt,
+                    generationProfile: generationProfile
+                )
+            } catch {
+                Self.reclaimMLXCache(reason: "generation_failed")
+                throw error
+            }
+            Self.reclaimMLXCache(reason: "generation_complete")
             debugInfo = LocalLLMPostprocessDebugInfo(
                 systemPrompt: instructions,
                 userPrompt: userPrompt,
@@ -841,6 +852,7 @@ actor LocalLLMPostProcessor {
         Task.detached(priority: .utility) {
             let unloadStart = Self.now()
             stateRelease.release()
+            Self.reclaimMLXCache(reason: "delete_model")
             let unloadMilliseconds = Self.milliseconds(since: unloadStart)
 
             let removeStart = Self.now()
@@ -880,6 +892,7 @@ actor LocalLLMPostProcessor {
             for releasedState in releasedStates {
                 releasedState.release()
             }
+            Self.reclaimMLXCache(reason: "release_all")
         }
     }
 
@@ -967,7 +980,50 @@ actor LocalLLMPostProcessor {
             for releasedState in releasedStates {
                 releasedState.release()
             }
+            Self.reclaimMLXCache(reason: "release_stale_models")
         }
+    }
+
+    private static func generateResponse(
+        container: ModelContainer,
+        instructions: String,
+        userPrompt: String,
+        generationProfile: LocalLLMGenerationProfile
+    ) async throws -> String {
+        let session = ChatSession(
+            container,
+            instructions: instructions,
+            generateParameters: GenerateParameters(
+                maxTokens: generationProfile.maxTokens,
+                temperature: 0
+            ),
+            additionalContext: generationProfile.additionalContext
+        )
+        return try await session.respond(to: userPrompt)
+    }
+
+    private static func reclaimMLXCache(reason: String) {
+        let before = Memory.snapshot()
+        Memory.clearCache()
+        let after = Memory.snapshot()
+        AppLog.info(
+            "Local LLM memory reclaimed reason=\(reason) "
+                + "active_bytes=\(after.activeMemory) "
+                + "cache_before_bytes=\(before.cacheMemory) "
+                + "cache_after_bytes=\(after.cacheMemory) "
+                + "peak_bytes=\(after.peakMemory)"
+        )
+    }
+
+    private static func logMLXMemory(reason: String) {
+        let snapshot = Memory.snapshot()
+        AppLog.info(
+            "Local LLM memory reason=\(reason) "
+                + "active_bytes=\(snapshot.activeMemory) "
+                + "cache_bytes=\(snapshot.cacheMemory) "
+                + "peak_bytes=\(snapshot.peakMemory) "
+                + "cache_limit_bytes=\(Memory.cacheLimit)"
+        )
     }
 
     private func markRuntimeUnavailableIfNeeded(_ error: Error) {
