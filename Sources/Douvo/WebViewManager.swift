@@ -64,6 +64,7 @@ final class WebViewManager: NSObject {
         window.title = L10n.text(en: "Login to Doubao", zh: "登录豆包")
         window.contentView = webView
         window.isReleasedWhenClosed = false
+        window.delegate = self
         self.window = window
 
         let url = URL(string: "https://www.doubao.com/chat")!
@@ -72,9 +73,8 @@ final class WebViewManager: NSObject {
     }
 
     func extractAndSaveASRParams() async -> Bool {
-        ensureWebView()
-        guard let webView else {
-            AppLog.error("Extract ASR params failed: webView missing")
+        guard let webView, window?.isVisible == true else {
+            AppLog.info("Extract ASR params deferred until login window is visible")
             return false
         }
         AppLog.info("Extracting ASR params from WebView")
@@ -118,11 +118,18 @@ final class WebViewManager: NSObject {
     private func teardownWebView() {
         webView?.stopLoading()
         webView?.navigationDelegate = nil
+        window?.delegate = nil
         window?.orderOut(nil)
         window?.contentView = nil
         window = nil
         webView = nil
         AppLog.info("Doubao WebView torn down to free resources")
+    }
+}
+
+extension WebViewManager: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        teardownWebView()
     }
 }
 
