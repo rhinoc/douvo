@@ -30,6 +30,8 @@ enum AndroidASRSessionConfig {
     ) -> [String: Any] {
         var extra: [String: Any] = [
             "app_name": "com.android.chrome",
+            "app_version": DoubaoAndroidClientIdentity.versionName,
+            "aid": DoubaoAndroidClientIdentity.aid,
             "cell_compress_rate": 8,
             "did": deviceID,
             "enable_asr_threepass": true,
@@ -41,7 +43,10 @@ enum AndroidASRSessionConfig {
             "asr_text_post_process_type": "last_post_process",
             "input_mode": "tool",
             "strong_ddc": true,
-            "use_twopass_retry": true
+            "use_twopass_retry": true,
+            "update_version_code": DoubaoAndroidClientIdentity.versionCode,
+            "version_code": DoubaoAndroidClientIdentity.versionCode,
+            "version_name": DoubaoAndroidClientIdentity.versionName
         ]
         if !context.isEmpty {
             extra["context"] = context
@@ -104,7 +109,40 @@ struct AndroidASRFinishCoordinator {
     }
 }
 
+enum AndroidASRShutdownAction: Equatable {
+    case none
+    case finishSession
+    case disconnect
+}
+
+struct AndroidASRShutdownCoordinator {
+    private(set) var isAwaitingSessionFinish = false
+
+    mutating func requestGracefulShutdown(sessionIsActive: Bool) -> AndroidASRShutdownAction {
+        guard !isAwaitingSessionFinish else { return .none }
+        guard sessionIsActive else { return .disconnect }
+        isAwaitingSessionFinish = true
+        return .finishSession
+    }
+
+    mutating func sessionDidFinish() -> AndroidASRShutdownAction {
+        guard isAwaitingSessionFinish else { return .none }
+        isAwaitingSessionFinish = false
+        return .disconnect
+    }
+
+    mutating func gracefulShutdownDidTimeOut() -> AndroidASRShutdownAction {
+        sessionDidFinish()
+    }
+
+    mutating func didDisconnect() {
+        isAwaitingSessionFinish = false
+    }
+}
+
 final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    private typealias Identity = DoubaoAndroidClientIdentity
+
     enum State: String, Sendable {
         case idle
         case connecting
@@ -115,11 +153,10 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         case failed
     }
 
-    private static let webSocketURL = URL(string: "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws")!
+    private static let webSocketURL = Identity.webSocketURL
     private static let webSocketHost = webSocketURL.host ?? "unknown"
-    private static let aid = "401734"
-    private static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
     private static let frameDurationMillis: Int64 = 20
+    private static let gracefulShutdownTimeout: Duration = .seconds(12)
 
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     private var task: URLSessionWebSocketTask?
@@ -135,6 +172,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var finishRequested = false
     private var finishFramesSent = false
     private var finishCoordinator = AndroidASRFinishCoordinator()
+    private var shutdownCoordinator = AndroidASRShutdownCoordinator()
+    private var gracefulShutdownTimeoutTask: Task<Void, Never>?
     private var frameIndex: Int64 = 0
     private var startedAtMillis: Int64 = 0
     private var receivedMessageCount = 0
@@ -142,7 +181,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var queuedAudioCount = 0
     private var pendingAudioCount = 0
     private var summaryLogged = false
-    private var credentialResetRetryAttempted = false
     private var pendingAudioSamples: [String] = []
     private var queuedAudioSamples: [String] = []
     private var sentFrameSamples: [String] = []
@@ -162,25 +200,8 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         context: String = "",
         usePersonalLexicon: Bool = false
     ) {
-        connect(
-            credentials: credentials,
-            context: context,
-            usePersonalLexicon: usePersonalLexicon,
-            isCredentialResetRetry: false
-        )
-    }
-
-    private func connect(
-        credentials: DoubaoAndroidCredentials,
-        context: String,
-        usePersonalLexicon: Bool,
-        isCredentialResetRetry: Bool
-    ) {
         var components = URLComponents(url: Self.webSocketURL, resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "aid", value: Self.aid),
-            URLQueryItem(name: "device_id", value: credentials.deviceId)
-        ]
+        components.queryItems = Identity.frontierQueryItems(credentials: credentials)
         guard let url = components.url else {
             onError?(nil)
             return
@@ -192,7 +213,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         self.usePersonalLexicon = usePersonalLexicon
 
         var request = URLRequest(url: url)
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Identity.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("v2", forHTTPHeaderField: "proto-version")
         request.setValue("true", forHTTPHeaderField: "x-custom-keepalive")
         // URLSessionWebSocketTask owns the protocol handshake headers
@@ -207,16 +228,13 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         lock.lock()
         self.credentials = credentials
         task = socket
-        if isCredentialResetRetry {
-            pendingAudio.append(contentsOf: queuedAudio)
-            queuedAudio.removeAll()
-        } else {
-            pendingAudio.removeAll()
-            queuedAudio.removeAll()
-            latestAudioFrame = nil
-            finishRequested = false
-            credentialResetRetryAttempted = false
-        }
+        pendingAudio.removeAll()
+        queuedAudio.removeAll()
+        latestAudioFrame = nil
+        finishRequested = false
+        shutdownCoordinator = AndroidASRShutdownCoordinator()
+        gracefulShutdownTimeoutTask?.cancel()
+        gracefulShutdownTimeoutTask = nil
         isSendingAudio = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
@@ -234,7 +252,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         state = .connecting
         lock.unlock()
 
-        AppLog.info("Android ASR connect begin deviceIdSet=\(!credentials.deviceId.isEmpty) credentialResetRetry=\(isCredentialResetRetry)")
+        AppLog.info("Android ASR connect begin deviceIdSet=\(!credentials.deviceId.isEmpty)")
         socket.resume()
         receive()
         sendStartTask()
@@ -293,8 +311,31 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         }
     }
 
+    func finishSessionThenDisconnect() {
+        lock.lock()
+        let currentState = state
+        let sessionIsActive = currentState == .connecting || currentState == .open || currentState == .finishing
+        let action = shutdownCoordinator.requestGracefulShutdown(sessionIsActive: sessionIsActive)
+        lock.unlock()
+
+        switch action {
+        case .none:
+            break
+        case .finishSession:
+            AppLog.info("Android ASR graceful shutdown requested state=\(currentState.rawValue)")
+            scheduleGracefulShutdownTimeout()
+            finishSending()
+        case .disconnect:
+            disconnect()
+        }
+    }
+
     func disconnect() {
         lock.lock()
+        guard state != .disconnected else {
+            lock.unlock()
+            return
+        }
         state = .disconnected
         pendingAudio.removeAll()
         queuedAudio.removeAll()
@@ -303,7 +344,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         finishRequested = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
+        shutdownCoordinator.didDisconnect()
+        let timeoutTask = gracefulShutdownTimeoutTask
+        gracefulShutdownTimeoutTask = nil
         lock.unlock()
+
+        timeoutTask?.cancel()
 
         task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
         task = nil
@@ -314,10 +360,32 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         logSummary(reason: "disconnect")
     }
 
+    private func scheduleGracefulShutdownTimeout() {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.gracefulShutdownTimeout)
+            guard !Task.isCancelled else { return }
+            self?.handleGracefulShutdownTimeout()
+        }
+
+        lock.lock()
+        gracefulShutdownTimeoutTask?.cancel()
+        gracefulShutdownTimeoutTask = timeoutTask
+        lock.unlock()
+    }
+
+    private func handleGracefulShutdownTimeout() {
+        lock.lock()
+        let action = shutdownCoordinator.gracefulShutdownDidTimeOut()
+        lock.unlock()
+        guard action == .disconnect else { return }
+        AppLog.info("Android ASR graceful shutdown timed out; disconnecting")
+        disconnect()
+    }
+
     private func sendStartTask() {
         guard let task, let credentials else { return }
         let payload = AndroidASRProtobuf.request(
-            token: credentials.token,
+            appKey: credentials.token,
             methodName: "StartTask",
             payload: "",
             audioData: Data(),
@@ -342,7 +410,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let payloadData = (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
         let payload = String(data: payloadData, encoding: .utf8) ?? "{}"
         let message = AndroidASRProtobuf.request(
-            token: credentials.token,
+            appKey: credentials.token,
             methodName: "StartSession",
             payload: payload,
             audioData: Data(),
@@ -408,7 +476,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         frameIndex += 1
         isSendingAudio = true
         let message = AndroidASRProtobuf.request(
-            token: "",
+            appKey: "",
             methodName: "TaskRequest",
             payload: AndroidASRTaskRequestPayload.make(timestampMillis: timestamp, isFinal: false),
             audioData: audio,
@@ -454,7 +522,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
         let timestamp = startedAtMillis + frameIndex * Self.frameDurationMillis
         let lastFrame = AndroidASRProtobuf.request(
-            token: "",
+            appKey: "",
             methodName: "TaskRequest",
             payload: AndroidASRTaskRequestPayload.make(timestampMillis: timestamp, isFinal: true),
             // AudioCaptureManager appends encoded Opus silence before finishSending().
@@ -495,7 +563,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
         AppLog.info("Android ASR sending FinishSession reason=\(trigger.rawValue)")
         let finish = AndroidASRProtobuf.request(
-            token: credentials.token,
+            appKey: credentials.token,
             methodName: "FinishSession",
             payload: "",
             audioData: Data(),
@@ -547,10 +615,13 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         case .sessionStarted:
             markOpen()
         case .sessionFinished:
-            markFinished()
+            let shutdownAction = markFinished()
             AppLog.info("Android ASR SessionFinished")
             logSummary(reason: "finish")
             onFinish?()
+            if shutdownAction == .disconnect {
+                disconnect()
+            }
         case .recognition(let result):
             let assembledResult = transcriptAssembler.update(with: result)
             lock.lock()
@@ -572,11 +643,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             break
         case .error(let message, let responseMetadata):
             AppLog.error("Android ASR error message=\(message)")
-            if AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(message), beginCredentialResetRetry() {
-                logSummary(reason: "concurrency_quota_credential_reset")
-                retryAfterCredentialReset()
-                return
-            }
             markFailed(nil, notify: false)
             logSummary(reason: "server_error")
             if message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("token") {
@@ -594,10 +660,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         }
     }
 
-    private func markFinished() {
+    private func markFinished() -> AndroidASRShutdownAction {
         lock.lock()
         state = .finished
+        let action = shutdownCoordinator.sessionDidFinish()
         lock.unlock()
+        return action
     }
 
     private func markFailed(_ error: Error?, notify: Bool = true) {
@@ -608,48 +676,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         if notify {
             onError?(asrError(error, stage: "transport_failed"))
         }
-    }
-
-    private func beginCredentialResetRetry() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !credentialResetRetryAttempted, state != .disconnected else { return false }
-        credentialResetRetryAttempted = true
-        state = .connecting
-        isSendingAudio = false
-        return true
-    }
-
-    private func retryAfterCredentialReset() {
-        task?.cancel(with: .normalClosure, reason: "credential-reset-retry".data(using: .utf8))
-        task = nil
-
-        Task { [weak self] in
-            guard let self else { return }
-            DoubaoAndroidCredentialStore.clear()
-            do {
-                let refreshedCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
-                guard let snapshot = self.credentialResetRetrySnapshot() else { return }
-                AppLog.info("Android ASR retrying after concurrency quota credential reset")
-                self.connect(
-                    credentials: refreshedCredentials,
-                    context: snapshot.context,
-                    usePersonalLexicon: snapshot.usePersonalLexicon,
-                    isCredentialResetRetry: true
-                )
-            } catch {
-                AppLog.error("Android ASR credential reset retry failed error=\(error.localizedDescription)")
-                self.markFailed(error, notify: false)
-                self.onError?(self.asrError(error, stage: "credential_reset_failed"))
-            }
-        }
-    }
-
-    private func credentialResetRetrySnapshot() -> (context: String, usePersonalLexicon: Bool)? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard state == .connecting, credentialResetRetryAttempted else { return nil }
-        return (sessionContext, usePersonalLexicon)
     }
 
     private func asrError(_ error: Error?, stage: String) -> Error? {
@@ -1138,7 +1164,7 @@ struct AndroidASRTranscriptAssembler {
 
 enum AndroidASRProtobuf {
     static func request(
-        token: String,
+        appKey: String,
         methodName: String,
         payload: String,
         audioData: Data,
@@ -1146,8 +1172,8 @@ enum AndroidASRProtobuf {
         frameState: Int
     ) -> Data {
         var data = Data()
-        if !token.isEmpty {
-            appendString(token, fieldNumber: 2, to: &data)
+        if !appKey.isEmpty {
+            appendString(appKey, fieldNumber: 2, to: &data)
         }
         appendString("ASR", fieldNumber: 3, to: &data)
         appendString(methodName, fieldNumber: 5, to: &data)

@@ -25,17 +25,56 @@ struct DoubaoAndroidCredentials: Codable, Sendable {
     }
 }
 
+enum DoubaoAndroidClientIdentity {
+    static let webSocketURL = URL(string: "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws")!
+    static let aid = "401734"
+    static let appName = "oime"
+    static let versionCode = "100316010"
+    static let versionName = "1.3.16"
+    static let channel = "official"
+    static let package = "com.bytedance.android.doubaoime"
+    static let userAgent = "com.bytedance.android.doubaoime/100316010 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
+
+    static func authenticationToken(deviceID: String) -> String {
+        let object = ["device_id": deviceID, "aid": aid]
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            preconditionFailure("Static Android authentication token fields must be JSON encodable")
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    static func frontierQueryItems(credentials: DoubaoAndroidCredentials) -> [URLQueryItem] {
+        [
+            URLQueryItem(name: "uid", value: "0"),
+            URLQueryItem(name: "aid", value: aid),
+            URLQueryItem(name: "app_name", value: appName),
+            URLQueryItem(name: "did", value: credentials.deviceId),
+            URLQueryItem(name: "iid", value: credentials.installId),
+            URLQueryItem(name: "install_id", value: credentials.installId),
+            URLQueryItem(name: "channel", value: channel),
+            URLQueryItem(name: "os_version", value: "16"),
+            URLQueryItem(name: "version_code", value: versionCode),
+            URLQueryItem(name: "update_version_code", value: versionCode),
+            URLQueryItem(name: "version_name", value: versionName),
+            URLQueryItem(name: "device_platform", value: "android"),
+            URLQueryItem(name: "device_type", value: "Pixel 7 Pro"),
+            URLQueryItem(name: "device_brand", value: "google"),
+            URLQueryItem(name: "ip", value: "0"),
+            URLQueryItem(name: "user_agent", value: ""),
+            URLQueryItem(name: "forwarded", value: ""),
+            URLQueryItem(name: "target", value: ""),
+            URLQueryItem(name: "mobile", value: ""),
+            URLQueryItem(name: "token", value: authenticationToken(deviceID: credentials.deviceId))
+        ]
+    }
+}
+
 enum DoubaoAndroidCredentialStore {
+    private typealias Identity = DoubaoAndroidClientIdentity
+
     private static let registerURL = URL(string: "https://log.snssdk.com/service/2/device_register/")!
     private static let settingsURL = URL(string: "https://is.snssdk.com/service/settings/v3/")!
 
-    private static let aid = "401734"
-    private static let appName = "oime"
-    private static let versionCode = "100102018"
-    private static let versionName = "1.1.2"
-    private static let channel = "official"
-    private static let package = "com.bytedance.android.doubaoime"
-    private static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
     private static let urlSession = URLSession(configuration: makeURLSessionConfiguration())
 
     static func makeURLSessionConfiguration() -> URLSessionConfiguration {
@@ -103,14 +142,14 @@ enum DoubaoAndroidCredentialStore {
         let header: [String: Any] = [
             "device_id": 0,
             "install_id": 0,
-            "aid": Int(aid)!,
-            "app_name": appName,
-            "version_code": Int(versionCode)!,
-            "version_name": versionName,
-            "manifest_version_code": Int(versionCode)!,
-            "update_version_code": Int(versionCode)!,
-            "channel": channel,
-            "package": package,
+            "aid": Int(Identity.aid)!,
+            "app_name": Identity.appName,
+            "version_code": Int(Identity.versionCode)!,
+            "version_name": Identity.versionName,
+            "manifest_version_code": Int(Identity.versionCode)!,
+            "update_version_code": Int(Identity.versionCode)!,
+            "channel": Identity.channel,
+            "package": Identity.package,
             "device_platform": "android",
             "os": "android",
             "os_api": "34",
@@ -149,7 +188,7 @@ enum DoubaoAndroidCredentialStore {
 
         var request = URLRequest(url: url(registerURL, queryItems: commonQueryItems(credentials: credentials, includeDeviceId: false)))
         request.httpMethod = "POST"
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Identity.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -171,7 +210,7 @@ enum DoubaoAndroidCredentialStore {
         let body = "body=null"
         var request = URLRequest(url: url(settingsURL, queryItems: commonQueryItems(credentials: credentials, includeDeviceId: true)))
         request.httpMethod = "POST"
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Identity.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(md5Hex(body), forHTTPHeaderField: "x-ss-stub")
         request.httpBody = body.data(using: .utf8)
 
@@ -196,19 +235,19 @@ enum DoubaoAndroidCredentialStore {
             URLQueryItem(name: "ssmix", value: "a"),
             URLQueryItem(name: "_rticket", value: String(currentTimeMillis())),
             URLQueryItem(name: "cdid", value: credentials.cdid),
-            URLQueryItem(name: "channel", value: channel),
-            URLQueryItem(name: "aid", value: aid),
-            URLQueryItem(name: "app_name", value: appName),
-            URLQueryItem(name: "version_code", value: versionCode),
-            URLQueryItem(name: "version_name", value: versionName)
+            URLQueryItem(name: "channel", value: Identity.channel),
+            URLQueryItem(name: "aid", value: Identity.aid),
+            URLQueryItem(name: "app_name", value: Identity.appName),
+            URLQueryItem(name: "version_code", value: Identity.versionCode),
+            URLQueryItem(name: "version_name", value: Identity.versionName)
         ]
 
         if includeDeviceId {
             items.append(URLQueryItem(name: "device_id", value: credentials.deviceId))
         } else {
             items.append(contentsOf: [
-                URLQueryItem(name: "manifest_version_code", value: versionCode),
-                URLQueryItem(name: "update_version_code", value: versionCode),
+                URLQueryItem(name: "manifest_version_code", value: Identity.versionCode),
+                URLQueryItem(name: "update_version_code", value: Identity.versionCode),
                 URLQueryItem(name: "resolution", value: "1080*2400"),
                 URLQueryItem(name: "dpi", value: "420"),
                 URLQueryItem(name: "device_type", value: "Pixel 7 Pro"),

@@ -2,6 +2,75 @@ import XCTest
 @testable import Douvo
 
 final class AndroidASRResultParserTests: XCTestCase {
+    func testAndroidClientIdentityUsesCurrentDoubaoIMEVersion() {
+        XCTAssertEqual(
+            DoubaoAndroidClientIdentity.webSocketURL.absoluteString,
+            "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws"
+        )
+        XCTAssertEqual(DoubaoAndroidClientIdentity.versionCode, "100316010")
+        XCTAssertEqual(DoubaoAndroidClientIdentity.versionName, "1.3.16")
+        XCTAssertTrue(
+            DoubaoAndroidClientIdentity.userAgent.hasPrefix(
+                "com.bytedance.android.doubaoime/100316010 "
+            )
+        )
+    }
+
+    func testFrontierQueryIncludesCurrentClientIdentity() {
+        let credentials = DoubaoAndroidCredentials(
+            deviceId: "device-123",
+            installId: "install-456",
+            cdid: "cdid",
+            openudid: "openudid",
+            clientudid: "clientudid",
+            token: "token"
+        )
+        let query = Dictionary(
+            uniqueKeysWithValues: DoubaoAndroidClientIdentity
+                .frontierQueryItems(credentials: credentials)
+                .map { ($0.name, $0.value ?? "") }
+        )
+
+        XCTAssertEqual(query["aid"], "401734")
+        XCTAssertEqual(query["app_name"], "oime")
+        XCTAssertEqual(query["did"], "device-123")
+        XCTAssertNil(query["device_id"])
+        XCTAssertEqual(query["iid"], "install-456")
+        XCTAssertEqual(query["install_id"], "install-456")
+        XCTAssertEqual(query["version_code"], "100316010")
+        XCTAssertEqual(query["update_version_code"], "100316010")
+        XCTAssertEqual(query["version_name"], "1.3.16")
+        XCTAssertEqual(query["user_agent"], "")
+        XCTAssertEqual(query["forwarded"], "")
+        XCTAssertEqual(query["target"], "")
+        XCTAssertEqual(query["mobile"], "")
+        XCTAssertEqual(query["token"], DoubaoAndroidClientIdentity.authenticationToken(deviceID: "device-123"))
+    }
+
+    func testTransportTokenIsSeparateFromControlRequestAppKey() throws {
+        let authenticationToken = DoubaoAndroidClientIdentity.authenticationToken(
+            deviceID: "device-123"
+        )
+        let request = AndroidASRProtobuf.request(
+            appKey: "app-key",
+            methodName: "StartTask",
+            payload: "",
+            audioData: Data(),
+            requestID: "request-id",
+            frameState: 0
+        )
+        let tokenObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(authenticationToken.utf8)) as? [String: String]
+        )
+
+        XCTAssertEqual(tokenObject["device_id"], "device-123")
+        XCTAssertEqual(tokenObject["aid"], "401734")
+
+        var expectedPrefix = Data([0x12, 0x07])
+        expectedPrefix.append(Data("app-key".utf8))
+        XCTAssertTrue(request.starts(with: expectedPrefix))
+    }
+
     func testSessionConfigEnablesAndroidCorrectionPasses() throws {
         let config = AndroidASRSessionConfig.make(
             deviceID: "device-123",
@@ -11,6 +80,7 @@ final class AndroidASRResultParserTests: XCTestCase {
 
         XCTAssertEqual(extra["did"] as? String, "device-123")
         XCTAssertEqual(extra["context"] as? String, "encoded-context")
+        XCTAssertEqual(extra["app_version"] as? String, "1.3.16")
         XCTAssertEqual(extra["enable_asr_threepass"] as? Bool, true)
         XCTAssertEqual(extra["enable_asr_twopass"] as? Bool, true)
         XCTAssertEqual(extra["strong_ddc"] as? Bool, true)
@@ -19,6 +89,10 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(extra["asr_text_post_process_type"] as? String, "last_post_process")
         XCTAssertEqual(extra["disable_user_words"] as? Bool, true)
         XCTAssertEqual(extra["enable_print_chinese"] as? Bool, false)
+        XCTAssertEqual(extra["aid"] as? String, "401734")
+        XCTAssertEqual(extra["version_code"] as? String, "100316010")
+        XCTAssertEqual(extra["update_version_code"] as? String, "100316010")
+        XCTAssertEqual(extra["version_name"] as? String, "1.3.16")
     }
 
     func testSessionConfigEnablesUploadedPersonalLexicon() throws {
@@ -118,6 +192,52 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
         XCTAssertTrue(coordinator.finishSessionRequested)
         XCTAssertNil(coordinator.finalFrameDidSend())
+    }
+
+    func testShutdownCoordinatorFinishesActiveSessionBeforeDisconnecting() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .finishSession
+        )
+        XCTAssertTrue(coordinator.isAwaitingSessionFinish)
+        XCTAssertEqual(coordinator.sessionDidFinish(), .disconnect)
+        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
+    }
+
+    func testShutdownCoordinatorDisconnectsInactiveSessionImmediately() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: false),
+            .disconnect
+        )
+        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
+    }
+
+    func testShutdownCoordinatorTimesOutOnlyOnce() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .finishSession
+        )
+        XCTAssertEqual(coordinator.gracefulShutdownDidTimeOut(), .disconnect)
+        XCTAssertEqual(coordinator.gracefulShutdownDidTimeOut(), .none)
+    }
+
+    func testShutdownCoordinatorIgnoresRepeatedGracefulShutdownRequest() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .finishSession
+        )
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .none
+        )
     }
 
     func testParserJoinsLegacySegmentedResults() {
