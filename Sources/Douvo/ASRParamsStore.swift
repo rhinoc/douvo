@@ -24,8 +24,6 @@ struct DoubaoASRParams: Codable {
         "sessionid",
         "sessionid_ss",
         "sid_tt",
-        "sid_guard",
-        "multi_sids",
         "session_tlb_tag"
     ]
 

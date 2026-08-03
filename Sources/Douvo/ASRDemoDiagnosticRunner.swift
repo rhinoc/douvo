@@ -245,7 +245,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
 
     private func disconnect() {
         webClient?.disconnect()
-        androidClient?.disconnect()
+        androidClient?.finishSessionThenDisconnect()
     }
 
     private var hasAnyOpenedProvider: Bool {

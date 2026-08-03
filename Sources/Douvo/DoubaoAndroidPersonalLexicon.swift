@@ -110,13 +110,15 @@ actor DoubaoAndroidPersonalLexiconSynchronizer {
 }
 
 actor DoubaoAndroidPersonalLexiconClient {
-    static let appID = 401734
-    static let package = "com.bytedance.android.doubaoime"
-    static let contextVersionName = "1.3.9"
-    static let contextVersionCode = "100309006"
+    private typealias Identity = DoubaoAndroidClientIdentity
+
+    static let appID = Int(Identity.aid)!
+    static let package = Identity.package
+    static let contextVersionName = Identity.versionName
+    static let contextVersionCode = Identity.versionCode
     static let samiAppKey = "SYlxZr6LnvBaIVmF"
     static let contextResourceID = "asr.user.context"
-    static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
+    static let userAgent = Identity.userAgent
 
     private let credentials: DoubaoAndroidCredentials
     private let urlSession: URLSession

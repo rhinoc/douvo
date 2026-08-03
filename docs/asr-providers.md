@@ -95,7 +95,9 @@ If registration succeeds, the server returns `deviceId` and `installId`. Douvo t
 https://is.snssdk.com/service/settings/v3/
 ```
 
-The token is read from `data.settings.asr_config.app_key`. The complete Android credential set is saved locally:
+The app key is read from `data.settings.asr_config.app_key`. It is distinct from
+the device authentication JSON attached to the WebSocket URL. The complete
+Android credential set is saved locally:
 
 ```text
 ~/Library/Application Support/Douvo/android_asr_credentials.json
@@ -108,7 +110,7 @@ Clicking **Reset Android Login** in Settings deletes this file. The next Android
 The Android provider connects to:
 
 ```text
-wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws?aid=401734&device_id=<deviceId>
+wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws?...&token=<device-auth-json>
 ```
 
 Key request headers:
@@ -123,7 +125,7 @@ Messages are Protobuf-encoded. The current implementation sends:
 
 | Method | Purpose |
 | --- | --- |
-| `StartTask` | Creates an ASR task with the ASR token |
+| `StartTask` | Creates an ASR task with the settings `app_key` |
 | `StartSession` | Sends session configuration and audio parameters |
 | `TaskRequest` | Sends audio frames |
 | `FinishSession` | Ends the session |

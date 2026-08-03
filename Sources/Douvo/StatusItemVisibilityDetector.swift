@@ -21,6 +21,13 @@ enum StatusItemVisibilityDetector {
 }
 
 enum StatusItemVisibilityAlertContent {
+    static func speakingShortcuts(
+        toggleShortcut: HotkeyShortcut?,
+        holdShortcut: HotkeyShortcut?
+    ) -> [HotkeyShortcut] {
+        [toggleShortcut, holdShortcut].compactMap { $0 }
+    }
+
     static func title(language: AppLanguage = AppLanguageStore.selected) -> String {
         switch language {
         case .english:
@@ -42,14 +49,24 @@ enum StatusItemVisibilityAlertContent {
             baseText = "检测到菜单栏空间不足，请整理菜单栏图标以恢复显示。"
         }
 
-        guard !shortcutNames.isEmpty else { return baseText }
+        guard !shortcutNames.isEmpty else {
+            let noShortcutText = switch language {
+            case .english:
+                "No valid speaking shortcut is currently configured."
+            case .simplifiedChinese:
+                "当前未设置有效快捷键。"
+            }
+            return "\(baseText)\n\(noShortcutText)"
+        }
         let separator = language == .simplifiedChinese ? "、" : ", "
         let names = shortcutNames.joined(separator: separator)
         let shortcutText = switch language {
         case .english:
-            "Keyboard shortcuts (\(names)) are unaffected."
+            shortcutNames.count == 1
+                ? "The speaking shortcut (\(names)) is unaffected."
+                : "Speaking shortcuts (\(names)) are unaffected."
         case .simplifiedChinese:
-            "快捷键（\(names)）不受影响。"
+            "说话快捷键（\(names)）不受影响。"
         }
         return "\(baseText)\n\(shortcutText)"
     }
