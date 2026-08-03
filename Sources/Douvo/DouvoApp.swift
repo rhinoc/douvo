@@ -133,11 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.alertStyle = .informational
         alert.icon = loadApplicationIcon()
         alert.messageText = StatusItemVisibilityAlertContent.title()
-        let shortcutNames = [
-            hotkeyManager.translationShortcut,
-            hotkeyManager.holdShortcut,
-            hotkeyManager.toggleShortcut
-        ].compactMap { $0?.localizedDisplayName }
+        let shortcutNames = StatusItemVisibilityAlertContent.speakingShortcuts(
+            toggleShortcut: hotkeyManager.toggleShortcut,
+            holdShortcut: hotkeyManager.holdShortcut
+        ).map(\.localizedDisplayName)
         alert.informativeText = StatusItemVisibilityAlertContent.informativeText(
             shortcutNames: shortcutNames
         )
