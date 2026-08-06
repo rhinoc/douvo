@@ -40,6 +40,23 @@ jobs:
       - name: Validate app metadata and scripts
         run: |
           bash -n scripts/build-app.sh
+          bash -n scripts/consume_changesets.sh
           bash -n scripts/ensure-local-code-signing-identity.sh
           bash -n scripts/install-dev-app.sh
+          bash -n scripts/render_changesets.sh
+          bash -n scripts/test_changesets.sh
+          bash -n scripts/update_appcast.sh
           plutil -lint Sources/Douvo/Info.plist
+          xmllint --noout appcast.xml
+          scripts/test_changesets.sh
+
+      - name: Validate release changesets
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          scripts/render_changesets.sh "$NOTES"
+          if [[ ! -s "$NOTES" ]]; then
+            echo "Every pull request must include an English .changeset/*.md entry." >&2
+            exit 1
+          fi
+          cat "$NOTES"

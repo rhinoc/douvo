@@ -174,7 +174,13 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     func disconnect() {
         cancelConnectionTimeout()
         lock.lock()
+        guard state != .disconnected || task != nil else {
+            lock.unlock()
+            return
+        }
         state = .disconnected
+        let socket = task
+        task = nil
         let pendingCount = pendingAudio.count
         let queuedCount = queuedAudio.count
         pendingAudio.removeAll()
@@ -183,8 +189,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         finishRequested = false
         finishFrameSent = false
         lock.unlock()
-        task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
-        task = nil
+        socket?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
         // URLSession retains its delegate until invalidated. Each ASR client is
         // single-use, so closing only the WebSocket task would retain this client.
         session.invalidateAndCancel()
@@ -227,11 +232,13 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             self.lock.unlock()
             guard hasTask, completedSendCount == 0, receivedMessageCount == 0 else { return }
             AppLog.error("ASR connection timeout state=\(state.rawValue) completedSendCount=0 receivedMessageCount=0 sentAudioCount=\(sentAudioCount)")
-            self.onError?(NSError(
+            let error = NSError(
                 domain: "Douvo.ASR",
                 code: 1001,
                 userInfo: [NSLocalizedDescriptionKey: "Speech recognition did not accept audio within 8 seconds"]
-            ))
+            )
+            self.onError?(error)
+            self.disconnect()
         }
         connectionTimeout = timeout
         DispatchQueue.global().asyncAfter(deadline: .now() + 8, execute: timeout)
@@ -292,6 +299,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                 self.lock.unlock()
                 AppLog.error("ASR audio send failed error=\(error.localizedDescription)")
                 self.onError?(error)
+                self.disconnect()
                 return
             }
 
@@ -317,6 +325,8 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                 self?.markFailed()
                 AppLog.error("ASR finish frame send failed error=\(error.localizedDescription)")
                 self?.logSummary(reason: "finish_frame_failed")
+                self?.onError?(error)
+                self?.disconnect()
             } else {
                 AppLog.info("ASR finish frame sent completedSendCount=\(completedCount) sentAudioCount=\(totalCount)")
             }
@@ -359,6 +369,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                     self.logSummary(reason: "receive_failed_before_open")
                     self.onError?(self.asrError(error, stage: "receive_failed_before_open"))
                 }
+                self.disconnect()
             }
         }
     }
@@ -392,6 +403,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                 AppLog.error("ASR auth-like error code=\(code) message=\(message)")
                 logSummary(reason: "auth_error")
                 onAuthError?()
+                disconnect()
                 return
             }
             AppLog.error("ASR nonzero code=\(code) message=\(message)")
@@ -406,6 +418,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
                     TranscriptionErrorMetadata.userInfoKey: diagnosticMetadata(stage: "server_error", event: event, code: code)
                 ]
             ))
+            disconnect()
             return
         }
 
@@ -418,6 +431,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             markFinished()
             AppLog.info("ASR finish received")
             logSummary(reason: "finish")
+            disconnect()
             onFinish?()
         }
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-enum LoginStatus {
+enum LoginStatus: Equatable {
     case checking
     case loggedIn
     case notLoggedIn

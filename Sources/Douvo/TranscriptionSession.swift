@@ -168,7 +168,7 @@ actor TranscriptionSession {
                 vocabulary: androidVocabulary,
                 credentials: credentials
             )
-            androidASRClient.connect(
+            try await androidASRClient.connect(
                 credentials: credentials,
                 context: androidContext,
                 usePersonalLexicon: usePersonalLexicon
@@ -188,7 +188,7 @@ actor TranscriptionSession {
                         _ = audioCapture.stopCapture()
                         return
                     }
-                    androidASRClient.finishSessionThenDisconnect()
+                    androidASRClient.disconnect()
                     await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
                 }
             }
@@ -196,30 +196,31 @@ actor TranscriptionSession {
             guard let webParams, let webASRClient, let androidASRClient else {
                 throw NSError(domain: "Douvo.ASR", code: 12, userInfo: [NSLocalizedDescriptionKey: "Dual recognition clients are unavailable"])
             }
-            let androidCredentials: DoubaoAndroidCredentials?
+            var androidConnected = false
             do {
-                androidCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
-            } catch {
-                androidCredentials = nil
-                await emit(.asrError("android", TranscriptionSessionError(error)))
-            }
-            webASRClient.connect(params: webParams)
-            if let androidCredentials {
+                let androidCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
                 let usePersonalLexicon = await preparePersonalLexicon(
                     vocabulary: androidVocabulary,
                     credentials: androidCredentials
                 )
-                androidASRClient.connect(
+                try await androidASRClient.connect(
                     credentials: androidCredentials,
                     context: androidContext,
                     usePersonalLexicon: usePersonalLexicon
                 )
+                androidConnected = true
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard !Task.isCancelled else { throw CancellationError() }
+                await emit(.asrError("android", TranscriptionSessionError(error)))
             }
+            webASRClient.connect(params: webParams)
             let weakSelf = WeakRef(self)
             let audioCapture = self.audioCapture
-            let captureMode: AudioCaptureManager.CaptureMode = androidCredentials == nil
-                ? .webPCM
-                : .webPCMAndAndroidOpus
+            let captureMode: AudioCaptureManager.CaptureMode = androidConnected
+                ? .webPCMAndAndroidOpus
+                : .webPCM
             audioStartTask = Task.detached {
                 do {
                     try Task.checkCancellation()
@@ -234,7 +235,7 @@ actor TranscriptionSession {
                         return
                     }
                     webASRClient.disconnect()
-                    androidASRClient.finishSessionThenDisconnect()
+                    androidASRClient.disconnect()
                     await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
                 }
             }
@@ -281,7 +282,7 @@ actor TranscriptionSession {
         audioStartTask = nil
         _ = audioCapture.stopCapture()
         webASRClient?.disconnect()
-        androidASRClient?.finishSessionThenDisconnect()
+        androidASRClient?.disconnect()
     }
 
     private func emit(_ event: TranscriptionSessionEvent) async {

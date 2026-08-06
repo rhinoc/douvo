@@ -6,7 +6,7 @@ enum AndroidASRResponseType {
     case sessionFinished
     case recognition(ASRRecognitionResult)
     case heartbeat
-    case error(String, [String: String])
+    case error(String, Int, [String: String])
     case unknown
 }
 
@@ -15,7 +15,14 @@ struct AndroidASRResponse {
 }
 
 enum AndroidASRErrorClassifier {
+    static let concurrencyQuotaStatusCode = 40_200_011
+
     static func isConcurrencyQuotaExceeded(_ message: String) -> Bool {
+        isConcurrencyQuotaExceeded(statusCode: 0, message: message)
+    }
+
+    static func isConcurrencyQuotaExceeded(statusCode: Int, message: String) -> Bool {
+        if statusCode == concurrencyQuotaStatusCode { return true }
         let normalized = message.lowercased()
         return normalized.contains("concurrency quota exceeded")
             || normalized.contains("exceedconcurrentquota")
@@ -109,39 +116,13 @@ struct AndroidASRFinishCoordinator {
     }
 }
 
-enum AndroidASRShutdownAction: Equatable {
-    case none
-    case finishSession
-    case disconnect
-}
-
-struct AndroidASRShutdownCoordinator {
-    private(set) var isAwaitingSessionFinish = false
-
-    mutating func requestGracefulShutdown(sessionIsActive: Bool) -> AndroidASRShutdownAction {
-        guard !isAwaitingSessionFinish else { return .none }
-        guard sessionIsActive else { return .disconnect }
-        isAwaitingSessionFinish = true
-        return .finishSession
-    }
-
-    mutating func sessionDidFinish() -> AndroidASRShutdownAction {
-        guard isAwaitingSessionFinish else { return .none }
-        isAwaitingSessionFinish = false
-        return .disconnect
-    }
-
-    mutating func gracefulShutdownDidTimeOut() -> AndroidASRShutdownAction {
-        sessionDidFinish()
-    }
-
-    mutating func didDisconnect() {
-        isAwaitingSessionFinish = false
-    }
-}
-
 final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private typealias Identity = DoubaoAndroidClientIdentity
+
+    private struct Connection {
+        let session: URLSession
+        let socket: URLSessionWebSocketTask
+    }
 
     enum State: String, Sendable {
         case idle
@@ -156,10 +137,21 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private static let webSocketURL = Identity.webSocketURL
     private static let webSocketHost = webSocketURL.host ?? "unknown"
     private static let frameDurationMillis: Int64 = 20
-    private static let gracefulShutdownTimeout: Duration = .seconds(12)
+    private static let closeAcknowledgementTimeout: Duration = .seconds(1)
+    private static let forcedTransportShutdownTimeout: Duration = .seconds(1)
+    private static let unexpectedCloseErrorCode = 7
 
-    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    private let sessionGate: AndroidASRSessionGate
+    private let disconnectSignal = AndroidASRDisconnectSignal()
+    private var session: URLSession?
     private var task: URLSessionWebSocketTask?
+    private var sessionLease: AndroidASRSessionGate.Lease?
+    private var socketCloseCoordinator = AndroidASRSocketCloseCoordinator()
+    private var appKeyFallbackCoordinator = AndroidASRAppKeyFallbackCoordinator()
+    private var activeAppKey = ""
+    private var deferredFallbackFailure: Error?
+    private var closeAcknowledgementTimeoutTask: Task<Void, Never>?
+    private var forcedTransportShutdownTimeoutTask: Task<Void, Never>?
     private var state: State = .idle
     private var credentials: DoubaoAndroidCredentials?
     private var sessionContext = ""
@@ -172,8 +164,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var finishRequested = false
     private var finishFramesSent = false
     private var finishCoordinator = AndroidASRFinishCoordinator()
-    private var shutdownCoordinator = AndroidASRShutdownCoordinator()
-    private var gracefulShutdownTimeoutTask: Task<Void, Never>?
     private var frameIndex: Int64 = 0
     private var startedAtMillis: Int64 = 0
     private var receivedMessageCount = 0
@@ -195,22 +185,87 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     var onError: ((Error?) -> Void)?
     var onAuthError: (() -> Void)?
 
+    init(sessionGate: AndroidASRSessionGate = .shared) {
+        self.sessionGate = sessionGate
+        super.init()
+    }
+
     func connect(
         credentials: DoubaoAndroidCredentials,
         context: String = "",
         usePersonalLexicon: Bool = false
-    ) {
+    ) async throws {
+        try await withTaskCancellationHandler(operation: {
+            let lease = try await sessionGate.acquire()
+            do {
+                try Task.checkCancellation()
+                try startInitialAttempt(
+                    credentials: credentials,
+                    context: context,
+                    usePersonalLexicon: usePersonalLexicon,
+                    lease: lease
+                )
+                try Task.checkCancellation()
+            } catch {
+                let clientOwnsLease = lock.withLock { sessionLease == lease }
+                if clientOwnsLease {
+                    disconnect()
+                } else {
+                    sessionGate.release(lease)
+                }
+                throw error
+            }
+        }, onCancel: {
+            disconnect()
+        })
+    }
+
+    private func startInitialAttempt(
+        credentials: DoubaoAndroidCredentials,
+        context: String,
+        usePersonalLexicon: Bool,
+        lease: AndroidASRSessionGate.Lease
+    ) throws {
+        let request = try makeWebSocketRequest(credentials: credentials)
+        let activeSession = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        let socket = activeSession.webSocketTask(with: request)
+
+        lock.lock()
+        guard !Task.isCancelled, state == .idle else {
+            lock.unlock()
+            activeSession.invalidateAndCancel()
+            throw CancellationError()
+        }
+        self.session = activeSession
+        self.credentials = credentials
+        sessionContext = context
+        self.usePersonalLexicon = usePersonalLexicon
+        task = socket
+        sessionLease = lease
+        activeAppKey = credentials.token
+        appKeyFallbackCoordinator.reset(primaryAppKey: credentials.token)
+        deferredFallbackFailure = nil
+        disconnectSignal.reset()
+        pendingAudio.removeAll()
+        queuedAudio.removeAll()
+        latestAudioFrame = nil
+        finishRequested = false
+        resetAttemptStateLocked()
+        lock.unlock()
+
+        startSocket(socket, credentials: credentials)
+    }
+
+    private func makeWebSocketRequest(credentials: DoubaoAndroidCredentials) throws -> URLRequest {
         var components = URLComponents(url: Self.webSocketURL, resolvingAgainstBaseURL: false)!
         components.queryItems = Identity.frontierQueryItems(credentials: credentials)
         guard let url = components.url else {
-            onError?(nil)
-            return
+            throw NSError(
+                domain: "Douvo.AndroidASR",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Android recognition WebSocket URL is invalid"]
+            )
         }
-
-        requestID = UUID().uuidString
-        startedAtMillis = Self.currentTimeMillis()
-        sessionContext = context
-        self.usePersonalLexicon = usePersonalLexicon
 
         var request = URLRequest(url: url)
         request.setValue(Identity.userAgent, forHTTPHeaderField: "User-Agent")
@@ -223,26 +278,41 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.timeoutInterval = 8
+        return request
+    }
 
-        let socket = session.webSocketTask(with: request)
-        lock.lock()
-        self.credentials = credentials
-        task = socket
-        pendingAudio.removeAll()
-        queuedAudio.removeAll()
-        latestAudioFrame = nil
-        finishRequested = false
-        shutdownCoordinator = AndroidASRShutdownCoordinator()
-        gracefulShutdownTimeoutTask?.cancel()
-        gracefulShutdownTimeoutTask = nil
+    private func startSocket(
+        _ socket: URLSessionWebSocketTask,
+        credentials: DoubaoAndroidCredentials
+    ) {
+        guard let attempt = lock.withLock({ () -> String? in
+            guard task === socket, state == .connecting else { return nil }
+            return appKeyFallbackCoordinator.attempt.rawValue
+        }) else { return }
+        AppLog.info(
+            "Android ASR connect begin attempt=\(attempt) deviceIdSet=\(!credentials.deviceId.isEmpty)"
+        )
+        socket.resume()
+        receive(socket: socket)
+        sendStartTask()
+    }
+
+    private func resetAttemptStateLocked() {
+        requestID = UUID().uuidString
+        startedAtMillis = Self.currentTimeMillis()
+        socketCloseCoordinator = AndroidASRSocketCloseCoordinator()
+        closeAcknowledgementTimeoutTask?.cancel()
+        closeAcknowledgementTimeoutTask = nil
+        forcedTransportShutdownTimeoutTask?.cancel()
+        forcedTransportShutdownTimeoutTask = nil
         isSendingAudio = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
         frameIndex = 0
         receivedMessageCount = 0
         recognitionMessageCount = 0
-        queuedAudioCount = 0
-        pendingAudioCount = 0
+        queuedAudioCount = queuedAudio.count
+        pendingAudioCount = pendingAudio.count
         summaryLogged = false
         pendingAudioSamples.removeAll(keepingCapacity: true)
         queuedAudioSamples.removeAll(keepingCapacity: true)
@@ -250,12 +320,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         recognitionSamples.removeAll(keepingCapacity: true)
         transcriptAssembler.reset()
         state = .connecting
-        lock.unlock()
-
-        AppLog.info("Android ASR connect begin deviceIdSet=\(!credentials.deviceId.isEmpty)")
-        socket.resume()
-        receive()
-        sendStartTask()
     }
 
     func sendAudio(_ data: Data) {
@@ -277,7 +341,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             if shouldStartSending {
                 sendNextAudio()
             }
-        } else if state == .connecting {
+        } else if state == .connecting || appKeyFallbackCoordinator.isRetryPending {
             latestAudioFrame = data
             pendingAudio.append(data)
             pendingAudioCount += 1
@@ -293,7 +357,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     func finishSending() {
         lock.lock()
         finishRequested = true
-        if state == .connecting {
+        if state == .connecting || appKeyFallbackCoordinator.isRetryPending {
             let pendingCount = pendingAudio.count
             lock.unlock()
             AppLog.info("Android ASR finish deferred until session opens pendingAudio=\(pendingCount)")
@@ -311,81 +375,317 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         }
     }
 
-    func finishSessionThenDisconnect() {
-        lock.lock()
-        let currentState = state
-        let sessionIsActive = currentState == .connecting || currentState == .open || currentState == .finishing
-        let action = shutdownCoordinator.requestGracefulShutdown(sessionIsActive: sessionIsActive)
-        lock.unlock()
-
-        switch action {
-        case .none:
-            break
-        case .finishSession:
-            AppLog.info("Android ASR graceful shutdown requested state=\(currentState.rawValue)")
-            scheduleGracefulShutdownTimeout()
-            finishSending()
-        case .disconnect:
-            disconnect()
-        }
+    func disconnect() {
+        disconnect(cancelFallback: true, preservePendingRequest: false)
     }
 
-    func disconnect() {
+    private func disconnectForFallback() {
+        disconnect(cancelFallback: false, preservePendingRequest: true)
+    }
+
+    private func disconnect(cancelFallback: Bool, preservePendingRequest: Bool) {
         lock.lock()
-        guard state != .disconnected else {
+        if cancelFallback {
+            appKeyFallbackCoordinator.cancel()
+            deferredFallbackFailure = nil
+        }
+        if state == .disconnected, socketCloseCoordinator.closeRequested {
             lock.unlock()
             return
         }
         state = .disconnected
-        pendingAudio.removeAll()
-        queuedAudio.removeAll()
-        latestAudioFrame = nil
+        if !preservePendingRequest {
+            pendingAudio.removeAll()
+            queuedAudio.removeAll()
+            latestAudioFrame = nil
+            finishRequested = false
+        }
         isSendingAudio = false
-        finishRequested = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
-        shutdownCoordinator.didDisconnect()
-        let timeoutTask = gracefulShutdownTimeoutTask
-        gracefulShutdownTimeoutTask = nil
+        let connection = currentConnectionLocked()
+        let socketIsActive = connection.map { $0.socket.state != .completed } ?? false
+        let closeAction = socketCloseCoordinator.requestClose(hasTask: socketIsActive)
+        let lease = sessionLease
         lock.unlock()
 
-        timeoutTask?.cancel()
-
-        task?.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
-        task = nil
-        // URLSession retains its delegate until invalidated. Each ASR client is
-        // single-use, so closing only the WebSocket task would retain this client.
-        session.invalidateAndCancel()
-        AppLog.info("Android ASR disconnected")
-        logSummary(reason: "disconnect")
+        if let lease {
+            sessionGate.beginClosing(lease)
+        }
+        performSocketCloseAction(closeAction, connection: connection)
     }
 
-    private func scheduleGracefulShutdownTimeout() {
+    func waitUntilDisconnected() async {
+        await disconnectSignal.wait()
+    }
+
+    private func performSocketCloseAction(
+        _ action: AndroidASRSocketCloseAction,
+        connection: Connection?,
+        error: Error? = nil
+    ) {
+        switch action {
+        case .none:
+            break
+        case .sendClose:
+            guard let connection, isCurrentConnection(connection) else { return }
+            AppLog.info("Android ASR WebSocket close requested")
+            scheduleCloseAcknowledgementTimeout(for: connection)
+            connection.socket.cancel(with: .normalClosure, reason: "1000-".data(using: .utf8))
+        case .forceTransportShutdown:
+            guard let connection, isCurrentConnection(connection) else { return }
+            AppLog.info("Android ASR WebSocket close acknowledgement timed out; forcing transport shutdown")
+            scheduleForcedTransportShutdownTimeout(for: connection)
+            connection.socket.cancel(with: .goingAway, reason: nil)
+            connection.session.invalidateAndCancel()
+        case .releaseSlot:
+            releaseSessionSlot(for: connection)
+        case .unexpectedClose:
+            guard let connection else { return }
+            handleUnexpectedClose(error ?? unexpectedCloseError(), connection: connection)
+        }
+    }
+
+    private func handleUnexpectedClose(_ error: Error, connection: Connection) {
+        lock.lock()
+        guard isCurrentConnectionLocked(connection) else {
+            lock.unlock()
+            return
+        }
+        let shouldNotify = state != .failed
+        state = .failed
+        isSendingAudio = false
+        lock.unlock()
+
+        if shouldNotify {
+            onError?(asrError(error, stage: "unexpected_close"))
+        }
+        releaseSessionSlot(for: connection)
+    }
+
+    private func unexpectedCloseError(closeCode: Int? = nil) -> Error {
+        let suffix = closeCode.map { " (close code \($0))" } ?? ""
+        return NSError(
+            domain: "Douvo.AndroidASR",
+            code: Self.unexpectedCloseErrorCode,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Android recognition WebSocket closed unexpectedly\(suffix)"
+            ]
+        )
+    }
+
+    private func scheduleCloseAcknowledgementTimeout(for connection: Connection) {
         let timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.gracefulShutdownTimeout)
+            try? await Task.sleep(for: Self.closeAcknowledgementTimeout)
             guard !Task.isCancelled else { return }
-            self?.handleGracefulShutdownTimeout()
+            self?.handleCloseAcknowledgementTimeout(for: connection)
         }
 
         lock.lock()
-        gracefulShutdownTimeoutTask?.cancel()
-        gracefulShutdownTimeoutTask = timeoutTask
+        guard isCurrentConnectionLocked(connection) else {
+            lock.unlock()
+            timeoutTask.cancel()
+            return
+        }
+        closeAcknowledgementTimeoutTask?.cancel()
+        closeAcknowledgementTimeoutTask = timeoutTask
         lock.unlock()
     }
 
-    private func handleGracefulShutdownTimeout() {
+    private func handleCloseAcknowledgementTimeout(for connection: Connection) {
         lock.lock()
-        let action = shutdownCoordinator.gracefulShutdownDidTimeOut()
+        guard isCurrentConnectionLocked(connection) else {
+            lock.unlock()
+            return
+        }
+        let action = socketCloseCoordinator.closeAcknowledgementDidTimeOut()
         lock.unlock()
-        guard action == .disconnect else { return }
-        AppLog.info("Android ASR graceful shutdown timed out; disconnecting")
-        disconnect()
+        performSocketCloseAction(action, connection: connection)
+    }
+
+    private func releaseSessionSlot(for connection: Connection?) {
+        lock.lock()
+        if let connection {
+            guard isCurrentConnectionLocked(connection) else {
+                lock.unlock()
+                return
+            }
+        } else {
+            guard task == nil, session == nil else {
+                lock.unlock()
+                return
+            }
+        }
+        let lease = sessionLease
+        let releasedSession = session
+        session = nil
+        task = nil
+        let timeoutTask = closeAcknowledgementTimeoutTask
+        closeAcknowledgementTimeoutTask = nil
+        let forcedTimeoutTask = forcedTransportShutdownTimeoutTask
+        forcedTransportShutdownTimeoutTask = nil
+        let closeAcknowledged = socketCloseCoordinator.closeAcknowledged
+        let completedAttempt = appKeyFallbackCoordinator.attempt
+        let fallbackAppKey = appKeyFallbackCoordinator.transportDidRelease(
+            closeAcknowledged: closeAcknowledged
+        )
+        let deferredFailure = fallbackAppKey == nil ? deferredFallbackFailure : nil
+        deferredFallbackFailure = nil
+        if fallbackAppKey == nil {
+            sessionLease = nil
+        }
+        lock.unlock()
+
+        timeoutTask?.cancel()
+        forcedTimeoutTask?.cancel()
+        // URLSession retains its delegate until invalidated. Prefer a Close ACK or
+        // confirmed completion; forced invalidation has a bounded final fallback so
+        // a missing delegate callback cannot block future recordings forever.
+        releasedSession?.invalidateAndCancel()
+        AppLog.info(
+            "Android ASR disconnected attempt=\(completedAttempt.rawValue) closeAcknowledged=\(closeAcknowledged)"
+        )
+        logSummary(reason: "disconnect")
+
+        if let fallbackAppKey, let lease {
+            startFallbackAttempt(appKey: fallbackAppKey, lease: lease)
+            return
+        }
+
+        if let deferredFailure {
+            onError?(deferredFailure)
+        }
+        if let lease {
+            sessionGate.release(lease)
+        }
+        disconnectSignal.complete()
+    }
+
+    private func startFallbackAttempt(
+        appKey: String,
+        lease: AndroidASRSessionGate.Lease
+    ) {
+        guard let credentials = lock.withLock({ self.credentials }) else {
+            finishFallbackBeforeSocket(
+                lease: lease,
+                error: NSError(
+                    domain: "Douvo.AndroidASR",
+                    code: 6,
+                    userInfo: [NSLocalizedDescriptionKey: "Android fallback credentials are missing"]
+                )
+            )
+            return
+        }
+
+        let activeSession: URLSession
+        let socket: URLSessionWebSocketTask
+        do {
+            let request = try makeWebSocketRequest(credentials: credentials)
+            activeSession = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+            socket = activeSession.webSocketTask(with: request)
+        } catch {
+            finishFallbackBeforeSocket(lease: lease, error: error)
+            return
+        }
+
+        // The previous server connection has completed its Close handshake. Keep
+        // the same lease so no second recording can enter between the two attempts.
+        sessionGate.resumeAfterClose(lease)
+        let shouldStart = lock.withLock { () -> Bool in
+            guard sessionLease == lease,
+                  task == nil,
+                  appKeyFallbackCoordinator.canStartFallback else {
+                return false
+            }
+            session = activeSession
+            task = socket
+            activeAppKey = appKey
+            resetAttemptStateLocked()
+            return true
+        }
+
+        guard shouldStart else {
+            activeSession.invalidateAndCancel()
+            finishFallbackBeforeSocket(lease: lease, error: nil)
+            return
+        }
+
+        AppLog.info("Android ASR concurrency fallback starting after acknowledged Close")
+        startSocket(socket, credentials: credentials)
+    }
+
+    private func finishFallbackBeforeSocket(
+        lease: AndroidASRSessionGate.Lease,
+        error: Error?
+    ) {
+        let shouldRelease = lock.withLock { () -> Bool in
+            guard sessionLease == lease, task == nil else { return false }
+            sessionLease = nil
+            appKeyFallbackCoordinator.cancel()
+            state = error == nil ? .disconnected : .failed
+            return true
+        }
+        guard shouldRelease else { return }
+
+        if let error {
+            AppLog.error("Android ASR fallback connection failed error=\(error.localizedDescription)")
+            onError?(asrError(error, stage: "fallback_connect_failed"))
+        }
+        sessionGate.release(lease)
+        disconnectSignal.complete()
+    }
+
+    private func scheduleForcedTransportShutdownTimeout(for connection: Connection) {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.forcedTransportShutdownTimeout)
+            guard !Task.isCancelled else { return }
+            self?.handleForcedTransportShutdownTimeout(for: connection)
+        }
+
+        lock.lock()
+        guard isCurrentConnectionLocked(connection) else {
+            lock.unlock()
+            timeoutTask.cancel()
+            return
+        }
+        forcedTransportShutdownTimeoutTask?.cancel()
+        forcedTransportShutdownTimeoutTask = timeoutTask
+        lock.unlock()
+    }
+
+    private func handleForcedTransportShutdownTimeout(for connection: Connection) {
+        lock.lock()
+        guard isCurrentConnectionLocked(connection) else {
+            lock.unlock()
+            return
+        }
+        let action = socketCloseCoordinator.transportDidComplete()
+        lock.unlock()
+        guard action == .releaseSlot else { return }
+        AppLog.info("Android ASR forced transport shutdown completion timed out; releasing local slot")
+        performSocketCloseAction(action, connection: connection)
+    }
+
+    private func currentConnectionLocked() -> Connection? {
+        guard let session, let task else { return nil }
+        return Connection(session: session, socket: task)
+    }
+
+    private func isCurrentConnection(_ connection: Connection) -> Bool {
+        lock.withLock { isCurrentConnectionLocked(connection) }
+    }
+
+    private func isCurrentConnectionLocked(_ connection: Connection) -> Bool {
+        session === connection.session && task === connection.socket
     }
 
     private func sendStartTask() {
-        guard let task, let credentials else { return }
+        guard let (task, appKey) = lock.withLock({ () -> (URLSessionWebSocketTask, String)? in
+            guard state == .connecting, let task else { return nil }
+            return (task, activeAppKey)
+        }) else { return }
         let payload = AndroidASRProtobuf.request(
-            appKey: credentials.token,
+            appKey: appKey,
             methodName: "StartTask",
             payload: "",
             audioData: Data(),
@@ -393,15 +693,20 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             frameState: 0
         )
         task.send(.data(payload)) { [weak self] error in
+            guard let self, self.isCurrentActiveTask(task) else { return }
             if let error {
                 AppLog.error("Android ASR StartTask send failed error=\(error.localizedDescription)")
-                self?.markFailed(error)
+                self.markFailed(error)
             }
         }
     }
 
     private func sendStartSession() {
-        guard let task, let credentials else { return }
+        guard let (task, credentials, appKey) = lock.withLock({
+            () -> (URLSessionWebSocketTask, DoubaoAndroidCredentials, String)? in
+            guard state == .connecting, let task, let credentials else { return nil }
+            return (task, credentials, activeAppKey)
+        }) else { return }
         let config = AndroidASRSessionConfig.make(
             deviceID: credentials.deviceId,
             context: sessionContext,
@@ -410,7 +715,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let payloadData = (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
         let payload = String(data: payloadData, encoding: .utf8) ?? "{}"
         let message = AndroidASRProtobuf.request(
-            appKey: credentials.token,
+            appKey: appKey,
             methodName: "StartSession",
             payload: payload,
             audioData: Data(),
@@ -418,9 +723,10 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             frameState: 0
         )
         task.send(.data(message)) { [weak self] error in
+            guard let self, self.isCurrentActiveTask(task) else { return }
             if let error {
                 AppLog.error("Android ASR StartSession send failed error=\(error.localizedDescription)")
-                self?.markFailed(error)
+                self.markFailed(error)
             }
         }
     }
@@ -487,6 +793,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
         socket.send(.data(message)) { [weak self] error in
             guard let self else { return }
+            guard self.isCurrentActiveTask(socket) else { return }
             if let error {
                 AppLog.error("Android ASR audio send failed error=\(error.localizedDescription)")
                 self.markFailed(error)
@@ -504,7 +811,6 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     }
 
     private func sendFinishFrames(socket: URLSessionWebSocketTask) {
-        guard let credentials else { return }
         lock.lock()
         let finalAudioFrame = latestAudioFrame
         lock.unlock()
@@ -515,7 +821,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             let trigger = finishCoordinator.finishWithoutAudio()
             lock.unlock()
             if let trigger {
-                sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+                sendFinishSession(socket: socket, trigger: trigger)
             }
             return
         }
@@ -533,6 +839,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         )
         socket.send(.data(lastFrame)) { [weak self] error in
             guard let self else { return }
+            guard self.isCurrentActiveTask(socket) else { return }
             if let error {
                 AppLog.error("Android ASR last frame send failed error=\(error.localizedDescription)")
                 self.markFailed(error)
@@ -544,14 +851,13 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             let trigger = self.finishCoordinator.finalFrameDidSend()
             self.lock.unlock()
             if let trigger {
-                self.sendFinishSession(socket: socket, credentials: credentials, trigger: trigger)
+                self.sendFinishSession(socket: socket, trigger: trigger)
             }
         }
     }
 
     private func sendFinishSession(
         socket: URLSessionWebSocketTask,
-        credentials: DoubaoAndroidCredentials,
         trigger: AndroidASRFinishTrigger
     ) {
         lock.lock()
@@ -559,11 +865,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             lock.unlock()
             return
         }
+        let appKey = activeAppKey
         lock.unlock()
 
         AppLog.info("Android ASR sending FinishSession reason=\(trigger.rawValue)")
         let finish = AndroidASRProtobuf.request(
-            appKey: credentials.token,
+            appKey: appKey,
             methodName: "FinishSession",
             payload: "",
             audioData: Data(),
@@ -571,19 +878,21 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             frameState: 0
         )
         socket.send(.data(finish)) { [weak self] error in
+            guard let self, self.isCurrentActiveTask(socket) else { return }
             if let error {
                 AppLog.error("Android ASR FinishSession send failed error=\(error.localizedDescription)")
-                self?.logSummary(reason: "finish_session_failed")
-                self?.markFailed(error)
+                self.logSummary(reason: "finish_session_failed")
+                self.markFailed(error)
             } else {
                 AppLog.info("Android ASR FinishSession sent")
             }
         }
     }
 
-    private func receive() {
-        task?.receive { [weak self] result in
+    private func receive(socket: URLSessionWebSocketTask) {
+        socket.receive { [weak self] result in
             guard let self else { return }
+            guard self.isCurrentTask(socket) else { return }
             switch result {
             case .success(let message):
                 self.lock.lock()
@@ -594,17 +903,28 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 if case .data(let data) = message {
                     self.handleResponse(AndroidASRProtobuf.parseResponse(data), count: count)
                 }
-                self.receive()
+                self.receive(socket: socket)
             case .failure(let error):
                 if !self.isExpectedClose(error) {
                     AppLog.error("Android ASR receive failed error=\(error.localizedDescription)")
                     self.logSummary(reason: "receive_failed")
-                    self.onError?(self.asrError(error, stage: "receive_failed"))
+                    let reportedError = self.asrError(error, stage: "receive_failed")
+                    self.markFailed(nil, notify: false, disconnectImmediately: false)
+                    self.onError?(reportedError)
+                    self.disconnect()
                 } else {
                     self.logSummary(reason: "receive_ended")
                 }
             }
         }
+    }
+
+    private func isCurrentTask(_ socket: URLSessionTask) -> Bool {
+        lock.withLock { task === socket }
+    }
+
+    private func isCurrentActiveTask(_ socket: URLSessionTask) -> Bool {
+        lock.withLock { task === socket && state != .disconnected }
     }
 
     private func handleResponse(_ response: AndroidASRResponse, count: Int) {
@@ -615,13 +935,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         case .sessionStarted:
             markOpen()
         case .sessionFinished:
-            let shutdownAction = markFinished()
+            markFinished()
             AppLog.info("Android ASR SessionFinished")
             logSummary(reason: "finish")
+            disconnect()
             onFinish?()
-            if shutdownAction == .disconnect {
-                disconnect()
-            }
         case .recognition(let result):
             let assembledResult = transcriptAssembler.update(with: result)
             lock.lock()
@@ -641,40 +959,62 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             }
         case .heartbeat:
             break
-        case .error(let message, let responseMetadata):
-            AppLog.error("Android ASR error message=\(message)")
-            markFailed(nil, notify: false)
+        case .error(let message, let statusCode, let responseMetadata):
+            AppLog.error("Android ASR error code=\(statusCode) message=\(message)")
+            let reportedServerError = asrError(
+                description: message,
+                code: statusCode == 0 ? 3 : statusCode,
+                stage: "server_error",
+                responseMetadata: responseMetadata
+            )
+            let fallbackAction = lock.withLock {
+                appKeyFallbackCoordinator.receiveServerError(
+                    statusCode: statusCode,
+                    message: message,
+                    sessionIsConnecting: state == .connecting
+                )
+            }
+            markFailed(nil, notify: false, disconnectImmediately: false)
             logSummary(reason: "server_error")
+            if fallbackAction == .closeThenRetry {
+                lock.withLock {
+                    deferredFallbackFailure = reportedServerError
+                }
+                AppLog.info("Android ASR concurrency quota exceeded; closing before one fallback attempt")
+                disconnectForFallback()
+                return
+            }
             if message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("token") {
                 onAuthError?()
             } else {
-                onError?(asrError(
-                    description: message,
-                    code: 3,
-                    stage: "server_error",
-                    responseMetadata: responseMetadata
-                ))
+                onError?(reportedServerError)
             }
+            disconnect()
         case .unknown:
             break
         }
     }
 
-    private func markFinished() -> AndroidASRShutdownAction {
+    private func markFinished() {
         lock.lock()
         state = .finished
-        let action = shutdownCoordinator.sessionDidFinish()
         lock.unlock()
-        return action
     }
 
-    private func markFailed(_ error: Error?, notify: Bool = true) {
+    private func markFailed(
+        _ error: Error?,
+        notify: Bool = true,
+        disconnectImmediately: Bool = true
+    ) {
         lock.lock()
         state = .failed
         isSendingAudio = false
         lock.unlock()
         if notify {
             onError?(asrError(error, stage: "transport_failed"))
+        }
+        if disconnectImmediately {
+            disconnect()
         }
     }
 
@@ -726,9 +1066,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let finalFrameSent = finishCoordinator.finalFrameSent
         let finalResultReceived = finishCoordinator.finalResultReceived
         let finishTrigger = finishCoordinator.finishTrigger?.rawValue ?? ""
+        let appKeyAttempt = appKeyFallbackCoordinator.attempt.rawValue
+        let fallbackUsed = appKeyFallbackCoordinator.fallbackUsed
+        let fallbackTriggerStatusCode = appKeyFallbackCoordinator.triggerStatusCode
         lock.unlock()
 
-        return [
+        var metadata = [
             "android_stage": stage,
             "android_endpoint_host": Self.webSocketHost,
             "android_request_id": currentRequestID,
@@ -740,8 +1083,14 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             "android_recognition_messages": String(recognitionCount),
             "android_final_frame_sent": String(finalFrameSent),
             "android_final_result_received": String(finalResultReceived),
-            "android_finish_trigger": finishTrigger
+            "android_finish_trigger": finishTrigger,
+            "android_app_key_attempt": appKeyAttempt,
+            "android_app_key_fallback_used": String(fallbackUsed)
         ]
+        if let fallbackTriggerStatusCode {
+            metadata["android_app_key_fallback_trigger_status"] = String(fallbackTriggerStatusCode)
+        }
+        return metadata
     }
 
     private func isExpectedClose(_ error: Error) -> Bool {
@@ -775,9 +1124,11 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         let finalFrameSent = finishCoordinator.finalFrameSent
         let finalResultReceived = finishCoordinator.finalResultReceived
         let finishTrigger = finishCoordinator.finishTrigger?.rawValue ?? "none"
+        let appKeyAttempt = appKeyFallbackCoordinator.attempt.rawValue
+        let fallbackUsed = appKeyFallbackCoordinator.fallbackUsed
         lock.unlock()
 
-        AppLog.info("Android ASR summary reason=\(reason) state=\(state) pending=\(pendingCount) queued=\(queuedCount) pendingAudio=\(pendingTotal) queuedAudio=\(queuedTotal) sentFrames=\(sentFrames) receivedMessages=\(receivedCount) recognitionMessages=\(recognitionCount) finalFrameSent=\(finalFrameSent) finalResultReceived=\(finalResultReceived) finishTrigger=\(finishTrigger) pendingSamples=\(pendingSamples) queuedSamples=\(queuedSamples) sentSamples=\(sentSamples) recognitionSamples=\(resultSamples)")
+        AppLog.info("Android ASR summary reason=\(reason) attempt=\(appKeyAttempt) fallbackUsed=\(fallbackUsed) state=\(state) pending=\(pendingCount) queued=\(queuedCount) pendingAudio=\(pendingTotal) queuedAudio=\(queuedTotal) sentFrames=\(sentFrames) receivedMessages=\(receivedCount) recognitionMessages=\(recognitionCount) finalFrameSent=\(finalFrameSent) finalResultReceived=\(finalResultReceived) finishTrigger=\(finishTrigger) pendingSamples=\(pendingSamples) queuedSamples=\(queuedSamples) sentSamples=\(sentSamples) recognitionSamples=\(resultSamples)")
     }
 
     private static func shouldSampleProgress(_ count: Int) -> Bool {
@@ -798,6 +1149,75 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
 
     private static func currentTimeMillis() -> Int64 {
         Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        let connection = Connection(session: session, socket: webSocketTask)
+        lock.lock()
+        guard isCurrentConnectionLocked(connection) else {
+            lock.unlock()
+            return
+        }
+        let action = socketCloseCoordinator.receiveCloseAcknowledgement()
+        lock.unlock()
+
+        if action == .unexpectedClose {
+            AppLog.error(
+                "Android ASR WebSocket closed without a close request code=\(closeCode.rawValue) reasonBytes=\(reason?.count ?? 0)"
+            )
+            performSocketCloseAction(
+                action,
+                connection: connection,
+                error: unexpectedCloseError(closeCode: closeCode.rawValue)
+            )
+        } else {
+            AppLog.info(
+                "Android ASR WebSocket close acknowledged code=\(closeCode.rawValue) reasonBytes=\(reason?.count ?? 0)"
+            )
+            performSocketCloseAction(
+                action,
+                connection: connection
+            )
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task completedTask: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        lock.lock()
+        guard task === completedTask,
+              let connection = currentConnectionLocked(),
+              connection.session === session else {
+            lock.unlock()
+            return
+        }
+        let action = socketCloseCoordinator.transportDidComplete()
+        lock.unlock()
+
+        if action == .unexpectedClose {
+            let unexpectedError = error ?? unexpectedCloseError()
+            AppLog.error("Android ASR transport completed before a close request error=\(unexpectedError.localizedDescription)")
+            performSocketCloseAction(
+                action,
+                connection: connection,
+                error: unexpectedError
+            )
+        } else {
+            if let error, !isExpectedClose(error) {
+                AppLog.info("Android ASR transport completed error=\(error.localizedDescription)")
+            }
+            performSocketCloseAction(
+                action,
+                connection: connection
+            )
+        }
     }
 }
 
@@ -1192,6 +1612,7 @@ enum AndroidASRProtobuf {
 
     static func parseResponse(_ data: Data) -> AndroidASRResponse {
         var messageType = ""
+        var statusCode = 0
         var statusMessage = ""
         var resultJSON = ""
         var fieldNumbers = Set<Int>()
@@ -1206,6 +1627,8 @@ enum AndroidASRProtobuf {
             switch (fieldNumber, wireType) {
             case (4, 2):
                 messageType = readString(data, index: &index) ?? ""
+            case (5, 0):
+                statusCode = Int(readVarint(data, index: &index) ?? 0)
             case (6, 2):
                 statusMessage = readString(data, index: &index) ?? ""
             case (7, 2):
@@ -1219,6 +1642,7 @@ enum AndroidASRProtobuf {
         let responseMetadata = [
             "android_response_bytes": String(data.count),
             "android_response_message_type": messageType,
+            "android_response_status_code": String(statusCode),
             "android_response_status_chars": String(statusMessage.count),
             "android_response_result_json_bytes": String(resultJSON.utf8.count),
             "android_response_fields": fieldNumbers.sorted().map(String.init).joined(separator: ","),
@@ -1233,7 +1657,7 @@ enum AndroidASRProtobuf {
         case "SessionFinished":
             return AndroidASRResponse(type: .sessionFinished)
         case "TaskFailed", "SessionFailed":
-            return AndroidASRResponse(type: .error(statusMessage, responseMetadata))
+            return AndroidASRResponse(type: .error(statusMessage, statusCode, responseMetadata))
         default:
             break
         }

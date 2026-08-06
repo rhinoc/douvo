@@ -95,7 +95,7 @@ enum LogExportStore {
     }
 
     private static func copyBundledDemoAudio(to destination: URL) throws {
-        guard let source = Bundle.module.url(forResource: "ASRDemo", withExtension: "aiff") else { return }
+        guard let source = try? DemoAudioStore.url() else { return }
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         try copyFile(source, to: destination.appendingPathComponent(source.lastPathComponent))
     }

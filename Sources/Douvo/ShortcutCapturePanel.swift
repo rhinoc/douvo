@@ -3646,8 +3646,11 @@ private struct SettingsPanelView: View {
             } catch {
                 await MainActor.run {
                     isRunningASRDemoDiagnostic = false
+                    let message = TranscriptionManager.userFacingASRErrorMessage(
+                        TranscriptionSessionError(error)
+                    )
                     presentSettingsToast(
-                        L10n.text(en: "Recognition demo failed: \(error.localizedDescription)", zh: "语音识别示例测试失败：\(error.localizedDescription)"),
+                        message,
                         kind: .error
                     )
                 }

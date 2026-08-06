@@ -8,11 +8,16 @@ cd "$ROOT"
 : "${VERSION:?VERSION not set}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY not set}"
 : "${SPARKLE_ED_PRIVATE_KEY:?SPARKLE_ED_PRIVATE_KEY not set}"
+: "${RELEASE_NOTES_PATH:?RELEASE_NOTES_PATH not set}"
 
 DMG_NAME="douvo-${VERSION}-macos.dmg"
 DMG_PATH="$ROOT/dist/$DMG_NAME"
 if [[ ! -f "$DMG_PATH" ]]; then
   echo "Missing DMG at $DMG_PATH" >&2
+  exit 1
+fi
+if [[ ! -s "$RELEASE_NOTES_PATH" ]]; then
+  echo "Missing release notes at $RELEASE_NOTES_PATH" >&2
   exit 1
 fi
 
@@ -33,6 +38,7 @@ fi
 ed_sig_length="$(printf '%s\n' "$SPARKLE_ED_PRIVATE_KEY" | "$SIGN_UPDATE" --ed-key-file - "$DMG_PATH" | tr -d '\n')"
 date="$(LC_ALL=C date +'%a, %d %b %Y %H:%M:%S %z')"
 url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${DMG_NAME}"
+release_notes="$(perl -0pe 's/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g' "$RELEASE_NOTES_PATH")"
 
 tmp="$(mktemp)"
 cat >"$tmp" <<EOF
@@ -42,6 +48,9 @@ cat >"$tmp" <<EOF
       <sparkle:version>${VERSION}</sparkle:version>
       <pubDate>${date}</pubDate>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+${release_notes}
+      </description>
       <enclosure
         url="${url}"
         ${ed_sig_length}

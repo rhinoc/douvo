@@ -54,6 +54,23 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Render release changesets
+        id: changesets
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          scripts/render_changesets.sh "$NOTES"
+          if [[ ! -s "$NOTES" ]]; then
+            echo "No pending changesets. Refusing to publish a release without update notes." >&2
+            exit 1
+          fi
+          DELIMITER="release_notes_$(uuidgen)"
+          {
+            echo "markdown<<$DELIMITER"
+            cat "$NOTES"
+            echo "$DELIMITER"
+            echo "path=$NOTES"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Bump version
         id: ver
         run: |
@@ -81,6 +98,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          RELEASE_NOTES_PATH: ${{ steps.changesets.outputs.path }}
         run: scripts/update_appcast.sh
 
       - name: Upload GitHub Release
@@ -92,6 +110,10 @@ jobs:
           tag: v${{ steps.ver.outputs.version }}
           overwrite: true
           body: |
+            ${{ steps.changesets.outputs.markdown }}
+
+            ## Installation
+
             Download the DMG, open it, and drag `Douvo.app` to Applications.
 
             Browser and Homebrew downloads can be tagged with Gatekeeper quarantine. If macOS blocks first launch or says the app is from an unidentified developer, trust the installed app once:
@@ -148,6 +170,9 @@ jobs:
             git commit -m "Update Douvo to ${VERSION}"
             git push
           fi
+
+      - name: Consume release changesets
+        run: scripts/consume_changesets.sh
 
       - name: Commit version bump
         run: scripts/commit_release.sh

@@ -9,5 +9,6 @@ VERSION="$(tr -d '[:space:]' <VERSION)"
 git config user.name github-actions
 git config user.email github-actions@github.com
 git add VERSION Sources/Douvo/Info.plist appcast.xml
+git add -A .changeset
 git commit -m "chore: auto release $VERSION"
 git push

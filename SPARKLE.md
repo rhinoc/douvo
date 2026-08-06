@@ -17,21 +17,47 @@ SwiftPM-resolved Sparkle version in `Package.resolved`.
 
 Releases are created from pushes to `main`, following the same pattern as Lofii:
 
-1. GitHub Actions rewrites `SUFeedURL` to the current repository's raw
+1. Every user-visible pull request adds an English `.changeset/*.md` entry.
+2. GitHub Actions validates and groups all pending changesets into Markdown
+   release notes. A release without pending changesets is rejected.
+3. GitHub Actions rewrites `SUFeedURL` to the current repository's raw
    `appcast.xml` URL.
-2. `scripts/update_version.sh` bumps the patch version in `VERSION` and
+4. `scripts/update_version.sh` bumps the patch version in `VERSION` and
    `Sources/Douvo/Info.plist`.
-3. `scripts/build-dmg.sh` builds `dist/douvo-<version>-macos.dmg`.
-4. `scripts/update_appcast.sh` signs the DMG with Sparkle `sign_update` and
-   appends a new item to `appcast.xml`.
-5. The workflow uploads the DMG to GitHub Releases as `v<version>`.
-6. If `HOMEBREW_TAP_GITHUB_TOKEN` is configured, the workflow updates
+5. `scripts/build-dmg.sh` builds `dist/douvo-<version>-macos.dmg`.
+6. `scripts/update_appcast.sh` signs the DMG with Sparkle `sign_update` and
+   appends a new item containing the Markdown release notes to `appcast.xml`.
+7. The workflow uploads the DMG to GitHub Releases as `v<version>` and uses
+   the same Markdown for the GitHub Release body.
+8. If `HOMEBREW_TAP_GITHUB_TOKEN` is configured, the workflow updates
    `Casks/douvo.rb` in the Homebrew tap repository using the same DMG URL and
    SHA-256 checksum.
-7. `scripts/commit_release.sh` commits `VERSION`, `Info.plist`, and
-   `appcast.xml` with `chore: auto release <version>`.
+9. After all artifacts are published, `scripts/consume_changesets.sh` removes
+   the published changesets.
+10. `scripts/commit_release.sh` commits `VERSION`, `Info.plist`, `appcast.xml`,
+    and the consumed changesets with `chore: auto release <version>`.
 
 The release workflow skips `chore` commits to avoid a release loop.
+
+## Changesets
+
+Changesets live in `.changeset` and contain one short ASCII English summary. The
+supported types are `added`, `changed`, and `fixed`; they control release-note
+grouping but do not change version bumping. Douvo continues to bump the patch
+version for every release.
+
+```markdown
+---
+type: changed
+---
+
+Show clearer status messages while local models are downloading.
+```
+
+CI validates every pending changeset. The release workflow refuses to publish
+an update when no changeset is present, so Sparkle never receives a new item
+with an empty change list. If publishing fails, the changesets remain in the
+repository and are available to the next retry.
 
 ## Sparkle Keys
 

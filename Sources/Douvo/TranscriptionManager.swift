@@ -27,26 +27,33 @@ final class TranscriptionManager {
     }
 
     private static var recordingStartTimeoutMessage: String {
-        L10n.text(en: "Recording did not start. Please try again.", zh: "录音没有启动，请重试")
+        L10n.text(en: "Microphone failed to start.", zh: "麦克风启动失败")
     }
 
     private static var speechRecognitionStartTimeoutMessage: String {
-        L10n.text(en: "Speech recognition did not connect. Please try again.", zh: "语音识别连接失败，请重试")
+        L10n.text(en: "Speech recognition did not connect.", zh: "语音识别连接失败")
     }
 
     private static var speechRecognitionServiceTimeoutMessage: String {
         L10n.text(en: "Speech recognition timed out.", zh: "语音识别超时")
     }
 
-    private static var androidRecognitionServiceBusyMessage: String {
+    private static var androidConcurrencyQuotaFullMessage: String {
         L10n.text(
-            en: "Android recognition service is busy. Please try again later.",
-            zh: "Android 识别服务繁忙，请稍后重试"
+            en: "Android concurrency quota is full.",
+            zh: "Android 服务并发配额已满"
+        )
+    }
+
+    private static var androidAuthExpiredMessage: String {
+        L10n.text(
+            en: "Android recognition credentials expired.",
+            zh: "Android 识别凭据已失效"
         )
     }
 
     private static var recognitionFailedMessage: String {
-        L10n.text(en: "Recognition failed. Try again.", zh: "识别失败，请重试")
+        L10n.text(en: "Recognition failed.", zh: "识别失败")
     }
 
     private static var microphoneFailedMessage: String {
@@ -661,7 +668,7 @@ final class TranscriptionManager {
             } catch {
                 AppLog.error("Session start failed: \(error)")
                 await MainActor.run {
-                    self.handleAudioStartFailure(error, sessionID: sessionID)
+                    self.handleSessionStartFailure(error, provider: provider, sessionID: sessionID)
                 }
             }
         }
@@ -1079,7 +1086,7 @@ final class TranscriptionManager {
         appState.transcript = ""
         appState.errorMessage = failedProvider == "web"
             ? Self.authExpiredMessage
-            : Self.recognitionFailedMessage
+            : Self.androidAuthExpiredMessage
         logASRResultSummary(reason: "auth_failure")
         finishCurrentTrace(outcome: "failed", metadata: ["reason": "auth_expired"])
         resetToIdle(after: 1.5)
@@ -1378,6 +1385,29 @@ final class TranscriptionManager {
         resetToIdle(after: 2)
     }
 
+    private func handleSessionStartFailure(
+        _ error: Error,
+        provider: ASRProvider,
+        sessionID: UUID
+    ) {
+        guard activeSessionID == sessionID else { return }
+        let sessionError = TranscriptionSessionError(error)
+        transcriptionTrace?.finishSpan("asr.connect", metadata: ["result": "failed"])
+        transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "not_started"])
+        writeASRErrorDiagnostic(
+            provider: provider.rawValue,
+            error: sessionError,
+            reason: "session_start_failed",
+            willContinue: false
+        )
+        appState.errorMessage = Self.userFacingASRErrorMessage(sessionError)
+        finishCurrentTrace(outcome: "failed", metadata: [
+            "reason": "session_start_failed",
+            "error": error.localizedDescription
+        ])
+        resetToIdle(after: 2)
+    }
+
     private func cancelActiveSession() {
         sessionStartTask?.cancel()
         sessionStartTask = nil
@@ -1530,14 +1560,17 @@ final class TranscriptionManager {
         return error.localizedDescription.localizedCaseInsensitiveContains("socket is not connected")
     }
 
-    private static func userFacingASRErrorMessage(_ error: TranscriptionSessionError?) -> String {
+    static func userFacingASRErrorMessage(_ error: TranscriptionSessionError?) -> String {
         guard let error else {
-            return L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
+            return recognitionFailedMessage
         }
         let message = error.localizedDescription.lowercased()
         if error.domain == "Douvo.AndroidASR",
-           AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(message) {
-            return androidRecognitionServiceBusyMessage
+           AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(
+               statusCode: error.code,
+               message: message
+           ) {
+            return androidConcurrencyQuotaFullMessage
         }
         if error.domain == "Douvo.WebASR",
            error.code == 710020702 || message.contains("server processing timeout") || message.contains("node execution timeout") {
@@ -1546,6 +1579,43 @@ final class TranscriptionManager {
         if error.domain == NSURLErrorDomain, error.code == NSURLErrorTimedOut {
             return speechRecognitionStartTimeoutMessage
         }
-        return L10n.text(en: "Network connection interrupted. Please try again.", zh: "网络连接中断，请重试")
+        if isNetworkTransportError(error) {
+            return L10n.text(en: "Network connection interrupted.", zh: "网络连接中断")
+        }
+        return recognitionFailureMessage(error)
+    }
+
+    private static func isNetworkTransportError(_ error: TranscriptionSessionError) -> Bool {
+        if error.domain == NSURLErrorDomain { return true }
+        guard error.domain == NSPOSIXErrorDomain else { return false }
+        return [50, 51, 54, 57, 60, 61, 64, 65].contains(error.code)
+    }
+
+    private static func recognitionFailureMessage(_ error: TranscriptionSessionError) -> String {
+        let detail = error.localizedDescription
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !detail.isEmpty, detail.lowercased() != "unknown" else {
+            return recognitionFailedMessage
+        }
+        let visibleDetail = String(detail.prefix(180))
+        switch error.domain {
+        case "Douvo.AndroidASR":
+            return L10n.text(
+                en: "Android recognition failed: \(visibleDetail)",
+                zh: "Android 识别失败：\(visibleDetail)"
+            )
+        case "Douvo.WebASR":
+            return L10n.text(
+                en: "Web recognition failed: \(visibleDetail)",
+                zh: "Web 识别失败：\(visibleDetail)"
+            )
+        default:
+            return L10n.text(
+                en: "Recognition failed: \(visibleDetail)",
+                zh: "识别失败：\(visibleDetail)"
+            )
+        }
     }
 }

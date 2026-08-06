@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import Dispatch
 import Sparkle
 import SwiftUI
@@ -64,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var transcriptionManager: TranscriptionManager!
     private var settingsPanel: ShortcutCapturePanel!
     private var localLLMDownloadManager: LocalLLMDownloadManager!
+    private var loginStatusCancellable: AnyCancellable?
     private let updaterController: SPUStandardUpdaterController
 
     override init() {
@@ -82,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupOverlay()
         setupWebView()
         setupHotkey()
+        observeLoginStatus()
         setupTranscription()
         requestMicrophonePermission()
         rebuildMenu()
@@ -221,6 +224,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         settingsPanel = ShortcutCapturePanel()
+    }
+
+    private func observeLoginStatus() {
+        loginStatusCancellable = Self.observeLoginStatus(appState) { [weak self] loginStatus in
+            self?.settingsPanel.refreshLoginStatus(loginStatus)
+            self?.rebuildMenu()
+        }
+    }
+
+    static func observeLoginStatus(
+        _ appState: AppState,
+        onChange: @escaping (LoginStatus) -> Void
+    ) -> AnyCancellable {
+        appState.$loginStatus.sink(receiveValue: onChange)
     }
 
     private func setupTranscription() {

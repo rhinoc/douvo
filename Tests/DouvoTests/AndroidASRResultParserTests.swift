@@ -71,6 +71,30 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertTrue(request.starts(with: expectedPrefix))
     }
 
+    func testSessionFailurePreservesConcurrencyQuotaStatusCode() {
+        var data = Data()
+        appendTestProtoString("SessionFailed", fieldNumber: 4, to: &data)
+        appendTestProtoVarint(
+            UInt64(AndroidASRErrorClassifier.concurrencyQuotaStatusCode),
+            fieldNumber: 5,
+            to: &data
+        )
+        appendTestProtoString(
+            "concurrency quota exceeded: key:example,value:5",
+            fieldNumber: 6,
+            to: &data
+        )
+
+        let response = AndroidASRProtobuf.parseResponse(data)
+
+        guard case .error(let message, let statusCode, let metadata) = response.type else {
+            return XCTFail("Expected SessionFailed response")
+        }
+        XCTAssertEqual(statusCode, AndroidASRErrorClassifier.concurrencyQuotaStatusCode)
+        XCTAssertEqual(message, "concurrency quota exceeded: key:example,value:5")
+        XCTAssertEqual(metadata["android_response_status_code"], "40200011")
+    }
+
     func testSessionConfigEnablesAndroidCorrectionPasses() throws {
         let config = AndroidASRSessionConfig.make(
             deviceID: "device-123",
@@ -192,52 +216,6 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(coordinator.finalFrameDidSend(), .finalFrameSent)
         XCTAssertTrue(coordinator.finishSessionRequested)
         XCTAssertNil(coordinator.finalFrameDidSend())
-    }
-
-    func testShutdownCoordinatorFinishesActiveSessionBeforeDisconnecting() {
-        var coordinator = AndroidASRShutdownCoordinator()
-
-        XCTAssertEqual(
-            coordinator.requestGracefulShutdown(sessionIsActive: true),
-            .finishSession
-        )
-        XCTAssertTrue(coordinator.isAwaitingSessionFinish)
-        XCTAssertEqual(coordinator.sessionDidFinish(), .disconnect)
-        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
-    }
-
-    func testShutdownCoordinatorDisconnectsInactiveSessionImmediately() {
-        var coordinator = AndroidASRShutdownCoordinator()
-
-        XCTAssertEqual(
-            coordinator.requestGracefulShutdown(sessionIsActive: false),
-            .disconnect
-        )
-        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
-    }
-
-    func testShutdownCoordinatorTimesOutOnlyOnce() {
-        var coordinator = AndroidASRShutdownCoordinator()
-
-        XCTAssertEqual(
-            coordinator.requestGracefulShutdown(sessionIsActive: true),
-            .finishSession
-        )
-        XCTAssertEqual(coordinator.gracefulShutdownDidTimeOut(), .disconnect)
-        XCTAssertEqual(coordinator.gracefulShutdownDidTimeOut(), .none)
-    }
-
-    func testShutdownCoordinatorIgnoresRepeatedGracefulShutdownRequest() {
-        var coordinator = AndroidASRShutdownCoordinator()
-
-        XCTAssertEqual(
-            coordinator.requestGracefulShutdown(sessionIsActive: true),
-            .finishSession
-        )
-        XCTAssertEqual(
-            coordinator.requestGracefulShutdown(sessionIsActive: true),
-            .none
-        )
     }
 
     func testParserJoinsLegacySegmentedResults() {
@@ -650,4 +628,27 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(update.text, "第一段第二段")
         XCTAssertEqual(update.metadata["android_assembled_segments"], "2")
     }
+}
+
+private func appendTestProtoString(_ value: String, fieldNumber: Int, to data: inout Data) {
+    let bytes = Data(value.utf8)
+    appendTestProtoVarint(UInt64(fieldNumber << 3 | 2), to: &data)
+    appendTestProtoVarint(UInt64(bytes.count), to: &data)
+    data.append(bytes)
+}
+
+private func appendTestProtoVarint(
+    _ value: UInt64,
+    fieldNumber: Int? = nil,
+    to data: inout Data
+) {
+    if let fieldNumber {
+        appendTestProtoVarint(UInt64(fieldNumber << 3), to: &data)
+    }
+    var remaining = value
+    while remaining >= 0x80 {
+        data.append(UInt8(remaining & 0x7f) | 0x80)
+        remaining >>= 7
+    }
+    data.append(UInt8(remaining))
 }

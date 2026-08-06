@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class AppMenuTests: XCTestCase {
+    func testLoginStatusObservationForwardsCurrentAndChangedValues() {
+        let appState = AppState.shared
+        let originalStatus = appState.loginStatus
+        defer { appState.loginStatus = originalStatus }
+        appState.loginStatus = .notLoggedIn
+
+        var receivedStatuses: [LoginStatus] = []
+        let cancellable = AppDelegate.observeLoginStatus(appState) { status in
+            receivedStatuses.append(status)
+        }
+
+        XCTAssertEqual(receivedStatuses, [.notLoggedIn])
+
+        appState.loginStatus = .loggedIn
+
+        XCTAssertEqual(receivedStatuses, [.notLoggedIn, .loggedIn])
+        withExtendedLifetime(cancellable) {}
+    }
+
     func testMainMenuIncludesQuitCommandKeyEquivalent() {
         let menu = AppMenuFactory.makeMainMenu(
             settingsAction: nil,

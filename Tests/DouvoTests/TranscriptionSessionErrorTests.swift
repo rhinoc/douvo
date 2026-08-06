@@ -2,6 +2,69 @@ import XCTest
 @testable import Douvo
 
 final class TranscriptionSessionErrorTests: XCTestCase {
+    @MainActor
+    func testAndroidServerErrorPreservesItsActualCause() {
+        let previousLanguage = AppLanguageStore.selected
+        AppLanguageStore.selected = .english
+        defer { AppLanguageStore.selected = previousLanguage }
+        let error = TranscriptionSessionError(
+            domain: "Douvo.AndroidASR",
+            code: 3,
+            localizedDescription: "service discovery failure"
+        )
+
+        XCTAssertEqual(
+            TranscriptionManager.userFacingASRErrorMessage(error),
+            "Android recognition failed: service discovery failure"
+        )
+    }
+
+    @MainActor
+    func testAndroidConcurrencyQuotaUsesExplicitQuotaMessage() {
+        let previousLanguage = AppLanguageStore.selected
+        AppLanguageStore.selected = .simplifiedChinese
+        defer { AppLanguageStore.selected = previousLanguage }
+        let error = TranscriptionSessionError(
+            domain: "Douvo.AndroidASR",
+            code: 3,
+            localizedDescription: "concurrency quota exceeded: value:5"
+        )
+
+        XCTAssertEqual(
+            TranscriptionManager.userFacingASRErrorMessage(error),
+            "Android 服务并发配额已满"
+        )
+    }
+
+    @MainActor
+    func testNetworkTransportErrorStillUsesNetworkMessage() {
+        let previousLanguage = AppLanguageStore.selected
+        AppLanguageStore.selected = .english
+        defer { AppLanguageStore.selected = previousLanguage }
+        let error = TranscriptionSessionError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorNotConnectedToInternet,
+            localizedDescription: "The Internet connection appears to be offline."
+        )
+
+        XCTAssertEqual(
+            TranscriptionManager.userFacingASRErrorMessage(error),
+            "Network connection interrupted."
+        )
+    }
+
+    @MainActor
+    func testMissingASRErrorDoesNotClaimNetworkFailure() {
+        let previousLanguage = AppLanguageStore.selected
+        AppLanguageStore.selected = .english
+        defer { AppLanguageStore.selected = previousLanguage }
+
+        XCTAssertEqual(
+            TranscriptionManager.userFacingASRErrorMessage(nil),
+            "Recognition failed."
+        )
+    }
+
     func testLocalizedDescriptionSurvivesErrorBridge() {
         let sessionError = TranscriptionSessionError(
             domain: "Douvo.Audio",
@@ -48,6 +111,10 @@ final class TranscriptionSessionErrorTests: XCTestCase {
     }
 
     func testAndroidConcurrencyQuotaErrorsAreRecognized() {
+        XCTAssertTrue(AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(
+            statusCode: AndroidASRErrorClassifier.concurrencyQuotaStatusCode,
+            message: "unrelated server text"
+        ))
         XCTAssertTrue(AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(
             "concurrency quota exceeded: key:example,value:5"
         ))

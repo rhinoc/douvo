@@ -84,6 +84,19 @@ enum ASRDemoDiagnosticRunner {
             packets: packets
         )
     }
+
+    static func singleProviderOpeningError(
+        activeProviders: Set<String>,
+        openedProviders: Set<String>,
+        errorsByProvider: [String: TranscriptionSessionError]
+    ) -> TranscriptionSessionError? {
+        guard openedProviders.isDisjoint(with: activeProviders),
+              activeProviders.count == 1,
+              let provider = activeProviders.first else {
+            return nil
+        }
+        return errorsByProvider[provider]
+    }
 }
 
 private final class ASRDemoDiagnosticSession: @unchecked Sendable {
@@ -98,6 +111,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     private var finishedProviders = Set<String>()
     private var latestTextByProvider: [String: String] = [:]
     private var errorsByProvider: [String: String] = [:]
+    private var errorDetailsByProvider: [String: TranscriptionSessionError] = [:]
 
     init(provider: ASRProvider, audioURL: URL) {
         self.provider = provider
@@ -113,26 +127,30 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         packets: DemoASRAudioPackets
     ) async throws -> ASRDemoDiagnosticResult {
         configureClients()
-        connect(
-            webParams: webParams,
-            androidCredentials: androidCredentials,
-            androidContext: androidContext,
-            usePersonalLexicon: usePersonalLexicon
-        )
-        defer {
-            disconnect()
-        }
 
         do {
+            try await connect(
+                webParams: webParams,
+                androidCredentials: androidCredentials,
+                androidContext: androidContext,
+                usePersonalLexicon: usePersonalLexicon
+            )
             try await waitForOpen()
             try await sendPackets(packets)
             try await waitForFinish()
+            await disconnect()
 
             let result = snapshot()
             writeDiagnostic(result)
             AppLog.info("ASR demo diagnostic finished \(result.summary)")
             return result
         } catch {
+            let sessionError = TranscriptionSessionError(error)
+            if sessionError.domain == "Douvo.AndroidASR",
+               errorsByProviderSnapshot["android"] == nil {
+                markError(provider: "android", error: sessionError)
+            }
+            await disconnect()
             let result = snapshot()
             writeDiagnostic(result)
             AppLog.error("ASR demo diagnostic failed \(result.summary) error=\(error.localizedDescription)")
@@ -177,12 +195,12 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         androidCredentials: DoubaoAndroidCredentials?,
         androidContext: String,
         usePersonalLexicon: Bool
-    ) {
+    ) async throws {
         if let webParams {
             webClient?.connect(params: webParams)
         }
         if let androidCredentials {
-            androidClient?.connect(
+            try await androidClient?.connect(
                 credentials: androidCredentials,
                 context: androidContext,
                 usePersonalLexicon: usePersonalLexicon
@@ -201,7 +219,15 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
 
         let opened = openedProvidersSnapshot
         guard !opened.isDisjoint(with: activeProviders) else {
+            let providerError = ASRDemoDiagnosticRunner.singleProviderOpeningError(
+                activeProviders: activeProviders,
+                openedProviders: opened,
+                errorsByProvider: errorDetailsByProviderSnapshot
+            )
             markUnopenedProvidersTimedOut()
+            if let providerError {
+                throw providerError
+            }
             throw NSError(domain: "Douvo.ASRDemo", code: 2, userInfo: [NSLocalizedDescriptionKey: "Demo recognition did not open any route"])
         }
     }
@@ -243,9 +269,10 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         markUnfinishedProvidersTimedOut()
     }
 
-    private func disconnect() {
+    private func disconnect() async {
         webClient?.disconnect()
-        androidClient?.finishSessionThenDisconnect()
+        androidClient?.disconnect()
+        await androidClient?.waitUntilDisconnected()
     }
 
     private var hasAnyOpenedProvider: Bool {
@@ -272,6 +299,12 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         return errorsByProvider
     }
 
+    private var errorDetailsByProviderSnapshot: [String: TranscriptionSessionError] {
+        lock.lock()
+        defer { lock.unlock() }
+        return errorDetailsByProvider
+    }
+
     private func markOpened(_ provider: String) {
         lock.lock()
         openedProviders.insert(provider)
@@ -295,6 +328,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     private func markError(provider: String, error: TranscriptionSessionError) {
         lock.lock()
         errorsByProvider[provider] = "\(error.domain)(\(error.code)): \(error.localizedDescription)"
+        errorDetailsByProvider[provider] = error
         lock.unlock()
         AppLog.error("ASR demo diagnostic error provider=\(provider) error=\(error.localizedDescription)")
     }
@@ -354,10 +388,20 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     }
 }
 
-private enum DemoAudioStore {
-    static func url() throws -> URL {
-        if let url = Bundle.module.url(forResource: "ASRDemo", withExtension: "aiff") {
-            return url
+enum DemoAudioStore {
+    static func url(searchRoots: [URL]? = nil) throws -> URL {
+        let roots = searchRoots ?? [
+            Bundle.main.resourceURL,
+            Bundle.main.bundleURL,
+            Bundle.main.executableURL?.deletingLastPathComponent()
+        ].compactMap { $0 }
+        for root in roots {
+            let url = root
+                .appendingPathComponent("Douvo_Douvo.bundle", isDirectory: true)
+                .appendingPathComponent("ASRDemo.aiff")
+            if FileManager.default.isReadableFile(atPath: url.path) {
+                return url
+            }
         }
         throw NSError(
             domain: "Douvo.ASRDemo",
