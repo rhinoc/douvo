@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.29</title>
+      <sparkle:version>0.1.29</sparkle:version>
+      <pubDate>Thu, 06 Aug 2026 13:36:37 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Fixed
+
+- Preserve valid ASR login state and redact Android credential diagnostics.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.29/douvo-0.1.29-macos.dmg"
+        sparkle:edSignature="Sdy+zrpgpfSAlUpBEsWJ8slXHmhnaFJAIOqbF/ALibqNPqquHuSZa6iVjL4qFy/T6hcyEIMDihQZyhSjSQ6RDQ==" length="18546655"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.28</title>
       <sparkle:version>0.1.28</sparkle:version>
       <pubDate>Thu, 06 Aug 2026 08:25:30 +0000</pubDate>
