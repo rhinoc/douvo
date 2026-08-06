@@ -14,6 +14,10 @@ fi
 added_entries=()
 changed_entries=()
 fixed_entries=()
+# Bash 3.2 treats empty array expansion as unbound when nounset is enabled.
+added_count=0
+changed_count=0
+fixed_count=0
 
 while IFS= read -r changeset; do
   first_line="$(sed -n '1p' "$changeset")"
@@ -54,12 +58,15 @@ while IFS= read -r changeset; do
   case "$type_line" in
     "type: added")
       added_entries+=("$summary")
+      ((added_count += 1))
       ;;
     "type: changed")
       changed_entries+=("$summary")
+      ((changed_count += 1))
       ;;
     "type: fixed")
       fixed_entries+=("$summary")
+      ((fixed_count += 1))
       ;;
     *)
       echo "Unsupported changeset type in $changeset: $type_line" >&2
@@ -84,7 +91,13 @@ render_section() {
 }
 
 {
-  render_section "Added" "${added_entries[@]}"
-  render_section "Changed" "${changed_entries[@]}"
-  render_section "Fixed" "${fixed_entries[@]}"
+  if (( added_count > 0 )); then
+    render_section "Added" "${added_entries[@]}"
+  fi
+  if (( changed_count > 0 )); then
+    render_section "Changed" "${changed_entries[@]}"
+  fi
+  if (( fixed_count > 0 )); then
+    render_section "Fixed" "${fixed_entries[@]}"
+  fi
 } >"$OUTPUT_PATH"

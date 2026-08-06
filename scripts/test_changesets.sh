@@ -16,7 +16,7 @@ printf '# Changesets\n' >"$CHANGESET_DIR/README.md"
 printf '%s\n' '---' 'type: fixed' '---' '' 'Fix a broken download.' >"$CHANGESET_DIR/fix-download.md"
 printf '%s\n' '---' 'type: added' '---' '' 'Add release notes.' >"$CHANGESET_DIR/add-release-notes.md"
 
-CHANGESET_DIR="$CHANGESET_DIR" "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH"
+CHANGESET_DIR="$CHANGESET_DIR" /bin/bash "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH"
 expected="$TEST_ROOT/expected.md"
 printf '%s\n' \
   '## Added' \
@@ -34,25 +34,25 @@ test -f "$CHANGESET_DIR/README.md"
 test ! -e "$CHANGESET_DIR/fix-download.md"
 test ! -e "$CHANGESET_DIR/add-release-notes.md"
 
-CHANGESET_DIR="$CHANGESET_DIR" "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH"
+CHANGESET_DIR="$CHANGESET_DIR" /bin/bash "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH"
 test ! -s "$OUTPUT_PATH"
 
 printf '%s\n' '---' 'type: unsupported' '---' '' 'Invalid type.' >"$CHANGESET_DIR/invalid-type.md"
-if CHANGESET_DIR="$CHANGESET_DIR" "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH" 2>/dev/null; then
+if CHANGESET_DIR="$CHANGESET_DIR" /bin/bash "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH" 2>/dev/null; then
   echo "Expected an unsupported changeset type to fail validation." >&2
   exit 1
 fi
 rm -f -- "$CHANGESET_DIR/invalid-type.md"
 
 printf '%s\n' '---' 'type: changed' '---' '' 'First line.' 'Second line.' >"$CHANGESET_DIR/multiple-lines.md"
-if CHANGESET_DIR="$CHANGESET_DIR" "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH" 2>/dev/null; then
+if CHANGESET_DIR="$CHANGESET_DIR" /bin/bash "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH" 2>/dev/null; then
   echo "Expected a multi-line changeset summary to fail validation." >&2
   exit 1
 fi
 rm -f -- "$CHANGESET_DIR/multiple-lines.md"
 
 printf '%s\n' '---' 'type: fixed' '---' '' '修复更新提示。' >"$CHANGESET_DIR/non-english.md"
-if CHANGESET_DIR="$CHANGESET_DIR" "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH" 2>/dev/null; then
+if CHANGESET_DIR="$CHANGESET_DIR" /bin/bash "$ROOT/scripts/render_changesets.sh" "$OUTPUT_PATH" 2>/dev/null; then
   echo "Expected a non-English changeset summary to fail validation." >&2
   exit 1
 fi
