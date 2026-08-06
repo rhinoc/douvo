@@ -35,6 +35,47 @@ enum DoubaoAndroidClientIdentity {
     static let package = "com.bytedance.android.doubaoime"
     static let userAgent = "com.bytedance.android.doubaoime/100316010 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
 
+    static func runtimeDiagnostics() -> String {
+        let bundle = Bundle.main
+        let bundleID = bundle.bundleIdentifier ?? "unknown"
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        return "bundleID=\(bundleID) version=\(version) build=\(build) bundlePath=\(bundle.bundleURL.path)"
+    }
+
+    static func credentialDiagnostics(_ credentials: DoubaoAndroidCredentials) -> String {
+        [
+            valueDiagnostics("deviceID", credentials.deviceId),
+            valueDiagnostics("installID", credentials.installId),
+            valueDiagnostics("cdid", credentials.cdid),
+            valueDiagnostics("openudid", credentials.openudid),
+            valueDiagnostics("clientudid", credentials.clientudid),
+            valueDiagnostics("appKey", credentials.token)
+        ].joined(separator: " ")
+    }
+
+    static func frontierQueryDiagnostics(credentials: DoubaoAndroidCredentials) -> String {
+        let query = Dictionary(
+            uniqueKeysWithValues: frontierQueryItems(credentials: credentials).map { ($0.name, $0.value ?? "") }
+        )
+        let requiredFields = ["uid", "aid", "app_name", "did", "iid", "install_id", "token"]
+        let missingFields = requiredFields.filter { query[$0]?.isEmpty ?? true }
+        return [
+            "queryFields=\(query.keys.sorted().joined(separator: ","))",
+            "missingRequired=\(missingFields.isEmpty ? "none" : missingFields.joined(separator: ","))",
+            "uid=\(query["uid"] ?? "<missing>")",
+            "aid=\(query["aid"] ?? "<missing>")",
+            valueDiagnostics("did", credentials.deviceId),
+            valueDiagnostics("iid", credentials.installId),
+            "transportTokenFields=device_id,aid",
+            "transportTokenLength=\((query["token"] ?? "").utf8.count)"
+        ].joined(separator: " ")
+    }
+
+    static func valueDiagnostics(_ name: String, _ value: String) -> String {
+        "\(name)Set=\(!value.isEmpty) \(name)Length=\(value.utf8.count)"
+    }
+
     static func authenticationToken(deviceID: String) -> String {
         let object = ["device_id": deviceID, "aid": aid]
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
@@ -102,16 +143,29 @@ enum DoubaoAndroidCredentialStore {
 
     static func ensureCredentials() async throws -> DoubaoAndroidCredentials {
         if let cached = load() {
-            AppLog.info("Android ASR credentials loaded deviceIdSet=\(!cached.deviceId.isEmpty)")
+            AppLog.info(
+                "Android ASR credentials loaded \(Identity.credentialDiagnostics(cached))"
+            )
             return cached
         }
 
         AppLog.info("Android ASR credentials missing; registering device")
         var credentials = DoubaoAndroidCredentials.generated()
+        AppLog.info(
+            "Android ASR registration identity \(Identity.credentialDiagnostics(credentials))"
+        )
         try await registerDevice(&credentials)
+        AppLog.info(
+            "Android ASR device registration completed \(Identity.credentialDiagnostics(credentials))"
+        )
         try await fetchASRToken(&credentials)
+        AppLog.info(
+            "Android ASR token fetch completed \(Identity.credentialDiagnostics(credentials))"
+        )
         try save(credentials)
-        AppLog.info("Android ASR credentials saved deviceIdSet=\(!credentials.deviceId.isEmpty)")
+        AppLog.info(
+            "Android ASR credentials saved \(Identity.credentialDiagnostics(credentials))"
+        )
         return credentials
     }
 

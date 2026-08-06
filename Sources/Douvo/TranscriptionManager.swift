@@ -177,8 +177,8 @@ final class TranscriptionManager {
             handleASRFinish(provider: provider)
         case .asrError(let provider, let error):
             handleASRError(error, provider: provider)
-        case .asrAuthError(let provider):
-            handleASRAuthError(provider: provider)
+        case .asrAuthError(let provider, let error):
+            handleASRAuthError(provider: provider, error: error)
         case .audioStartFailed(let error):
             handleAudioStartFailure(error, sessionID: sessionID)
         }
@@ -381,17 +381,23 @@ final class TranscriptionManager {
         }
     }
 
-    private func handleASRAuthError(provider: String) {
-        AppLog.error("ASR auth error provider=\(provider)")
-        let willContinue = canContinueAfterASRProviderFailure(provider: provider)
-        let error = TranscriptionSessionError(
+    private func handleASRAuthError(provider: String, error: TranscriptionSessionError?) {
+        let authError = error ?? TranscriptionSessionError(
             domain: "Douvo.ASRAuth",
             code: 1,
             localizedDescription: "ASR authentication failed"
         )
-        writeASRErrorDiagnostic(provider: provider, error: error, reason: "asr_auth_error", willContinue: willContinue)
-        if shouldContinueAfterASRProviderFailure(provider: provider, error: error) {
+        AppLog.error(
+            "ASR auth error provider=\(provider) domain=\(authError.domain) code=\(authError.code) message=\(authError.localizedDescription) metadata=\(authError.metadata)"
+        )
+        let willContinue = canContinueAfterASRProviderFailure(provider: provider)
+        writeASRErrorDiagnostic(provider: provider, error: authError, reason: "asr_auth_error", willContinue: willContinue)
+        if shouldContinueAfterASRProviderFailure(provider: provider, error: authError) {
             clearASRAuthState(provider: provider)
+            if provider == "web" {
+                AppLog.info("Web ASR auth expired; opening login while continuing with remaining provider")
+                onAuthExpired?()
+            }
             return
         }
         handleAuthFailure(provider: provider)

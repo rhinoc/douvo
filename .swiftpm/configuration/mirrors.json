@@ -1,0 +1,9 @@
+{
+  "object" : [
+    {
+      "mirror" : "https://github.com/mochiexists/swift-huggingface",
+      "original" : "https://github.com/huggingface/swift-huggingface.git"
+    }
+  ],
+  "version" : 1
+}

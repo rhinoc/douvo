@@ -16,6 +16,32 @@ final class AndroidASRResultParserTests: XCTestCase {
         )
     }
 
+    func testAndroidCredentialDiagnosticsDoNotExposeCredentialValues() {
+        let credentials = DoubaoAndroidCredentials(
+            deviceId: "device-secret",
+            installId: "install-secret",
+            cdid: "cdid-secret",
+            openudid: "openudid-secret",
+            clientudid: "clientudid-secret",
+            token: "app-key-secret"
+        )
+
+        let diagnostics = DoubaoAndroidClientIdentity.credentialDiagnostics(credentials)
+            + " "
+            + DoubaoAndroidClientIdentity.frontierQueryDiagnostics(credentials: credentials)
+
+        XCTAssertFalse(diagnostics.contains("device-secret"))
+        XCTAssertFalse(diagnostics.contains("install-secret"))
+        XCTAssertFalse(diagnostics.contains("cdid-secret"))
+        XCTAssertFalse(diagnostics.contains("openudid-secret"))
+        XCTAssertFalse(diagnostics.contains("clientudid-secret"))
+        XCTAssertFalse(diagnostics.contains("app-key-secret"))
+        XCTAssertFalse(diagnostics.contains("Fingerprint"))
+        XCTAssertTrue(diagnostics.contains("deviceIDSet=true"))
+        XCTAssertTrue(diagnostics.contains("appKeySet=true"))
+        XCTAssertTrue(diagnostics.contains("missingRequired=none"))
+    }
+
     func testFrontierQueryIncludesCurrentClientIdentity() {
         let credentials = DoubaoAndroidCredentials(
             deviceId: "device-123",
@@ -93,6 +119,23 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(statusCode, AndroidASRErrorClassifier.concurrencyQuotaStatusCode)
         XCTAssertEqual(message, "concurrency quota exceeded: key:example,value:5")
         XCTAssertEqual(metadata["android_response_status_code"], "40200011")
+    }
+
+    func testSessionFailurePreservesAuthenticationMessageAndStatusCode() {
+        var data = Data()
+        appendTestProtoString("SessionFailed", fieldNumber: 4, to: &data)
+        appendTestProtoVarint(40000000, fieldNumber: 5, to: &data)
+        appendTestProtoString("authentication failed: token expired", fieldNumber: 6, to: &data)
+
+        let response = AndroidASRProtobuf.parseResponse(data)
+
+        guard case .error(let message, let statusCode, let metadata) = response.type else {
+            return XCTFail("Expected authentication SessionFailed response")
+        }
+        XCTAssertEqual(message, "authentication failed: token expired")
+        XCTAssertEqual(statusCode, 40000000)
+        XCTAssertEqual(metadata["android_response_message_type"], "SessionFailed")
+        XCTAssertEqual(metadata["android_response_status_code"], "40000000")
     }
 
     func testSessionConfigEnablesAndroidCorrectionPasses() throws {

@@ -44,7 +44,7 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
     var onResult: ((ASRRecognitionResult) -> Void)?
     var onFinish: (() -> Void)?
     var onError: ((Error?) -> Void)?
-    var onAuthError: (() -> Void)?
+    var onAuthError: ((Error) -> Void)?
 
     func connect(params: DoubaoASRParams) {
         AppLog.info("ASR connect begin cookieCount=\(params.cookies.count) hasAuthCookies=\(params.hasRequiredAuthCookies) deviceIdSet=\(!params.deviceId.isEmpty) webIdSet=\(!params.webId.isEmpty)")
@@ -383,7 +383,8 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
 
         let code = json["code"] as? Int ?? 0
         let event = json["event"] as? String ?? ""
-        let message = (json["message"] as? String ?? "").lowercased()
+        let rawMessage = json["message"] as? String ?? ""
+        let message = rawMessage.lowercased()
         lock.lock()
         let receivedCount = receivedMessageCount
         if event == "result" {
@@ -398,11 +399,23 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
         }
 
         if code != 0 {
-            if code == 709599054 || message.contains("auth") || message.contains("login") || message.contains("session") || message.contains("cookie") {
+            if Self.isAuthLikeError(code: code, message: message) {
                 markFailed()
-                AppLog.error("ASR auth-like error code=\(code) message=\(message)")
+                AppLog.error("ASR auth-like error code=\(code) message=\(rawMessage)")
                 logSummary(reason: "auth_error")
-                onAuthError?()
+                let authError = NSError(
+                    domain: "Douvo.WebASR",
+                    code: code,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: rawMessage.isEmpty ? "ASR authentication failed" : rawMessage,
+                        TranscriptionErrorMetadata.userInfoKey: diagnosticMetadata(
+                            stage: "auth_error",
+                            event: event,
+                            code: code
+                        )
+                    ]
+                )
+                onAuthError?(authError)
                 disconnect()
                 return
             }
@@ -434,6 +447,10 @@ final class DoubaoASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked S
             disconnect()
             onFinish?()
         }
+    }
+
+    static func isAuthLikeError(code: Int, message: String) -> Bool {
+        code == 709599054 || code == 710022013 || message.contains("auth") || message.contains("login") || message.contains("session") || message.contains("cookie")
     }
 
     private func receiveFailureContext(for error: Error) -> (shouldSuppress: Bool, state: State, wasOpen: Bool) {

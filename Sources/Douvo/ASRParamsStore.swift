@@ -2,13 +2,20 @@ import Foundation
 
 struct DoubaoASRParams: Codable {
     let cookies: [String: String]
+    let cookieExpiresAt: [String: Date]
     let deviceId: String
     let webId: String
 
     var hasRequiredAuthCookies: Bool {
+        hasRequiredAuthCookies(at: Date())
+    }
+
+    func hasRequiredAuthCookies(at date: Date) -> Bool {
         Self.authCookieNames.contains { name in
             guard let value = cookies[name] else { return false }
-            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            guard let expiresAt = cookieExpiresAt[name] else { return true }
+            return expiresAt > date
         }
     }
 
@@ -29,12 +36,36 @@ struct DoubaoASRParams: Codable {
 
     init(httpCookies: [HTTPCookie], deviceId: String, webId: String) {
         var values: [String: String] = [:]
+        var expirationDates: [String: Date] = [:]
         for cookie in httpCookies {
             values[cookie.name] = cookie.value
+            if let expiresDate = cookie.expiresDate {
+                expirationDates[cookie.name] = expiresDate
+            } else {
+                expirationDates.removeValue(forKey: cookie.name)
+            }
         }
         self.cookies = values
+        self.cookieExpiresAt = expirationDates
         self.deviceId = deviceId
         self.webId = webId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cookies
+        case cookieExpiresAt
+        case deviceId
+        case webId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cookies = try container.decode([String: String].self, forKey: .cookies)
+        // Older files only stored cookie values. Missing expiry metadata means
+        // the server must still be allowed to make the final auth decision.
+        cookieExpiresAt = try container.decodeIfPresent([String: Date].self, forKey: .cookieExpiresAt) ?? [:]
+        deviceId = try container.decode(String.self, forKey: .deviceId)
+        webId = try container.decode(String.self, forKey: .webId)
     }
 }
 

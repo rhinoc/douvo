@@ -183,7 +183,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     var onResult: ((ASRRecognitionResult) -> Void)?
     var onFinish: (() -> Void)?
     var onError: ((Error?) -> Void)?
-    var onAuthError: (() -> Void)?
+    var onAuthError: ((Error) -> Void)?
 
     init(sessionGate: AndroidASRSessionGate = .shared) {
         self.sessionGate = sessionGate
@@ -285,12 +285,15 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         _ socket: URLSessionWebSocketTask,
         credentials: DoubaoAndroidCredentials
     ) {
-        guard let attempt = lock.withLock({ () -> String? in
+        guard let connectionDiagnostics = lock.withLock({ () -> (attempt: String, appKey: String)? in
             guard task === socket, state == .connecting else { return nil }
-            return appKeyFallbackCoordinator.attempt.rawValue
+            return (
+                appKeyFallbackCoordinator.attempt.rawValue,
+                activeAppKey
+            )
         }) else { return }
         AppLog.info(
-            "Android ASR connect begin attempt=\(attempt) deviceIdSet=\(!credentials.deviceId.isEmpty)"
+            "Android ASR connect begin attempt=\(connectionDiagnostics.attempt) \(DoubaoAndroidClientIdentity.runtimeDiagnostics()) \(DoubaoAndroidClientIdentity.credentialDiagnostics(credentials)) \(DoubaoAndroidClientIdentity.frontierQueryDiagnostics(credentials: credentials)) \(DoubaoAndroidClientIdentity.valueDiagnostics("controlAppKey", connectionDiagnostics.appKey))"
         )
         socket.resume()
         receive(socket: socket)
@@ -680,20 +683,23 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     }
 
     private func sendStartTask() {
-        guard let (task, appKey) = lock.withLock({ () -> (URLSessionWebSocketTask, String)? in
-            guard state == .connecting, let task else { return nil }
-            return (task, activeAppKey)
+        guard let requestContext = lock.withLock({ () -> (task: URLSessionWebSocketTask, appKey: String, requestID: String, credentials: DoubaoAndroidCredentials)? in
+            guard state == .connecting, let task, let credentials else { return nil }
+            return (task, activeAppKey, requestID, credentials)
         }) else { return }
+        AppLog.info(
+            "Android ASR control request method=StartTask requestID=\(requestContext.requestID) \(DoubaoAndroidClientIdentity.valueDiagnostics("controlAppKey", requestContext.appKey))"
+        )
         let payload = AndroidASRProtobuf.request(
-            appKey: appKey,
+            appKey: requestContext.appKey,
             methodName: "StartTask",
             payload: "",
             audioData: Data(),
-            requestID: requestID,
+            requestID: requestContext.requestID,
             frameState: 0
         )
-        task.send(.data(payload)) { [weak self] error in
-            guard let self, self.isCurrentActiveTask(task) else { return }
+        requestContext.task.send(.data(payload)) { [weak self] error in
+            guard let self, self.isCurrentActiveTask(requestContext.task) else { return }
             if let error {
                 AppLog.error("Android ASR StartTask send failed error=\(error.localizedDescription)")
                 self.markFailed(error)
@@ -702,28 +708,31 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     }
 
     private func sendStartSession() {
-        guard let (task, credentials, appKey) = lock.withLock({
-            () -> (URLSessionWebSocketTask, DoubaoAndroidCredentials, String)? in
+        guard let requestContext = lock.withLock({
+            () -> (task: URLSessionWebSocketTask, credentials: DoubaoAndroidCredentials, appKey: String, requestID: String)? in
             guard state == .connecting, let task, let credentials else { return nil }
-            return (task, credentials, activeAppKey)
+            return (task, credentials, activeAppKey, requestID)
         }) else { return }
         let config = AndroidASRSessionConfig.make(
-            deviceID: credentials.deviceId,
+            deviceID: requestContext.credentials.deviceId,
             context: sessionContext,
             usePersonalLexicon: usePersonalLexicon
         )
         let payloadData = (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
         let payload = String(data: payloadData, encoding: .utf8) ?? "{}"
+        AppLog.info(
+            "Android ASR control request method=StartSession requestID=\(requestContext.requestID) \(DoubaoAndroidClientIdentity.valueDiagnostics("controlAppKey", requestContext.appKey)) sessionConfigKeys=\(config.keys.sorted().joined(separator: ",")) sessionPayloadBytes=\(payloadData.count)"
+        )
         let message = AndroidASRProtobuf.request(
-            appKey: appKey,
+            appKey: requestContext.appKey,
             methodName: "StartSession",
             payload: payload,
             audioData: Data(),
-            requestID: requestID,
+            requestID: requestContext.requestID,
             frameState: 0
         )
-        task.send(.data(message)) { [weak self] error in
-            guard let self, self.isCurrentActiveTask(task) else { return }
+        requestContext.task.send(.data(message)) { [weak self] error in
+            guard let self, self.isCurrentActiveTask(requestContext.task) else { return }
             if let error {
                 AppLog.error("Android ASR StartSession send failed error=\(error.localizedDescription)")
                 self.markFailed(error)
@@ -985,7 +994,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 return
             }
             if message.localizedCaseInsensitiveContains("auth") || message.localizedCaseInsensitiveContains("token") {
-                onAuthError?()
+                onAuthError?(reportedServerError)
             } else {
                 onError?(reportedServerError)
             }

@@ -58,7 +58,7 @@ enum TranscriptionSessionEvent: Sendable {
     case asrResult(ASRRecognitionResult)
     case asrFinished(String)
     case asrError(String, TranscriptionSessionError?)
-    case asrAuthError(String)
+    case asrAuthError(String, TranscriptionSessionError?)
 }
 
 actor TranscriptionSession {
@@ -96,8 +96,9 @@ actor TranscriptionSession {
             let info = TranscriptionSessionError(error)
             Task { await self?.emit(.asrError("web", info)) }
         }
-        webASRClient?.onAuthError = { [weak self] in
-            Task { await self?.emit(.asrAuthError("web")) }
+        webASRClient?.onAuthError = { [weak self] error in
+            let info = TranscriptionSessionError(error)
+            Task { await self?.emit(.asrAuthError("web", info)) }
         }
 
         androidASRClient?.onOpen = { [weak self] in
@@ -111,8 +112,9 @@ actor TranscriptionSession {
             let info = TranscriptionSessionError(error)
             Task { await self?.emit(.asrError("android", info)) }
         }
-        androidASRClient?.onAuthError = { [weak self] in
-            Task { await self?.emit(.asrAuthError("android")) }
+        androidASRClient?.onAuthError = { [weak self] error in
+            let info = TranscriptionSessionError(error)
+            Task { await self?.emit(.asrAuthError("android", info)) }
         }
 
         audioCapture.onWebPCMData = { [weak webASRClient] data in

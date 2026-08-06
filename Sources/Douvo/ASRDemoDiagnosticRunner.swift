@@ -7,6 +7,7 @@ struct ASRDemoDiagnosticResult: Sendable {
     let resultCharactersByProvider: [String: Int]
     let transcriptsByProvider: [String: String]
     let errorsByProvider: [String: String]
+    let errorDetailsByProvider: [String: TranscriptionSessionError]
     let audioPath: String
     let durationMilliseconds: Int
 
@@ -165,10 +166,10 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             client.onResult = { [weak self] result in self?.recordResult(result) }
             client.onFinish = { [weak self] in self?.markFinished("web") }
             client.onError = { [weak self] error in self?.markError(provider: "web", error: TranscriptionSessionError(error)) }
-            client.onAuthError = { [weak self] in
+            client.onAuthError = { [weak self] error in
                 self?.markError(
                     provider: "web",
-                    error: TranscriptionSessionError(domain: "Douvo.ASRAuth", code: 1, localizedDescription: "Web recognition authentication failed")
+                    error: TranscriptionSessionError(error)
                 )
             }
             webClient = client
@@ -180,10 +181,10 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             client.onResult = { [weak self] result in self?.recordResult(result) }
             client.onFinish = { [weak self] in self?.markFinished("android") }
             client.onError = { [weak self] error in self?.markError(provider: "android", error: TranscriptionSessionError(error)) }
-            client.onAuthError = { [weak self] in
+            client.onAuthError = { [weak self] error in
                 self?.markError(
                     provider: "android",
-                    error: TranscriptionSessionError(domain: "Douvo.ASRAuth", code: 1, localizedDescription: "Android recognition authentication failed")
+                    error: TranscriptionSessionError(error)
                 )
             }
             androidClient = client
@@ -330,7 +331,9 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         errorsByProvider[provider] = "\(error.domain)(\(error.code)): \(error.localizedDescription)"
         errorDetailsByProvider[provider] = error
         lock.unlock()
-        AppLog.error("ASR demo diagnostic error provider=\(provider) error=\(error.localizedDescription)")
+        AppLog.error(
+            "ASR demo diagnostic error provider=\(provider) domain=\(error.domain) code=\(error.code) message=\(error.localizedDescription) metadata=\(error.metadata)"
+        )
     }
 
     private func markUnopenedProvidersTimedOut() {
@@ -357,6 +360,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             $0.trimmingCharacters(in: .whitespacesAndNewlines).count
         }
         let errors = errorsByProvider
+        let errorDetails = errorDetailsByProvider
         lock.unlock()
 
         return ASRDemoDiagnosticResult(
@@ -366,6 +370,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             resultCharactersByProvider: resultCharacters,
             transcriptsByProvider: latestTextByProvider,
             errorsByProvider: errors,
+            errorDetailsByProvider: errorDetails,
             audioPath: audioURL.path,
             durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1000)
         )
@@ -381,6 +386,18 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             "finished_providers": result.finishedProviders,
             "result_chars_by_provider": result.resultCharactersByProvider,
             "errors_by_provider": result.errorsByProvider,
+            "error_details_by_provider": result.errorDetailsByProvider.reduce(into: [String: Any]()) { details, entry in
+                let (provider, error) = entry
+                var detail: [String: Any] = [
+                    "domain": error.domain,
+                    "code": error.code,
+                    "message": error.localizedDescription
+                ]
+                if !error.metadata.isEmpty {
+                    detail["metadata"] = error.metadata
+                }
+                details[provider] = detail
+            },
             "audio_path": result.audioPath,
             "duration_ms": result.durationMilliseconds
         ]
