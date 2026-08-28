@@ -1,0 +1,34 @@
+{
+  "name": "s1-mini-english-cleanup-check",
+  "model": "s1Mini",
+  "runs": 1,
+  "outputDirectory": "/tmp/douvo-prompt-lab-s1-mini",
+  "punctuationStyle": "complete",
+  "reasoningMode": "disabled",
+  "inputs": [
+    {
+      "id": "self-correction",
+      "text": "so um i need to like send the the report by uh friday no wait make that thursday",
+      "mustContain": [
+        "send the report",
+        "Thursday"
+      ],
+      "mustNotContain": [
+        "the the",
+        "Friday"
+      ],
+      "shouldChange": true
+    },
+    {
+      "id": "spoken-email",
+      "text": "send it to support at superwhisper dot com",
+      "expected": "Send it to support@superwhisper.com."
+    },
+    {
+      "id": "filler-only",
+      "text": "um",
+      "expected": "",
+      "shouldChange": true
+    }
+  ]
+}

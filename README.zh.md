@@ -193,6 +193,7 @@ open /Applications/Douvo.app
 打开 **Settings... -> 功能** 配置标点、词库和依赖 AI 的功能。打开 **Settings... -> AI** 配置 AI 后处理：
 
 - 选择 **Local** 下载内置 MLX 模型，或添加本地 MLX 模型文件夹。
+- 内置 **S1-mini by Superwhisper 4bit**（`s1Mini`）是一个仅支持英文、335 MB 的 ASR 清理模型，适合普通英文口述整理。中文、中英混合、翻译或选区编辑请使用 Qwen3.5 模型。
 - 选择 **Remote** 添加 provider、base URL、model name 和 API key。
 - 添加用户词库，覆盖项目术语、文件路径、产品名称和常见 ASR 错词。
 - 选择 Natural、Concise、Structured 或 Custom 等输出风格，并调整风格强度。
@@ -230,10 +231,10 @@ open /Applications/Douvo.app
   - 带 pre-roll、onset 和 hangover 平滑的 VAD 设计。
   - 后处理工作流思路，包括结构化输出和关闭 reasoning。
   - 语音输入应用中的模型、历史记录和诊断组织方式。
-- [kopiro/siriwave](https://github.com/kopiro/siriwave)
-  - 录音悬浮窗中 iOS 9 Siri 风格波形的数学和视觉参考。
+- [WillSuo-Github/Siri27SiriAnimation](https://github.com/WillSuo-Github/Siri27SiriAnimation)
+  - 录音悬浮窗中 Metal shader 的结构和彩色频谱波形效果。
 
-本仓库没有 vendoring 这些项目。它们的代码和 license 仍归各自作者所有。
+Douvo 包含一段基于 Siri27SiriAnimation 波形 shader 的适配代码，遵循其 MIT License。署名和完整 license 文本见 [docs/third-party-licenses/Siri27SiriAnimation-MIT.txt](./docs/third-party-licenses/Siri27SiriAnimation-MIT.txt)。原始代码和 license 仍归原作者所有。
 
 ## Contributing
 

@@ -40,6 +40,7 @@ let package = Package(
                 .process("Resources/MenuBarIcon.pdf"),
                 .process("Resources/MenuBarIcon.svg"),
                 .process("Resources/ASRDemo.aiff"),
+                .process("SiriRibbonShaders.metal"),
                 .copy("Resources/mlx-swift_Cmlx.bundle")
             ],
             linkerSettings: [
