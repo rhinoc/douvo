@@ -71,3 +71,15 @@ enum StatusItemVisibilityAlertContent {
         return "\(baseText)\n\(shortcutText)"
     }
 }
+
+enum StatusItemVisibilityAlertStore {
+    private static let suppressAlertKey = "statusItemVisibilityAlert.suppress"
+
+    static func shouldShowAlert(defaults: UserDefaults = .standard) -> Bool {
+        !defaults.bool(forKey: suppressAlertKey)
+    }
+
+    static func suppressAlert(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: suppressAlertKey)
+    }
+}

@@ -32,9 +32,25 @@ enum OverlayAppearanceStore {
     enum WaveformStyle: String, CaseIterable, Identifiable {
         case capsules
         case dots
-        case ribbon
+        case siri
+        case gpt
 
         var id: String { rawValue }
+
+        init?(rawValue: String) {
+            switch rawValue {
+            case "ribbon", "siri":
+                self = .siri
+            case "capsules":
+                self = .capsules
+            case "dots":
+                self = .dots
+            case "gpt":
+                self = .gpt
+            default:
+                return nil
+            }
+        }
 
         var displayName: String {
             switch self {
@@ -42,8 +58,10 @@ enum OverlayAppearanceStore {
                 L10n.text(en: "Bars", zh: "条形")
             case .dots:
                 L10n.text(en: "Dots", zh: "点阵")
-            case .ribbon:
-                L10n.text(en: "Ribbon", zh: "丝带")
+            case .siri:
+                "Siri"
+            case .gpt:
+                "GPT"
             }
         }
     }

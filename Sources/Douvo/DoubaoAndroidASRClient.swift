@@ -16,6 +16,7 @@ struct AndroidASRResponse {
 
 enum AndroidASRErrorClassifier {
     static let concurrencyQuotaStatusCode = 40_200_011
+    static let sessionAuthMissingIdentityStatusCode = 40_200_001
 
     static func isConcurrencyQuotaExceeded(_ message: String) -> Bool {
         isConcurrencyQuotaExceeded(statusCode: 0, message: message)
@@ -26,6 +27,13 @@ enum AndroidASRErrorClassifier {
         let normalized = message.lowercased()
         return normalized.contains("concurrency quota exceeded")
             || normalized.contains("exceedconcurrentquota")
+    }
+
+    static func isAppKeyRotationCandidate(statusCode: Int, message: String) -> Bool {
+        if isConcurrencyQuotaExceeded(statusCode: statusCode, message: message) {
+            return true
+        }
+        return statusCode == sessionAuthMissingIdentityStatusCode
     }
 }
 
@@ -116,6 +124,37 @@ struct AndroidASRFinishCoordinator {
     }
 }
 
+enum AndroidASRShutdownAction: Equatable {
+    case none
+    case finishSession
+    case disconnect
+}
+
+struct AndroidASRShutdownCoordinator {
+    private(set) var isAwaitingSessionFinish = false
+
+    mutating func requestGracefulShutdown(sessionIsActive: Bool) -> AndroidASRShutdownAction {
+        guard !isAwaitingSessionFinish else { return .none }
+        guard sessionIsActive else { return .disconnect }
+        isAwaitingSessionFinish = true
+        return .finishSession
+    }
+
+    mutating func sessionDidFinish() -> AndroidASRShutdownAction {
+        guard isAwaitingSessionFinish else { return .none }
+        isAwaitingSessionFinish = false
+        return .disconnect
+    }
+
+    mutating func gracefulShutdownDidTimeOut() -> AndroidASRShutdownAction {
+        sessionDidFinish()
+    }
+
+    mutating func didDisconnect() {
+        isAwaitingSessionFinish = false
+    }
+}
+
 final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private typealias Identity = DoubaoAndroidClientIdentity
 
@@ -139,6 +178,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private static let frameDurationMillis: Int64 = 20
     private static let closeAcknowledgementTimeout: Duration = .seconds(1)
     private static let forcedTransportShutdownTimeout: Duration = .seconds(1)
+    private static let gracefulShutdownTimeout: Duration = .seconds(12)
     private static let unexpectedCloseErrorCode = 7
 
     private let sessionGate: AndroidASRSessionGate
@@ -148,10 +188,12 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
     private var sessionLease: AndroidASRSessionGate.Lease?
     private var socketCloseCoordinator = AndroidASRSocketCloseCoordinator()
     private var appKeyFallbackCoordinator = AndroidASRAppKeyFallbackCoordinator()
+    private var shutdownCoordinator = AndroidASRShutdownCoordinator()
     private var activeAppKey = ""
     private var deferredFallbackFailure: Error?
     private var closeAcknowledgementTimeoutTask: Task<Void, Never>?
     private var forcedTransportShutdownTimeoutTask: Task<Void, Never>?
+    private var gracefulShutdownTimeoutTask: Task<Void, Never>?
     private var state: State = .idle
     private var credentials: DoubaoAndroidCredentials?
     private var sessionContext = ""
@@ -304,10 +346,13 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         requestID = UUID().uuidString
         startedAtMillis = Self.currentTimeMillis()
         socketCloseCoordinator = AndroidASRSocketCloseCoordinator()
+        shutdownCoordinator = AndroidASRShutdownCoordinator()
         closeAcknowledgementTimeoutTask?.cancel()
         closeAcknowledgementTimeoutTask = nil
         forcedTransportShutdownTimeoutTask?.cancel()
         forcedTransportShutdownTimeoutTask = nil
+        gracefulShutdownTimeoutTask?.cancel()
+        gracefulShutdownTimeoutTask = nil
         isSendingAudio = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
@@ -378,6 +423,25 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         }
     }
 
+    func finishSessionThenDisconnect() {
+        lock.lock()
+        let currentState = state
+        let sessionIsActive = currentState == .connecting || currentState == .open || currentState == .finishing
+        let action = shutdownCoordinator.requestGracefulShutdown(sessionIsActive: sessionIsActive)
+        lock.unlock()
+
+        switch action {
+        case .none:
+            break
+        case .finishSession:
+            AppLog.info("Android ASR graceful shutdown requested state=\(currentState.rawValue)")
+            scheduleGracefulShutdownTimeout()
+            finishSending()
+        case .disconnect:
+            disconnect()
+        }
+    }
+
     func disconnect() {
         disconnect(cancelFallback: true, preservePendingRequest: false)
     }
@@ -406,16 +470,43 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
         isSendingAudio = false
         finishFramesSent = false
         finishCoordinator = AndroidASRFinishCoordinator()
+        shutdownCoordinator.didDisconnect()
+        let gracefulTimeoutTask = gracefulShutdownTimeoutTask
+        gracefulShutdownTimeoutTask = nil
         let connection = currentConnectionLocked()
         let socketIsActive = connection.map { $0.socket.state != .completed } ?? false
         let closeAction = socketCloseCoordinator.requestClose(hasTask: socketIsActive)
         let lease = sessionLease
         lock.unlock()
 
+        gracefulTimeoutTask?.cancel()
+
         if let lease {
             sessionGate.beginClosing(lease)
         }
         performSocketCloseAction(closeAction, connection: connection)
+    }
+
+    private func scheduleGracefulShutdownTimeout() {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.gracefulShutdownTimeout)
+            guard !Task.isCancelled else { return }
+            self?.handleGracefulShutdownTimeout()
+        }
+
+        lock.lock()
+        gracefulShutdownTimeoutTask?.cancel()
+        gracefulShutdownTimeoutTask = timeoutTask
+        lock.unlock()
+    }
+
+    private func handleGracefulShutdownTimeout() {
+        lock.lock()
+        let action = shutdownCoordinator.gracefulShutdownDidTimeOut()
+        lock.unlock()
+        guard action == .disconnect else { return }
+        AppLog.info("Android ASR graceful shutdown timed out; disconnecting")
+        disconnect()
     }
 
     func waitUntilDisconnected() async {
@@ -613,7 +704,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
             return
         }
 
-        AppLog.info("Android ASR concurrency fallback starting after acknowledged Close")
+        AppLog.info("Android ASR app key fallback starting after acknowledged Close")
         startSocket(socket, credentials: credentials)
     }
 
@@ -989,7 +1080,7 @@ final class DoubaoAndroidASRClient: NSObject, URLSessionWebSocketDelegate, @unch
                 lock.withLock {
                     deferredFallbackFailure = reportedServerError
                 }
-                AppLog.info("Android ASR concurrency quota exceeded; closing before one fallback attempt")
+                AppLog.info("Android ASR app key rotation candidate; closing before one fallback attempt")
                 disconnectForFallback()
                 return
             }

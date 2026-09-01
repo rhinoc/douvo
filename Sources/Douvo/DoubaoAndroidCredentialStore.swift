@@ -8,6 +8,21 @@ struct DoubaoAndroidCredentials: Codable, Sendable {
     var openudid: String
     var clientudid: String
     var token: String
+    init(
+        deviceId: String,
+        installId: String,
+        cdid: String,
+        openudid: String,
+        clientudid: String,
+        token: String
+    ) {
+        self.deviceId = deviceId
+        self.installId = installId
+        self.cdid = cdid
+        self.openudid = openudid
+        self.clientudid = clientudid
+        self.token = token
+    }
 
     var isComplete: Bool {
         !deviceId.isEmpty && !token.isEmpty
@@ -58,17 +73,14 @@ enum DoubaoAndroidClientIdentity {
         let query = Dictionary(
             uniqueKeysWithValues: frontierQueryItems(credentials: credentials).map { ($0.name, $0.value ?? "") }
         )
-        let requiredFields = ["uid", "aid", "app_name", "did", "iid", "install_id", "token"]
+        let requiredFields = ["aid", "device_id"]
         let missingFields = requiredFields.filter { query[$0]?.isEmpty ?? true }
         return [
             "queryFields=\(query.keys.sorted().joined(separator: ","))",
             "missingRequired=\(missingFields.isEmpty ? "none" : missingFields.joined(separator: ","))",
-            "uid=\(query["uid"] ?? "<missing>")",
             "aid=\(query["aid"] ?? "<missing>")",
-            valueDiagnostics("did", credentials.deviceId),
-            valueDiagnostics("iid", credentials.installId),
-            "transportTokenFields=device_id,aid",
-            "transportTokenLength=\((query["token"] ?? "").utf8.count)"
+            valueDiagnostics("deviceID", credentials.deviceId),
+            "webSocketAuthFields=aid,device_id"
         ].joined(separator: " ")
     }
 
@@ -76,36 +88,11 @@ enum DoubaoAndroidClientIdentity {
         "\(name)Set=\(!value.isEmpty) \(name)Length=\(value.utf8.count)"
     }
 
-    static func authenticationToken(deviceID: String) -> String {
-        let object = ["device_id": deviceID, "aid": aid]
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
-            preconditionFailure("Static Android authentication token fields must be JSON encodable")
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-
     static func frontierQueryItems(credentials: DoubaoAndroidCredentials) -> [URLQueryItem] {
+        // The gateway currently rejects the expanded mobile query on some devices.
         [
-            URLQueryItem(name: "uid", value: "0"),
             URLQueryItem(name: "aid", value: aid),
-            URLQueryItem(name: "app_name", value: appName),
-            URLQueryItem(name: "did", value: credentials.deviceId),
-            URLQueryItem(name: "iid", value: credentials.installId),
-            URLQueryItem(name: "install_id", value: credentials.installId),
-            URLQueryItem(name: "channel", value: channel),
-            URLQueryItem(name: "os_version", value: "16"),
-            URLQueryItem(name: "version_code", value: versionCode),
-            URLQueryItem(name: "update_version_code", value: versionCode),
-            URLQueryItem(name: "version_name", value: versionName),
-            URLQueryItem(name: "device_platform", value: "android"),
-            URLQueryItem(name: "device_type", value: "Pixel 7 Pro"),
-            URLQueryItem(name: "device_brand", value: "google"),
-            URLQueryItem(name: "ip", value: "0"),
-            URLQueryItem(name: "user_agent", value: ""),
-            URLQueryItem(name: "forwarded", value: ""),
-            URLQueryItem(name: "target", value: ""),
-            URLQueryItem(name: "mobile", value: ""),
-            URLQueryItem(name: "token", value: authenticationToken(deviceID: credentials.deviceId))
+            URLQueryItem(name: "device_id", value: credentials.deviceId)
         ]
     }
 }

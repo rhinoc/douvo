@@ -525,7 +525,7 @@ private struct PromptLabRunner {
 
         appendCheck(
             name: "has_app_output",
-            passed: !evaluatedOutput.isEmpty,
+            passed: !evaluatedOutput.isEmpty || (input.expected?.isEmpty == true && !usedFallback),
             actual: evaluatedOutput
         )
 

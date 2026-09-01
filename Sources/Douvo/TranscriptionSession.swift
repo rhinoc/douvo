@@ -190,7 +190,7 @@ actor TranscriptionSession {
                         _ = audioCapture.stopCapture()
                         return
                     }
-                    androidASRClient.disconnect()
+                    androidASRClient.finishSessionThenDisconnect()
                     await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
                 }
             }
@@ -237,7 +237,7 @@ actor TranscriptionSession {
                         return
                     }
                     webASRClient.disconnect()
-                    androidASRClient.disconnect()
+                    androidASRClient.finishSessionThenDisconnect()
                     await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
                 }
             }
@@ -284,7 +284,7 @@ actor TranscriptionSession {
         audioStartTask = nil
         _ = audioCapture.stopCapture()
         webASRClient?.disconnect()
-        androidASRClient?.disconnect()
+        androidASRClient?.finishSessionThenDisconnect()
     }
 
     private func emit(_ event: TranscriptionSessionEvent) async {

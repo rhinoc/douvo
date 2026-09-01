@@ -325,6 +325,18 @@ private struct OverlayView: View {
                     tint: overlayTint
                 )
 
+            if waveformStyle == .gpt {
+                GPTFluidOrbView(
+                    activity: currentWaveformSamples.globalLevel,
+                    isActive: currentWaveformSamples.hasSound,
+                    animatesMotion: allowsMotionAnimation
+                )
+                    .frame(width: overlaySurfaceWidth, height: overlaySurfaceHeight)
+                    .clipShape(Capsule())
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
             Group {
                 if isLoading, surfacePhase == .loading {
                     spinnerOrPlaceholder(accessibilityLabel: loadingAccessibilityLabel)
@@ -388,15 +400,20 @@ private struct OverlayView: View {
                 .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
             }
 
-            WaveformView(
-                levels: isLoading ? silentWaveformLevels : appState.audioLevels,
-                isActive: appState.recordingState == .recording,
-                style: waveformStyle,
-                barWidth: overlaySize.waveformBarWidth,
-                maxHeight: overlayWaveformHeight,
-                animatesMotion: allowsMotionAnimation
-            )
-                .frame(width: overlayWaveformWidth)
+            if waveformStyle == .gpt {
+                Color.clear
+                    .frame(width: overlayWaveformWidth, height: overlayWaveformHeight)
+            } else {
+                WaveformView(
+                    levels: isLoading ? silentWaveformLevels : appState.audioLevels,
+                    isActive: appState.recordingState == .recording,
+                    style: waveformStyle,
+                    barWidth: overlaySize.waveformBarWidth,
+                    maxHeight: overlayWaveformHeight,
+                    animatesMotion: allowsMotionAnimation
+                )
+                    .frame(width: overlayWaveformWidth)
+            }
 
             if showSubmitControl {
                 Group {
@@ -540,7 +557,7 @@ private struct OverlayView: View {
 
     private var overlayWaveformHeight: CGFloat {
         switch waveformStyle {
-        case .ribbon:
+        case .siri, .gpt:
             max(overlayControlButtonSize, overlaySurfaceHeight - 8)
         case .capsules, .dots:
             overlayControlButtonSize
@@ -549,6 +566,13 @@ private struct OverlayView: View {
 
     private var silentWaveformLevels: [Float] {
         Array(repeating: 0, count: max(appState.audioLevels.count, overlaySize.waveformBarCount))
+    }
+
+    private var currentWaveformSamples: WaveformSamples {
+        WaveformSamples(
+            levels: isLoading ? silentWaveformLevels : appState.audioLevels,
+            isActive: appState.recordingState == .recording
+        )
     }
 
     private var overlaySurfaceWidth: CGFloat {
@@ -1065,15 +1089,14 @@ private struct WaveformView: View {
                 capsuleBars(in: geo.size, samples: samples)
             case .dots:
                 dotMatrix(in: geo.size, samples: samples)
-            case .ribbon:
-                if animatesMotion {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                        let phase = CGFloat(timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 12))
-                        ios9Wave(in: geo.size, samples: samples, phase: phase)
-                    }
-                } else {
-                    ios9Wave(in: geo.size, samples: samples, phase: 0)
-                }
+            case .siri:
+                SiriRibbonView(
+                    activity: samples.globalLevel,
+                    isActive: samples.hasSound,
+                    animatesMotion: animatesMotion
+                )
+            case .gpt:
+                Color.clear
             }
         }
         .frame(height: maxHeight)
@@ -1082,7 +1105,7 @@ private struct WaveformView: View {
     }
 
     private var animatesLevelChanges: Bool {
-        animatesMotion && style != .dots
+        animatesMotion && style == .capsules
     }
 
     private func dynamicSpacing(for width: CGFloat, itemWidth: CGFloat, sampleCount: Int) -> CGFloat {
@@ -1146,36 +1169,6 @@ private struct WaveformView: View {
         return max(0.9, min(2.4, availableSpacing))
     }
 
-    private func ios9Wave(in size: CGSize, samples: WaveformSamples, phase: CGFloat) -> some View {
-        let supportHeight = max(0.7, barWidth * 0.26)
-        return ZStack {
-            Capsule()
-                .fill(ios9SupportLineFill(samples: samples))
-                .frame(height: supportHeight)
-
-            ForEach(Array(IOS9WaveLayer.layers.enumerated()), id: \.offset) { _, layer in
-                ForEach([-1.0, 1.0], id: \.self) { sign in
-                    IOS9WaveFillShape(
-                        samples: samples,
-                        sign: CGFloat(sign),
-                        phase: phase,
-                        layer: layer
-                    )
-                    .fill(layer.color.opacity(samples.hasSound ? layer.opacity : layer.opacity * 0.34))
-                    .blendMode(.plusLighter)
-                }
-            }
-
-            Circle()
-                .fill(Color.white.opacity(samples.hasSound ? 0.22 : 0.10))
-                .frame(width: supportHeight * 2.1, height: supportHeight * 2.1)
-                .blur(radius: 1.0)
-                .blendMode(.screen)
-        }
-        .frame(width: size.width, height: size.height, alignment: .center)
-        .compositingGroup()
-    }
-
     private func dotOpacity(row: Int, rowCount: Int, level: CGFloat) -> Double {
         let midpoint = CGFloat(rowCount - 1) / 2
         let distance = abs(CGFloat(row) - midpoint) / max(midpoint, 1)
@@ -1218,20 +1211,6 @@ private struct WaveformView: View {
         )
     }
 
-    private func ios9SupportLineFill(samples: WaveformSamples) -> LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color.white.opacity(0), location: 0.00),
-                .init(color: Color.white.opacity(samples.hasSound ? 0.08 : 0.04), location: 0.18),
-                .init(color: Color.white.opacity(samples.hasSound ? 0.22 : 0.10), location: 0.50),
-                .init(color: Color.white.opacity(samples.hasSound ? 0.08 : 0.04), location: 0.82),
-                .init(color: Color.white.opacity(0), location: 1.00)
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
     private var waveformEdgeFade: LinearGradient {
         LinearGradient(
             stops: [
@@ -1261,9 +1240,6 @@ private enum WaveformResponse {
     static let dotCoverageOpacityScale = 0.62
     static let maximumDotOpacity = 0.98
 
-    static let inactiveRibbonAmplitude: CGFloat = 0.05
-    static let activeRibbonMinimumAmplitude: CGFloat = 0.12
-    static let ribbonAmplitudeScale: CGFloat = 1.22
     static let globalRecentPeakWeight: CGFloat = 0.70
     static let globalCurrentWeight: CGFloat = 0.28
     static let globalRecentAverageWeight: CGFloat = 0.20
@@ -1296,10 +1272,6 @@ private enum WaveformResponse {
         return minimumHeight + (activeHeight - minimumHeight) * activity
     }
 
-    static func ribbonAmplitude(globalLevel: CGFloat, hasSound: Bool) -> CGFloat {
-        guard hasSound else { return inactiveRibbonAmplitude }
-        return max(activeRibbonMinimumAmplitude, pow(globalLevel, 0.58) * ribbonAmplitudeScale)
-    }
 }
 
 private struct WaveformSamples {
@@ -1359,122 +1331,5 @@ private struct WaveformSamples {
         let lowerValue = levels[lowerIndex]
         let upperValue = levels[upperIndex]
         return lowerValue + (upperValue - lowerValue) * fraction
-    }
-}
-
-private struct IOS9WaveLayer {
-    let color: Color
-    let opacity: Double
-    let amplitude: CGFloat
-    let curves: [IOS9WaveCurve]
-
-    static let layers = [
-        IOS9WaveLayer(
-            color: Color(red: 0.08, green: 0.38, blue: 1.00),
-            opacity: 0.58,
-            amplitude: 1.10,
-            curves: [
-                IOS9WaveCurve(offset: 0.2, width: 3.8, speed: 0.58, verse: -1, finalAmplitude: 0.92)
-            ]
-        ),
-        IOS9WaveLayer(
-            color: Color(red: 1.00, green: 0.22, blue: 0.42),
-            opacity: 0.36,
-            amplitude: 0.88,
-            curves: [
-                IOS9WaveCurve(offset: -1.35, width: 4.35, speed: 0.68, verse: 1, finalAmplitude: 0.74)
-            ]
-        ),
-        IOS9WaveLayer(
-            color: Color(red: 0.18, green: 1.00, blue: 0.66),
-            opacity: 0.44,
-            amplitude: 0.94,
-            curves: [
-                IOS9WaveCurve(offset: 1.15, width: 4.05, speed: 0.52, verse: 1, finalAmplitude: 0.78)
-            ]
-        )
-    ]
-}
-
-private struct IOS9WaveCurve {
-    let offset: CGFloat
-    let width: CGFloat
-    let speed: CGFloat
-    let verse: CGFloat
-    let finalAmplitude: CGFloat
-}
-
-private struct IOS9WaveFillShape: Shape {
-    let samples: WaveformSamples
-    let sign: CGFloat
-    let phase: CGFloat
-    let layer: IOS9WaveLayer
-
-    private let graphX: CGFloat = 9.5
-    private let attenuationFactor: CGFloat = 4
-    private let amplitudeFactor: CGFloat = 1.08
-
-    func path(in rect: CGRect) -> Path {
-        guard rect.width > 0, rect.height > 0 else { return Path() }
-
-        let sampleCount = 56
-        let verticalInset = max(3, rect.height * 0.14)
-        let drawingRect = rect.insetBy(dx: 0, dy: verticalInset)
-        let baseY = drawingRect.midY
-        var path = Path()
-        path.move(to: CGPoint(x: drawingRect.minX, y: baseY))
-
-        for step in 0...sampleCount {
-            let progress = CGFloat(step) / CGFloat(sampleCount)
-            let i = -graphX + progress * graphX * 2
-            let x = drawingRect.minX + drawingRect.width * progress
-            let y = yPosition(i: i, progress: progress, maxHeight: drawingRect.height / 2)
-            path.addLine(to: CGPoint(x: x, y: baseY - sign * y))
-        }
-
-        path.addLine(to: CGPoint(x: drawingRect.maxX, y: baseY))
-        path.closeSubpath()
-        return path
-    }
-
-    private func yPosition(i: CGFloat, progress: CGFloat, maxHeight: CGFloat) -> CGFloat {
-        let visualAmplitude = WaveformResponse.ribbonAmplitude(globalLevel: samples.globalLevel, hasSound: samples.hasSound)
-        let y = amplitudeFactor
-            * maxHeight
-            * visualAmplitude
-            * layer.amplitude
-            * yRelativePosition(i: i)
-            * globalAttenuation((i / graphX) * 0.95)
-            * spatialEnvelope(at: progress)
-        return softLimited(y, limit: maxHeight * 0.72)
-    }
-
-    private func yRelativePosition(i: CGFloat) -> CGFloat {
-        let curves = layer.curves
-        var y: CGFloat = 0
-
-        for curve in curves {
-            let x = i / curve.width - curve.offset
-            let movingPhase = phase * curve.speed * 3.0
-            y += abs(curve.finalAmplitude * sin(Double(curve.verse * x - movingPhase)) * globalAttenuation(x))
-        }
-
-        return y / CGFloat(max(curves.count, 1))
-    }
-
-    private func spatialEnvelope(at progress: CGFloat) -> CGFloat {
-        guard samples.count > 1 else { return 1 }
-        let interpolated = samples.level(at: progress)
-        return max(0.84, 0.98 + interpolated * 0.20)
-    }
-
-    private func softLimited(_ value: CGFloat, limit: CGFloat) -> CGFloat {
-        guard limit > 0 else { return 0 }
-        let normalized = max(0, value / limit)
-        return limit * normalized / pow(1 + pow(normalized, 2.2), 1 / 2.2)
-    }
-
-    private func globalAttenuation(_ x: CGFloat) -> CGFloat {
-        pow(attenuationFactor / (attenuationFactor + pow(x, 2)), attenuationFactor)
     }
 }

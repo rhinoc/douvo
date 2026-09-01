@@ -7,6 +7,11 @@ import MLXLMCommon
 import Tokenizers
 
 struct LocalLLMModel: Hashable, Identifiable, Sendable {
+    enum PromptFormat: Hashable, Sendable {
+        case douvo
+        case s1Mini
+    }
+
     enum Source: Hashable, Sendable {
         case huggingFace(repositoryID: String)
         case localDirectory(path: String)
@@ -17,6 +22,7 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
     let detailText: String
     let downloadSizeText: String
     let source: Source
+    let promptFormat: PromptFormat
 
     var id: String { rawValue }
 
@@ -28,6 +34,10 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
     var isLocalDirectoryModel: Bool {
         if case .localDirectory = source { return true }
         return false
+    }
+
+    var isS1Mini: Bool {
+        promptFormat == .s1Mini
     }
 
     var repositoryID: String {
@@ -103,6 +113,14 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
         downloadSizeText: "3.1 GB",
         repositoryID: "mlx-community/Qwen3.5-4B-MLX-4bit"
     )
+    static let s1Mini = builtIn(
+        rawValue: "s1Mini",
+        displayName: "S1-mini by Superwhisper 4bit",
+        detailText: "English · ASR cleanup",
+        downloadSizeText: "335 MB",
+        repositoryID: "mlx-community/S1-mini-MLX-4bit",
+        promptFormat: .s1Mini
+    )
     static var allCases: [LocalLLMModel] {
         builtInCases + LocalLLMSettingsStore.customModels
     }
@@ -117,7 +135,8 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
             displayName: displayName,
             detailText: "Local MLX model",
             downloadSizeText: "Local Folder",
-            source: .localDirectory(path: path)
+            source: .localDirectory(path: path),
+            promptFormat: .douvo
         )
     }
 
@@ -152,13 +171,15 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
         displayName: String,
         detailText: String,
         downloadSizeText: String,
-        source: Source
+        source: Source,
+        promptFormat: PromptFormat
     ) {
         self.rawValue = rawValue
         self.displayName = displayName
         self.detailText = detailText
         self.downloadSizeText = downloadSizeText
         self.source = source
+        self.promptFormat = promptFormat
     }
 
     private static func builtIn(
@@ -166,19 +187,22 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
         displayName: String,
         detailText: String,
         downloadSizeText: String,
-        repositoryID: String
+        repositoryID: String,
+        promptFormat: PromptFormat = .douvo
     ) -> LocalLLMModel {
         LocalLLMModel(
             rawValue: rawValue,
             displayName: displayName,
             detailText: detailText,
             downloadSizeText: downloadSizeText,
-            source: .huggingFace(repositoryID: repositoryID)
+            source: .huggingFace(repositoryID: repositoryID),
+            promptFormat: promptFormat
         )
     }
 
     private static let builtInCases: [LocalLLMModel] = [
         .light,
+        .s1Mini,
         .qwen35EightBit08B,
         .qwen35EightBit2B,
         .quality
@@ -454,7 +478,10 @@ actor LocalLLMPostProcessor {
         let input = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallbackRawText = fallbackText ?? rawText
         let promptConfiguration = promptConfiguration ?? .current
-        let generationProfile = generationProfile ?? .currentCorrection(for: input)
+        let generationProfile = Self.effectiveGenerationProfile(
+            generationProfile ?? .currentCorrection(for: input),
+            for: model
+        )
         let settingsEnabled = Self.isEnabled
         let shouldRun = !requiresEnabled || settingsEnabled
         let punctuationStyle = promptConfiguration.punctuationStyle
@@ -569,8 +596,16 @@ actor LocalLLMPostProcessor {
             ))
 
             let promptStart = Self.now()
-            let instructions = Self.instructions(for: input, configuration: promptConfiguration)
-            let userPrompt = Self.prompt(for: input, configuration: promptConfiguration)
+            let instructions = Self.instructions(
+                for: input,
+                configuration: promptConfiguration,
+                model: model
+            )
+            let userPrompt = Self.prompt(
+                for: input,
+                configuration: promptConfiguration,
+                model: model
+            )
             debugInfo = LocalLLMPostprocessDebugInfo(
                 systemPrompt: instructions,
                 userPrompt: userPrompt,
@@ -640,7 +675,11 @@ actor LocalLLMPostProcessor {
                 rawResponse: response,
                 cleanedResponse: cleaned
             )
-            guard Self.isUsableCorrection(cleaned, original: Self.validationOriginal(input: input, fallbackRawText: fallbackRawText)) else {
+            guard Self.isUsableCorrection(
+                cleaned,
+                original: Self.validationOriginal(input: input, fallbackRawText: fallbackRawText),
+                allowEmpty: model.isS1Mini && Self.isS1MiniEmptyOutputCandidate(input)
+            ) else {
                 let finalText = Self.fallbackText(
                     for: fallbackRawText,
                     vocabulary: promptConfiguration.vocabulary,
@@ -1062,16 +1101,18 @@ actor LocalLLMPostProcessor {
 
     static func correctionInstructions(
         for text: String,
-        configuration: LocalLLMPromptConfiguration
+        configuration: LocalLLMPromptConfiguration,
+        model: LocalLLMModel? = nil
     ) -> String {
-        instructions(for: text, configuration: configuration)
+        instructions(for: text, configuration: configuration, model: model)
     }
 
     static func correctionPrompt(
         for text: String,
-        configuration: LocalLLMPromptConfiguration
+        configuration: LocalLLMPromptConfiguration,
+        model: LocalLLMModel? = nil
     ) -> String {
-        prompt(for: text, configuration: configuration)
+        prompt(for: text, configuration: configuration, model: model)
     }
 
     static func fallbackCorrectionText(
@@ -1111,8 +1152,13 @@ actor LocalLLMPostProcessor {
 
     private static func instructions(
         for text: String,
-        configuration: LocalLLMPromptConfiguration
+        configuration: LocalLLMPromptConfiguration,
+        model: LocalLLMModel? = nil
     ) -> String {
+        if model?.isS1Mini == true {
+            return s1MiniSystemPrompt
+        }
+
         let formattedVocabulary = formatVocabularyForPrompt(configuration.vocabulary, in: text)
         let formattedVocabularyReference = formatFullVocabularyForPrompt(configuration.vocabulary)
         let punctuationStyle = configuration.punctuationStyle
@@ -1135,8 +1181,13 @@ actor LocalLLMPostProcessor {
 
     private static func prompt(
         for text: String,
-        configuration: LocalLLMPromptConfiguration
+        configuration: LocalLLMPromptConfiguration,
+        model: LocalLLMModel? = nil
     ) -> String {
+        if model?.isS1Mini == true {
+            return s1MiniPrompt(for: text, configuration: configuration)
+        }
+
         let punctuationStyle = configuration.punctuationStyle
         return renderPromptTemplate(
             configuration.userPromptTemplate,
@@ -1192,6 +1243,38 @@ actor LocalLLMPostProcessor {
 
     private static func validationOriginal(input: String, fallbackRawText: String) -> String {
         fallbackRawText.count > input.count ? fallbackRawText : input
+    }
+
+    private static let s1MiniSystemPrompt = "You are a text normalizer for speech-to-text transcripts. The input begins with a control line specifying the styling, structure, and context settings; clean the transcript to match those settings and output only the cleaned text."
+
+    private static func s1MiniPrompt(
+        for text: String,
+        configuration: LocalLLMPromptConfiguration
+    ) -> String {
+        let styling: String
+        switch configuration.punctuationStyle {
+        case .complete:
+            styling = "semi-formal"
+        case .omitFinal:
+            styling = "semi-casual"
+        case .spaces, .questionMarksOnly:
+            styling = "casual"
+        }
+
+        let structure = configuration.outputStyle == .structured ? "lists" : "prose"
+        let transcript = applyVocabularyNormalizations(
+            to: text,
+            vocabulary: configuration.vocabulary
+        )
+        return "[Styling: \(styling)] [Structure: \(structure)] [Context: general]\n\(transcript)"
+    }
+
+    private static func effectiveGenerationProfile(
+        _ profile: LocalLLMGenerationProfile,
+        for model: LocalLLMModel
+    ) -> LocalLLMGenerationProfile {
+        guard model.isS1Mini else { return profile }
+        return LocalLLMGenerationProfile(reasoningMode: .disabled, maxTokens: profile.maxTokens)
     }
 
     private static func formatVocabularyForPrompt(_ vocabulary: String, in text: String) -> String {
@@ -2033,9 +2116,15 @@ actor LocalLLMPostProcessor {
         return text
     }
 
-    static func isUsableCorrection(_ corrected: String, original: String) -> Bool {
+    static func isUsableCorrection(
+        _ corrected: String,
+        original: String,
+        allowEmpty: Bool = false
+    ) -> Bool {
         let output = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !output.isEmpty else { return false }
+        if output.isEmpty {
+            return allowEmpty
+        }
         guard output.count <= max(original.count * 3, original.count + 120) else { return false }
 
         let lowercasedOutput = output.lowercased()
@@ -2043,6 +2132,19 @@ actor LocalLLMPostProcessor {
         guard !blockedResponseFragments.contains(where: { lowercasedOutput.contains($0) }) else { return false }
         guard !looksLikeMixPromptLeak(lowercasedOutput) else { return false }
         return true
+    }
+
+    private static func isS1MiniEmptyOutputCandidate(_ text: String) -> Bool {
+        let tokens = text
+            .lowercased()
+            .split { character in
+                character.isWhitespace || character.isPunctuation
+            }
+            .map(String.init)
+        guard !tokens.isEmpty else { return false }
+
+        let fillers = Set(["um", "uh", "erm", "er", "hmm", "mm", "mhm"])
+        return tokens.allSatisfy { fillers.contains($0) }
     }
 
     private static let finalAnswerLabels = [

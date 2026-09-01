@@ -131,6 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "Status item visibility checked likelyObscured=\(isLikelyObscured) hasCameraHousing=\(screen.auxiliaryTopRightArea != nil)"
         )
         guard isLikelyObscured else { return }
+        guard StatusItemVisibilityAlertStore.shouldShowAlert() else {
+            AppLog.info("Status item visibility alert skipped reason=user_suppressed")
+            return
+        }
 
         let alert = NSAlert()
         alert.alertStyle = .informational
@@ -143,9 +147,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.informativeText = StatusItemVisibilityAlertContent.informativeText(
             shortcutNames: shortcutNames
         )
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = L10n.text(en: "Don't show again", zh: "以后不再提示")
         alert.addButton(withTitle: L10n.text(en: "OK", zh: "知道了"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+        if alert.suppressionButton?.state == .on {
+            StatusItemVisibilityAlertStore.suppressAlert()
+            AppLog.info("Status item visibility alert suppressed by user")
+        }
     }
 
     private func loadApplicationIcon() -> NSImage {
