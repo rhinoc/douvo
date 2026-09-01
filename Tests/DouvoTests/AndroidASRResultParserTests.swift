@@ -42,7 +42,7 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertTrue(diagnostics.contains("missingRequired=none"))
     }
 
-    func testFrontierQueryIncludesCurrentClientIdentity() {
+    func testFrontierQueryUsesMinimalClientIdentity() {
         let credentials = DoubaoAndroidCredentials(
             deviceId: "device-123",
             installId: "install-456",
@@ -58,25 +58,12 @@ final class AndroidASRResultParserTests: XCTestCase {
         )
 
         XCTAssertEqual(query["aid"], "401734")
-        XCTAssertEqual(query["app_name"], "oime")
-        XCTAssertEqual(query["did"], "device-123")
-        XCTAssertNil(query["device_id"])
-        XCTAssertEqual(query["iid"], "install-456")
-        XCTAssertEqual(query["install_id"], "install-456")
-        XCTAssertEqual(query["version_code"], "100316010")
-        XCTAssertEqual(query["update_version_code"], "100316010")
-        XCTAssertEqual(query["version_name"], "1.3.16")
-        XCTAssertEqual(query["user_agent"], "")
-        XCTAssertEqual(query["forwarded"], "")
-        XCTAssertEqual(query["target"], "")
-        XCTAssertEqual(query["mobile"], "")
-        XCTAssertEqual(query["token"], DoubaoAndroidClientIdentity.authenticationToken(deviceID: "device-123"))
+        XCTAssertEqual(query["aid"], "401734")
+        XCTAssertEqual(query["device_id"], "device-123")
+        XCTAssertEqual(query.count, 2)
     }
 
-    func testTransportTokenIsSeparateFromControlRequestAppKey() throws {
-        let authenticationToken = DoubaoAndroidClientIdentity.authenticationToken(
-            deviceID: "device-123"
-        )
+    func testControlRequestCarriesAppKey() {
         let request = AndroidASRProtobuf.request(
             appKey: "app-key",
             methodName: "StartTask",
@@ -85,13 +72,6 @@ final class AndroidASRResultParserTests: XCTestCase {
             requestID: "request-id",
             frameState: 0
         )
-        let tokenObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(authenticationToken.utf8)) as? [String: String]
-        )
-
-        XCTAssertEqual(tokenObject["device_id"], "device-123")
-        XCTAssertEqual(tokenObject["aid"], "401734")
-
         var expectedPrefix = Data([0x12, 0x07])
         expectedPrefix.append(Data("app-key".utf8))
         XCTAssertTrue(request.starts(with: expectedPrefix))

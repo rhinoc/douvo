@@ -325,6 +325,18 @@ private struct OverlayView: View {
                     tint: overlayTint
                 )
 
+            if waveformStyle == .gpt {
+                GPTFluidOrbView(
+                    activity: currentWaveformSamples.globalLevel,
+                    isActive: currentWaveformSamples.hasSound,
+                    animatesMotion: allowsMotionAnimation
+                )
+                    .frame(width: overlaySurfaceWidth, height: overlaySurfaceHeight)
+                    .clipShape(Capsule())
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
             Group {
                 if isLoading, surfacePhase == .loading {
                     spinnerOrPlaceholder(accessibilityLabel: loadingAccessibilityLabel)
@@ -388,15 +400,20 @@ private struct OverlayView: View {
                 .frame(width: overlayControlButtonSize, height: overlayControlButtonSize)
             }
 
-            WaveformView(
-                levels: isLoading ? silentWaveformLevels : appState.audioLevels,
-                isActive: appState.recordingState == .recording,
-                style: waveformStyle,
-                barWidth: overlaySize.waveformBarWidth,
-                maxHeight: overlayWaveformHeight,
-                animatesMotion: allowsMotionAnimation
-            )
-                .frame(width: overlayWaveformWidth)
+            if waveformStyle == .gpt {
+                Color.clear
+                    .frame(width: overlayWaveformWidth, height: overlayWaveformHeight)
+            } else {
+                WaveformView(
+                    levels: isLoading ? silentWaveformLevels : appState.audioLevels,
+                    isActive: appState.recordingState == .recording,
+                    style: waveformStyle,
+                    barWidth: overlaySize.waveformBarWidth,
+                    maxHeight: overlayWaveformHeight,
+                    animatesMotion: allowsMotionAnimation
+                )
+                    .frame(width: overlayWaveformWidth)
+            }
 
             if showSubmitControl {
                 Group {
@@ -540,7 +557,7 @@ private struct OverlayView: View {
 
     private var overlayWaveformHeight: CGFloat {
         switch waveformStyle {
-        case .ribbon:
+        case .siri, .gpt:
             max(overlayControlButtonSize, overlaySurfaceHeight - 8)
         case .capsules, .dots:
             overlayControlButtonSize
@@ -549,6 +566,13 @@ private struct OverlayView: View {
 
     private var silentWaveformLevels: [Float] {
         Array(repeating: 0, count: max(appState.audioLevels.count, overlaySize.waveformBarCount))
+    }
+
+    private var currentWaveformSamples: WaveformSamples {
+        WaveformSamples(
+            levels: isLoading ? silentWaveformLevels : appState.audioLevels,
+            isActive: appState.recordingState == .recording
+        )
     }
 
     private var overlaySurfaceWidth: CGFloat {
@@ -1065,12 +1089,14 @@ private struct WaveformView: View {
                 capsuleBars(in: geo.size, samples: samples)
             case .dots:
                 dotMatrix(in: geo.size, samples: samples)
-            case .ribbon:
+            case .siri:
                 SiriRibbonView(
                     activity: samples.globalLevel,
                     isActive: samples.hasSound,
                     animatesMotion: animatesMotion
                 )
+            case .gpt:
+                Color.clear
             }
         }
         .frame(height: maxHeight)
@@ -1079,7 +1105,7 @@ private struct WaveformView: View {
     }
 
     private var animatesLevelChanges: Bool {
-        animatesMotion && style != .dots
+        animatesMotion && style == .capsules
     }
 
     private func dynamicSpacing(for width: CGFloat, itemWidth: CGFloat, sampleCount: Int) -> CGFloat {

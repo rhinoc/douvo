@@ -151,6 +151,25 @@ final class AndroidASRSessionGateTests: XCTestCase {
         XCTAssertEqual(coordinator.attempt, .fallback)
     }
 
+    func testSessionAuthMissingIdentityTriggersAppKeyFallback() {
+        var coordinator = AndroidASRAppKeyFallbackCoordinator()
+        coordinator.reset(primaryAppKey: "RTIHIRzbwS")
+
+        XCTAssertEqual(
+            coordinator.receiveServerError(
+                statusCode: AndroidASRErrorClassifier.sessionAuthMissingIdentityStatusCode,
+                message: "session auth, userID or appID is empty",
+                sessionIsConnecting: true
+            ),
+            .closeThenRetry
+        )
+        XCTAssertEqual(
+            coordinator.transportDidRelease(closeAcknowledged: true),
+            AndroidASRAppKeyFallbackCoordinator.fallbackAppKey
+        )
+        XCTAssertTrue(coordinator.fallbackUsed)
+    }
+
     func testQuotaFallbackDoesNotStartWithoutCloseAcknowledgement() {
         var coordinator = AndroidASRAppKeyFallbackCoordinator()
         coordinator.reset(primaryAppKey: "RTIHIRzbwS")
@@ -275,6 +294,43 @@ final class AndroidASRSessionGateTests: XCTestCase {
         XCTAssertEqual(coordinator.receiveCloseAcknowledgement(), .releaseSlot)
 
         XCTAssertEqual(coordinator.closeAcknowledgementDidTimeOut(), .none)
+    }
+
+    func testGracefulShutdownFinishesActiveSessionBeforeDisconnecting() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .finishSession
+        )
+        XCTAssertTrue(coordinator.isAwaitingSessionFinish)
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .none
+        )
+        XCTAssertEqual(coordinator.sessionDidFinish(), .disconnect)
+        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
+    }
+
+    func testGracefulShutdownFallsBackToDisconnectWhenSessionIsInactive() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: false),
+            .disconnect
+        )
+        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
+    }
+
+    func testGracefulShutdownTimeoutAllowsDisconnect() {
+        var coordinator = AndroidASRShutdownCoordinator()
+
+        XCTAssertEqual(
+            coordinator.requestGracefulShutdown(sessionIsActive: true),
+            .finishSession
+        )
+        XCTAssertEqual(coordinator.gracefulShutdownDidTimeOut(), .disconnect)
+        XCTAssertFalse(coordinator.isAwaitingSessionFinish)
     }
 }
 

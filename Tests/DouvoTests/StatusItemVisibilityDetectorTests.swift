@@ -6,6 +6,25 @@ final class StatusItemVisibilityDetectorTests: XCTestCase {
     private let screenFrame = NSRect(x: 0, y: 0, width: 1728, height: 1117)
     private let rightOfNotch = NSRect(x: 982, y: 1085, width: 746, height: 32)
 
+    func testVisibilityAlertIsShownByDefault() {
+        let suiteName = "StatusItemVisibilityDetectorTests.default"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        XCTAssertTrue(StatusItemVisibilityAlertStore.shouldShowAlert(defaults: defaults))
+    }
+
+    func testVisibilityAlertCanBeSuppressedPersistently() {
+        let suiteName = "StatusItemVisibilityDetectorTests.suppressed"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        StatusItemVisibilityAlertStore.suppressAlert(defaults: defaults)
+
+        XCTAssertFalse(StatusItemVisibilityAlertStore.shouldShowAlert(defaults: defaults))
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     func testSpeakingShortcutsIncludeToggleAndHoldInSettingsOrder() {
         XCTAssertEqual(
             StatusItemVisibilityAlertContent.speakingShortcuts(

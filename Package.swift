@@ -41,6 +41,7 @@ let package = Package(
                 .process("Resources/MenuBarIcon.svg"),
                 .process("Resources/ASRDemo.aiff"),
                 .process("SiriRibbonShaders.metal"),
+                .process("GPTFluidOrbShaders.metal"),
                 .copy("Resources/mlx-swift_Cmlx.bundle")
             ],
             linkerSettings: [

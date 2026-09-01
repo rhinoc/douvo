@@ -122,6 +122,21 @@ final class TranscriptionSessionErrorTests: XCTestCase {
         XCTAssertFalse(AndroidASRErrorClassifier.isConcurrencyQuotaExceeded("authentication failed"))
     }
 
+    func testAndroidSessionAuthMissingIdentityIsEligibleForAppKeyRotation() {
+        XCTAssertTrue(
+            AndroidASRErrorClassifier.isAppKeyRotationCandidate(
+                statusCode: AndroidASRErrorClassifier.sessionAuthMissingIdentityStatusCode,
+                message: "session auth, userID or appID is empty"
+            )
+        )
+        XCTAssertFalse(
+            AndroidASRErrorClassifier.isAppKeyRotationCandidate(
+                statusCode: 40_200_002,
+                message: "authentication failed"
+            )
+        )
+    }
+
     func testAndroidCredentialRequestsDoNotReuseCookies() {
         let configuration = DoubaoAndroidCredentialStore.makeURLSessionConfiguration()
 

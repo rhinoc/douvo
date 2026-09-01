@@ -110,7 +110,7 @@ Clicking **Reset Android Login** in Settings deletes this file. The next Android
 The Android provider connects to:
 
 ```text
-wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws?...&token=<device-auth-json>
+wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws?aid=401734&device_id=<device-id>
 ```
 
 Key request headers:

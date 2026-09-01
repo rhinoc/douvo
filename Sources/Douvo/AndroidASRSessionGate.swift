@@ -194,7 +194,7 @@ struct AndroidASRAppKeyFallbackCoordinator {
         guard sessionIsConnecting,
               attempt == .primary,
               primaryAppKey != Self.fallbackAppKey,
-              AndroidASRErrorClassifier.isConcurrencyQuotaExceeded(
+              AndroidASRErrorClassifier.isAppKeyRotationCandidate(
                   statusCode: statusCode,
                   message: message
               ) else {
