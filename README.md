@@ -193,6 +193,7 @@ Use **Settings...** from the menu bar to change trigger keys, choose a microphon
 Open **Settings... -> Features** to configure punctuation, vocabulary, and AI-backed features. Open **Settings... -> AI** to configure AI post-processing:
 
 - Choose **Local** to download a built-in MLX model or add a local MLX model folder.
+- Built-in **S1-mini by Superwhisper 4bit** (`s1Mini`) is an English-only, 335 MB ASR cleanup model. It is optimized for ordinary English dictation cleanup; use a Qwen3.5 model for Chinese, mixed-language, translation, or selection editing.
 - Choose **Remote** to add a provider, base URL, model name, and API key.
 - Add vocabulary hints for project terms, file paths, product names, and common ASR mistakes.
 - Choose output styles such as Natural, Concise, Structured, or Custom, and tune style strength.
@@ -230,10 +231,10 @@ This project was built with reference to these open-source projects:
   - Voice activity detection design with pre-roll, onset, and hangover smoothing.
   - Post-processing workflow ideas, including structured output and reasoning suppression.
   - Model, history, and diagnostics organization for a voice-input app.
-- [kopiro/siriwave](https://github.com/kopiro/siriwave)
-  - iOS 9 Siri-style waveform math and visual treatment for the recording overlay.
+- [WillSuo-Github/Siri27SiriAnimation](https://github.com/WillSuo-Github/Siri27SiriAnimation)
+  - Metal shader structure and spectral wave treatment for the recording overlay.
 
-This repository does not vendor these projects. Their code and licenses remain owned by their respective authors.
+Douvo includes an adapted portion of the Siri27SiriAnimation wave shader under its MIT License. The attribution and license text are in [docs/third-party-licenses/Siri27SiriAnimation-MIT.txt](./docs/third-party-licenses/Siri27SiriAnimation-MIT.txt). The original code and license remain owned by their respective author.
 
 ## Contributing
 

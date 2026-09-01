@@ -2063,6 +2063,8 @@ private struct SettingsPanelView: View {
             L10n.text(en: "Balanced quality", zh: "质量均衡")
         case "Best quality":
             L10n.text(en: "Best quality", zh: "最佳质量")
+        case "English · ASR cleanup":
+            L10n.text(en: "English · ASR cleanup", zh: "英文 · ASR 清理")
         case "Local MLX model":
             L10n.text(en: "Local MLX model", zh: "本地 MLX 模型")
         default:

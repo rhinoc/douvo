@@ -16,7 +16,7 @@ The runner writes a JSON report under `~/Library/Logs/Douvo/PromptLab/`.
 
 Useful config fields:
 
-- `model`: a built-in model raw value such as `light`, `qwen35EightBit08B`, `qwen35EightBit2B`, or `quality`, or a local MLX model folder path.
+- `model`: a built-in model raw value such as `light`, `s1Mini`, `qwen35EightBit08B`, `qwen35EightBit2B`, or `quality`, or a local MLX model folder path. `s1Mini` uses its required English-only ASR cleanup prompt and ignores the general system/user prompt templates.
 - `runs`: repeat count per input.
 - `punctuationStyle`: `complete`, `omitFinal`, `spaces`, or `questionMarksOnly`.
 - `removeFillerWords`: `true` to enable the `{{#if remove_filler_words}}` template branch.
