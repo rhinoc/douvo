@@ -7,11 +7,11 @@ final class AndroidASRResultParserTests: XCTestCase {
             DoubaoAndroidClientIdentity.webSocketURL.absoluteString,
             "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws"
         )
-        XCTAssertEqual(DoubaoAndroidClientIdentity.versionCode, "100316010")
-        XCTAssertEqual(DoubaoAndroidClientIdentity.versionName, "1.3.16")
+        XCTAssertEqual(DoubaoAndroidClientIdentity.versionCode, "100102018")
+        XCTAssertEqual(DoubaoAndroidClientIdentity.versionName, "1.1.2")
         XCTAssertTrue(
             DoubaoAndroidClientIdentity.userAgent.hasPrefix(
-                "com.bytedance.android.doubaoime/100316010 "
+                "com.bytedance.android.doubaoime/100102018 "
             )
         )
     }
@@ -127,7 +127,7 @@ final class AndroidASRResultParserTests: XCTestCase {
 
         XCTAssertEqual(extra["did"] as? String, "device-123")
         XCTAssertEqual(extra["context"] as? String, "encoded-context")
-        XCTAssertEqual(extra["app_version"] as? String, "1.3.16")
+        XCTAssertEqual(extra["app_version"] as? String, "1.1.2")
         XCTAssertEqual(extra["enable_asr_threepass"] as? Bool, true)
         XCTAssertEqual(extra["enable_asr_twopass"] as? Bool, true)
         XCTAssertEqual(extra["strong_ddc"] as? Bool, true)
@@ -137,9 +137,9 @@ final class AndroidASRResultParserTests: XCTestCase {
         XCTAssertEqual(extra["disable_user_words"] as? Bool, true)
         XCTAssertEqual(extra["enable_print_chinese"] as? Bool, false)
         XCTAssertEqual(extra["aid"] as? String, "401734")
-        XCTAssertEqual(extra["version_code"] as? String, "100316010")
-        XCTAssertEqual(extra["update_version_code"] as? String, "100316010")
-        XCTAssertEqual(extra["version_name"] as? String, "1.3.16")
+        XCTAssertEqual(extra["version_code"] as? String, "100102018")
+        XCTAssertEqual(extra["update_version_code"] as? String, "100102018")
+        XCTAssertEqual(extra["version_name"] as? String, "1.1.2")
     }
 
     func testSessionConfigEnablesUploadedPersonalLexicon() throws {

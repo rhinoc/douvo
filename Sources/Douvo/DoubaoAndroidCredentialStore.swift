@@ -44,11 +44,11 @@ enum DoubaoAndroidClientIdentity {
     static let webSocketURL = URL(string: "wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws")!
     static let aid = "401734"
     static let appName = "oime"
-    static let versionCode = "100316010"
-    static let versionName = "1.3.16"
+    static let versionCode = "100102018"
+    static let versionName = "1.1.2"
     static let channel = "official"
     static let package = "com.bytedance.android.doubaoime"
-    static let userAgent = "com.bytedance.android.doubaoime/100316010 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
+    static let userAgent = "com.bytedance.android.doubaoime/100102018 (Linux; U; Android 16; en_US; Pixel 7 Pro; Build/BP2A.250605.031.A2; Cronet/TTNetVersion:94cf429a 2025-11-17 QuicVersion:1f89f732 2025-05-08)"
 
     static func runtimeDiagnostics() -> String {
         let bundle = Bundle.main
