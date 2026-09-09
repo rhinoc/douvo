@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.32</title>
+      <sparkle:version>0.1.32</sparkle:version>
+      <pubDate>Wed, 09 Sep 2026 07:05:56 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Fixed
+
+- Use the compatible Doubao Android IME client version for Android speech recognition.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.32/douvo-0.1.32-macos.dmg"
+        sparkle:edSignature="t7EsTzZRvs5IvCYkeXpspE6HNcptzK/KMbu1b5NYmk/pkAL4Qo5CXm1j9neNlSpHfmuzBeGd+i5GGx7nPdbZCA==" length="18566645"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.31</title>
       <sparkle:version>0.1.31</sparkle:version>
       <pubDate>Wed, 09 Sep 2026 04:01:45 +0000</pubDate>
