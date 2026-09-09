@@ -110,7 +110,7 @@ final class SiriRibbonRenderer: NSObject, MTKViewDelegate {
     private static func makePipeline(device: MTLDevice?) -> MTLRenderPipelineState? {
         guard
             let device,
-            let sourceURL = Bundle.module.url(forResource: "SiriRibbonShaders", withExtension: "metal"),
+            let sourceURL = DouvoResourceLocator.url(forResource: "SiriRibbonShaders", withExtension: "metal"),
             let source = try? String(contentsOf: sourceURL, encoding: .utf8),
             let library = try? device.makeLibrary(source: source, options: nil),
             let vertexFunction = library.makeFunction(name: "douvoSiriFullscreenVertex"),

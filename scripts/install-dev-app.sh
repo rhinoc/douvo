@@ -30,26 +30,31 @@ if [[ ! -d "$SRC_APP" ]]; then
 fi
 
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
-if [[ -z "$SIGN_IDENTITY" ]]; then
-  SIGN_IDENTITY="$(
-    security find-identity -v -p codesigning 2>/dev/null \
-      | awk -F'"' '/Douvo Local Code Signing/ { print $2; exit }'
-  )"
-fi
-
 if [[ -z "$SIGN_IDENTITY" && -z "${CODESIGN_KEYCHAIN:-}" ]]; then
   LOCAL_CODESIGN_DIR="${DOUVO_LOCAL_CODESIGN_DIR:-$HOME/Library/Application Support/Douvo/CodeSigning}"
   LOCAL_CODESIGN_KEYCHAIN="${DOUVO_CODESIGN_KEYCHAIN:-$LOCAL_CODESIGN_DIR/douvo-local-code-signing.keychain-db}"
   LOCAL_CODESIGN_PASSWORD_FILE="${DOUVO_LOCAL_CODESIGN_PASSWORD_FILE:-$LOCAL_CODESIGN_DIR/keychain-password}"
   if [[ -f "$LOCAL_CODESIGN_KEYCHAIN" && -f "$LOCAL_CODESIGN_PASSWORD_FILE" ]]; then
     security unlock-keychain -p "$(<"$LOCAL_CODESIGN_PASSWORD_FILE")" "$LOCAL_CODESIGN_KEYCHAIN"
+    security set-key-partition-list \
+      -S apple-tool:,apple:,codesign: \
+      -s \
+      -k "$(<"$LOCAL_CODESIGN_PASSWORD_FILE")" \
+      "$LOCAL_CODESIGN_KEYCHAIN" >/dev/null 2>&1
     CODESIGN_KEYCHAIN="$LOCAL_CODESIGN_KEYCHAIN"
-    SIGN_IDENTITY="$(
-      security find-identity -v -p codesigning "$CODESIGN_KEYCHAIN" 2>/dev/null \
-        | awk -F'"' '/Douvo Local Code Signing/ { print $1; exit }' \
-        | awk '{ print $2 }'
-    )"
+    LOCAL_CODESIGN_IDENTITY="${DOUVO_LOCAL_CODESIGN_IDENTITY:-Douvo Local Code Signing}"
+    if security find-identity -v -p codesigning "$CODESIGN_KEYCHAIN" 2>/dev/null \
+      | awk -v name="$LOCAL_CODESIGN_IDENTITY" 'index($0, "\"" name "\"") { found = 1 } END { exit !found }'; then
+      SIGN_IDENTITY="$LOCAL_CODESIGN_IDENTITY"
+    fi
   fi
+fi
+
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  SIGN_IDENTITY="$(
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk -F'"' '/Douvo Local Code Signing/ { print $2; exit }'
+  )"
 fi
 
 if [[ -z "$SIGN_IDENTITY" || "$SIGN_IDENTITY" == "-" ]]; then

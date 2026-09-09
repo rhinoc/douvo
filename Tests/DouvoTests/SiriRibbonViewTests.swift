@@ -24,4 +24,13 @@ final class SiriRibbonViewTests: XCTestCase {
         XCTAssertFalse(view.layer?.isOpaque ?? true)
         XCTAssertEqual(view.layer?.backgroundColor, NSColor.clear.cgColor)
     }
+
+    func testShaderResourcesAreResolvableWithoutBundleModule() {
+        XCTAssertNotNil(
+            DouvoResourceLocator.url(forResource: "SiriRibbonShaders", withExtension: "metal")
+        )
+        XCTAssertNotNil(
+            DouvoResourceLocator.url(forResource: "GPTFluidOrbShaders", withExtension: "metal")
+        )
+    }
 }
