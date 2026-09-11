@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.34</title>
+      <sparkle:version>0.1.34</sparkle:version>
+      <pubDate>Fri, 11 Sep 2026 05:58:05 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Fixed
+
+- Show all ASR providers and keep each option selectable in the recognition dropdown.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.34/douvo-0.1.34-macos.dmg"
+        sparkle:edSignature="MWUMbusrG7UNJ8GzXNAZGLi7GWFK0lkVgxVSWNknxOMr5QQ7nl23F17te+1x6af+gaIAV4sxfDlCmx2H3+ICDQ==" length="18713180"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.33</title>
       <sparkle:version>0.1.33</sparkle:version>
       <pubDate>Fri, 11 Sep 2026 04:56:04 +0000</pubDate>
