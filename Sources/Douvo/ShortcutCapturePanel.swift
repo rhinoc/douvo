@@ -4240,7 +4240,7 @@ private struct ASRProviderSelectionMenu: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSPopUpButton {
-        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
         button.isBordered = false
         button.focusRingType = .none
         button.alignment = .right
