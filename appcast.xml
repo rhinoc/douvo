@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.33</title>
+      <sparkle:version>0.1.33</sparkle:version>
+      <pubDate>Fri, 11 Sep 2026 04:56:04 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Added
+
+- Add selectable multi-route speech recognition for Web, Android, and Bage Shuo providers.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.33/douvo-0.1.33-macos.dmg"
+        sparkle:edSignature="8asACLuqa/a26dMJ93EhqiQLP1T4UfspygCc3hEkQWd6cg9VzVt3BHdAVDziV70hSdQyjAFVyE/5xIOe4qjqDg==" length="18713243"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.32</title>
       <sparkle:version>0.1.32</sparkle:version>
       <pubDate>Wed, 09 Sep 2026 07:05:56 +0000</pubDate>
