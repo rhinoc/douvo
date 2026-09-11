@@ -790,8 +790,6 @@ private struct SettingsPanelView: View {
     @State private var correctionDebugTraceURL: URL?
     @State private var isRunningCorrectionDebug = false
     @State private var runningASRDemoProviders: Set<ASRProvider> = []
-    @State private var asrDemoResults: [ASRProvider: ASRDemoDiagnosticResult] = [:]
-    @State private var asrDemoErrors: [ASRProvider: String] = [:]
     @State private var editingRemoteModelProfile: RemoteLLMModelProfile?
     @State private var isAddingRemoteModelProfile = false
 
@@ -3611,16 +3609,9 @@ private struct SettingsPanelView: View {
                                 HStack(spacing: 8) {
                                     Text(provider.displayName)
                                         .frame(width: 90, alignment: .leading)
-                                    if let result = asrDemoResults[provider] {
-                                        statusText(
-                                            result.isHealthy
-                                                ? L10n.text(en: "Passed", zh: "通过")
-                                                : L10n.text(en: "Failed", zh: "失败"),
-                                            isHealthy: result.isHealthy
-                                        )
-                                    } else if asrDemoErrors[provider] != nil {
-                                        statusText(L10n.text(en: "Failed", zh: "失败"), isHealthy: false)
-                                    }
+
+                                    Spacer(minLength: 0)
+
                                     Button {
                                         runASRDemoDiagnostic(for: provider)
                                     } label: {
@@ -3631,15 +3622,16 @@ private struct SettingsPanelView: View {
                                         )
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.8)
-                                        .frame(width: 78)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     }
                                     .focusable(false)
+                                    .frame(width: 78, height: 24)
                                     .disabled(
                                         runningASRDemoProviders.contains(provider)
                                             || !canRunASRDemo(provider)
                                     )
-                                    .help(asrDemoErrors[provider] ?? "")
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                     }
@@ -3692,15 +3684,12 @@ private struct SettingsPanelView: View {
         guard !runningASRDemoProviders.contains(provider), canRunASRDemo(provider) else { return }
         dismissSettingsToast()
         runningASRDemoProviders.insert(provider)
-        asrDemoResults[provider] = nil
-        asrDemoErrors[provider] = nil
 
         Task {
             do {
                 let result = try await ASRDemoDiagnosticRunner.run(selection: ASRProviderSelection(provider))
                 await MainActor.run {
                     runningASRDemoProviders.remove(provider)
-                    asrDemoResults[provider] = result
                     presentSettingsToast(
                         result.isHealthy
                             ? L10n.text(en: "\(provider.displayName) demo passed.", zh: "\(provider.displayName) 示例测试通过。")
@@ -3711,7 +3700,6 @@ private struct SettingsPanelView: View {
             } catch {
                 await MainActor.run {
                     runningASRDemoProviders.remove(provider)
-                    asrDemoErrors[provider] = TranscriptionSessionError(error).localizedDescription
                     let message = TranscriptionManager.userFacingASRErrorMessage(
                         TranscriptionSessionError(error)
                     )
@@ -4230,196 +4218,121 @@ private struct SettingsPanelView: View {
     }
 }
 
-private struct ASRProviderSelectionMenu: NSViewRepresentable {
+private struct ASRProviderSelectionMenu: View {
     let selection: ASRProviderSelection
     let loginStatuses: [ASRProvider: LoginStatus]
     let onSelectionChanged: (ASRProviderSelection) -> Void
+    @State private var isPresented = false
+    @State private var hoveredProvider: ASRProvider?
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text(selection.displayName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(spacing: 2) {
+                ForEach(ASRProvider.allCases) { provider in
+                    providerRow(provider)
+                }
+            }
+            .padding(8)
+            .frame(width: 248)
+        }
+        .accessibilityLabel(L10n.text(en: "Recognition routes", zh: "识别渠道"))
+        .accessibilityValue(selection.displayName)
     }
 
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let button = NSPopUpButton(frame: .zero, pullsDown: false)
-        button.isBordered = false
-        button.focusRingType = .none
-        button.alignment = .right
-        button.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        button.controlSize = .small
-        button.autoenablesItems = false
-        button.setAccessibilityLabel(L10n.text(en: "Recognition routes", zh: "识别渠道"))
-        context.coordinator.update(
-            button,
-            selection: selection,
-            loginStatuses: loginStatuses,
-            onSelectionChanged: onSelectionChanged
+    private func providerRow(_ provider: ASRProvider) -> some View {
+        let isSelected = selection.providers.contains(provider)
+        let isEnabled = !(selection.providers.count == 1 && isSelected)
+        let isHealthy = providerStatusIsHealthy(provider)
+
+        return Button {
+            toggle(provider)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16)
+                    .opacity(isSelected ? 1 : 0)
+
+                Text(provider.displayName)
+                    .foregroundColor(isEnabled ? .primary : .secondary)
+
+                Spacer(minLength: 12)
+
+                Image(systemName: isHealthy
+                    ? "checkmark.circle.fill"
+                    : "exclamationmark.triangle.fill")
+                    .foregroundColor(
+                        isEnabled
+                            ? (isHealthy ? .green : .orange)
+                            : .secondary
+                    )
+                    .help(providerStatusText(provider))
+            }
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .disabled(!isEnabled)
+        .background(
+            hoveredProvider == provider
+                ? Color.primary.opacity(0.08)
+                : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
         )
-        return button
-    }
-
-    func updateNSView(_ button: NSPopUpButton, context: Context) {
-        context.coordinator.update(
-            button,
-            selection: selection,
-            loginStatuses: loginStatuses,
-            onSelectionChanged: onSelectionChanged
+        .padding(.horizontal, 6)
+        .onHover { isHovered in
+            hoveredProvider = isHovered ? provider : nil
+        }
+        .accessibilityLabel(provider.displayName)
+        .accessibilityValue(
+            L10n.text(
+                en: "\(isSelected ? "Selected" : "Not selected"), \(providerStatusText(provider))",
+                zh: "\(isSelected ? "已选中" : "未选中")，\(providerStatusText(provider))"
+            )
         )
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    @MainActor
-    final class Coordinator: NSObject {
-        private var selection = ASRProviderSelection.default
-        private var loginStatuses: [ASRProvider: LoginStatus] = [:]
-        private var onSelectionChanged: ((ASRProviderSelection) -> Void)?
-
-        func update(
-            _ button: NSPopUpButton,
-            selection: ASRProviderSelection,
-            loginStatuses: [ASRProvider: LoginStatus],
-            onSelectionChanged: @escaping (ASRProviderSelection) -> Void
-        ) {
-            self.selection = selection
-            self.loginStatuses = loginStatuses
-            self.onSelectionChanged = onSelectionChanged
-
-            let menu = NSMenu()
-            menu.autoenablesItems = false
-
-            for provider in ASRProvider.allCases {
-                let isSelected = selection.providers.contains(provider)
-                let isEnabled = !(selection.providers.count == 1 && isSelected)
-                let item = NSMenuItem(
-                    title: provider.displayName,
-                    action: #selector(toggleProvider(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.representedObject = provider.rawValue
-                item.isEnabled = isEnabled
-                item.view = ASRProviderMenuItemView(
-                    provider: provider,
-                    isSelected: isSelected,
-                    isEnabled: isEnabled,
-                    isHealthy: Self.providerStatusIsHealthy(provider, loginStatuses: loginStatuses),
-                    statusText: Self.providerStatusText(provider, loginStatuses: loginStatuses)
-                )
-                menu.addItem(item)
-            }
-
-            button.menu = menu
-            button.title = selection.displayName
-            button.setAccessibilityValue(selection.displayName)
+    private func toggle(_ provider: ASRProvider) {
+        var providers = selection.providers
+        if providers.contains(provider) {
+            guard providers.count > 1 else { return }
+            providers.remove(provider)
+        } else {
+            providers.insert(provider)
         }
+        onSelectionChanged(ASRProviderSelection(providers))
+    }
 
-        @objc private func toggleProvider(_ sender: NSMenuItem) {
-            guard let rawValue = sender.representedObject as? String,
-                  let provider = ASRProvider(rawValue: rawValue)
-            else {
-                return
-            }
-
-            var providers = selection.providers
-            if providers.contains(provider) {
-                guard providers.count > 1 else { return }
-                providers.remove(provider)
-            } else {
-                providers.insert(provider)
-            }
-
-            onSelectionChanged?(ASRProviderSelection(providers))
-        }
-
-        private static func providerStatusText(
-            _ provider: ASRProvider,
-            loginStatuses: [ASRProvider: LoginStatus]
-        ) -> String {
-            switch provider {
-            case .android:
-                L10n.text(en: "Automatic", zh: "自动")
-            case .web, .bageshuo:
-                loginStatuses[provider] == .loggedIn
-                    ? L10n.text(en: "Logged in", zh: "已登录")
-                    : L10n.text(en: "Not logged in", zh: "未登录")
-            }
-        }
-
-        private static func providerStatusIsHealthy(
-            _ provider: ASRProvider,
-            loginStatuses: [ASRProvider: LoginStatus]
-        ) -> Bool {
-            provider == .android || loginStatuses[provider] == .loggedIn
+    private func providerStatusText(_ provider: ASRProvider) -> String {
+        switch provider {
+        case .android:
+            L10n.text(en: "Automatic", zh: "自动")
+        case .web, .bageshuo:
+            loginStatuses[provider] == .loggedIn
+                ? L10n.text(en: "Logged in", zh: "已登录")
+                : L10n.text(en: "Not logged in", zh: "未登录")
         }
     }
-}
 
-private final class ASRProviderMenuItemView: NSView {
-    init(
-        provider: ASRProvider,
-        isSelected: Bool,
-        isEnabled: Bool,
-        isHealthy: Bool,
-        statusText: String
-    ) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 220, height: 26))
-        autoresizingMask = [.width]
-
-        let selectionIcon = NSImageView()
-        selectionIcon.image = NSImage(
-            systemSymbolName: "checkmark.circle.fill",
-            accessibilityDescription: nil
-        )
-        selectionIcon.translatesAutoresizingMaskIntoConstraints = false
-        selectionIcon.imageScaling = NSImageScaling.scaleProportionallyDown
-        selectionIcon.contentTintColor = isEnabled
-            ? NSColor.labelColor
-            : NSColor.disabledControlTextColor
-        selectionIcon.alphaValue = isSelected ? 1 : 0
-
-        let titleLabel = NSTextField(labelWithString: provider.displayName)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 14)
-        titleLabel.textColor = isEnabled ? .labelColor : .disabledControlTextColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-
-        let statusIcon = NSImageView()
-        statusIcon.image = NSImage(
-            systemSymbolName: isHealthy
-                ? "checkmark.circle.fill"
-                : "exclamationmark.triangle.fill",
-            accessibilityDescription: statusText
-        )
-        statusIcon.translatesAutoresizingMaskIntoConstraints = false
-        statusIcon.imageScaling = NSImageScaling.scaleProportionallyDown
-        statusIcon.contentTintColor = isEnabled
-            ? (isHealthy ? NSColor.systemGreen : NSColor.systemOrange)
-            : NSColor.disabledControlTextColor
-        statusIcon.toolTip = statusText
-        statusIcon.setAccessibilityLabel(statusText)
-
-        addSubview(selectionIcon)
-        addSubview(titleLabel)
-        addSubview(statusIcon)
-
-        NSLayoutConstraint.activate([
-            selectionIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            selectionIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            selectionIcon.widthAnchor.constraint(equalToConstant: 16),
-            selectionIcon.heightAnchor.constraint(equalToConstant: 16),
-
-            titleLabel.leadingAnchor.constraint(equalTo: selectionIcon.trailingAnchor, constant: 10),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: statusIcon.leadingAnchor, constant: -12),
-
-            statusIcon.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            statusIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            statusIcon.widthAnchor.constraint(equalToConstant: 16),
-            statusIcon.heightAnchor.constraint(equalToConstant: 16)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    private func providerStatusIsHealthy(_ provider: ASRProvider) -> Bool {
+        provider == .android || loginStatuses[provider] == .loggedIn
     }
 }
 
