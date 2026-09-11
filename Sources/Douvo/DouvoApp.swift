@@ -60,12 +60,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let appState = AppState.shared
     private var statusItem: NSStatusItem!
     private var webViewManager: WebViewManager!
+    private var bageshuoWebViewManager: BageshuoWebViewManager!
     private var hotkeyManager: HotkeyManager!
     private var overlayPanel: OverlayPanel!
     private var transcriptionManager: TranscriptionManager!
     private var settingsPanel: ShortcutCapturePanel!
     private var localLLMDownloadManager: LocalLLMDownloadManager!
     private var loginStatusCancellable: AnyCancellable?
+    private var bageshuoVocabularySyncTask: Task<Void, Never>?
+    private var bageshuoVocabularySyncPending = false
     private let updaterController: SPUStandardUpdaterController
 
     override init() {
@@ -90,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
         scheduleStatusItemVisibilityCheck()
         prewarmSelectedLocalLLMModel(reason: "launch")
+        if ASRProviderStore.selected.usesBageshuoASR {
+            synchronizeBageshuoVocabularyIfSelected(reason: "launch")
+        }
     }
 
     private func setupMainMenu() {
@@ -207,10 +213,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupWebView() {
         webViewManager = WebViewManager(appState: appState)
-        if ASRParamsStore.load() != nil {
-            appState.loginStatus = .loggedIn
-        } else {
-            appState.loginStatus = .notLoggedIn
+        bageshuoWebViewManager = BageshuoWebViewManager(appState: appState)
+        refreshSelectedProviderLoginStatus()
+    }
+
+    private func refreshSelectedProviderLoginStatus() {
+        let selection = ASRProviderStore.selected
+        let statuses = loginStatuses(for: selection)
+        let requiredProviders = selection.sortedProviders.filter(\.requiresLogin)
+        let aggregateStatus: LoginStatus = requiredProviders.isEmpty || requiredProviders.allSatisfy {
+            statuses[$0] == .loggedIn
+        } ? .loggedIn : .notLoggedIn
+        if appState.loginStatus != aggregateStatus {
+            appState.loginStatus = aggregateStatus
+        }
+        settingsPanel?.refreshLoginStatus(aggregateStatus, providerStatuses: statuses)
+    }
+
+    private func loginStatuses(for _: ASRProviderSelection) -> [ASRProvider: LoginStatus] {
+        return ASRProvider.allCases.reduce(into: [ASRProvider: LoginStatus]()) { statuses, provider in
+            switch provider {
+            case .web:
+                statuses[provider] = ASRParamsStore.load() != nil ? .loggedIn : .notLoggedIn
+            case .android:
+                statuses[provider] = .loggedIn
+            case .bageshuo:
+                statuses[provider] = BageshuoASRParamsStore.load() != nil ? .loggedIn : .notLoggedIn
+            }
+        }
+    }
+
+    private func missingLoginProvider(in selection: ASRProviderSelection) -> ASRProvider? {
+        selection.sortedProviders.first { provider in
+            provider.requiresLogin && loginStatuses(for: selection)[provider] != .loggedIn
         }
     }
 
@@ -237,9 +272,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func observeLoginStatus() {
-        loginStatusCancellable = Self.observeLoginStatus(appState) { [weak self] loginStatus in
-            self?.settingsPanel.refreshLoginStatus(loginStatus)
-            self?.rebuildMenu()
+        loginStatusCancellable = Self.observeLoginStatus(appState) { [weak self] _ in
+            guard self != nil else { return }
+            // Individual login managers publish a success for their own route.
+            // Recompute the aggregate so a multi-route selection cannot look ready
+            // while another login-based route is still missing.
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, !Task.isCancelled else { return }
+                self.refreshSelectedProviderLoginStatus()
+                self.synchronizeBageshuoVocabularyIfSelected(reason: "login-status")
+                self.rebuildMenu()
+            }
         }
     }
 
@@ -254,6 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         transcriptionManager = TranscriptionManager(
             appState: appState,
             webViewManager: webViewManager,
+            bageshuoWebViewManager: bageshuoWebViewManager,
             overlayPanel: overlayPanel,
             hotkeyManager: hotkeyManager
         )
@@ -328,7 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let menu = statusItem.menu else { return }
         Self.rebuildStatusMenu(
             menu,
-            provider: ASRProviderStore.selected,
+            selection: ASRProviderStore.selected,
             loginStatus: appState.loginStatus,
             transcriptHistory: appState.transcriptHistory,
             canCheckForUpdates: updaterController.updater.canCheckForUpdates,
@@ -338,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     static func rebuildStatusMenu(
         _ menu: NSMenu,
-        provider: ASRProvider,
+        selection: ASRProviderSelection,
         loginStatus: LoginStatus,
         transcriptHistory: [String],
         canCheckForUpdates: Bool,
@@ -346,27 +391,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ) {
         menu.removeAllItems()
 
-        switch provider {
-        case .web:
-            switch loginStatus {
-            case .checking:
-                menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
-            case .loggedIn:
-                menu.addItem(disabledItem(L10n.text(en: "Recognition: Web", zh: "识别方式：Web")))
-            case .notLoggedIn:
-                menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
-            }
-        case .android:
-            menu.addItem(disabledItem(L10n.text(en: "Recognition: Android", zh: "识别方式：Android")))
-        case .mix:
-            switch loginStatus {
-            case .checking:
-                menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
-            case .loggedIn:
-                menu.addItem(disabledItem(L10n.text(en: "Recognition: Dual", zh: "识别方式：双路")))
-            case .notLoggedIn:
-                menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
-            }
+        if loginStatus == .checking {
+            menu.addItem(disabledItem(L10n.text(en: "Checking login...", zh: "正在检查登录状态...")))
+        } else if selection.requiresLogin && loginStatus != .loggedIn {
+            menu.addItem(menuItem(title: L10n.text(en: "Log In", zh: "登录"), action: #selector(showLogin), keyEquivalent: "l", target: target))
+        } else {
+            menu.addItem(disabledItem(
+                L10n.text(
+                    en: "Recognition: \(selection.displayName)",
+                    zh: "识别方式：\(selection.displayName)"
+                )
+            ))
         }
         menu.addItem(transcriptHistoryItem(transcriptHistory, target: target))
         menu.addItem(menuItem(title: L10n.text(en: "Settings", zh: "设置"), action: #selector(showSettings), keyEquivalent: ",", target: target))
@@ -432,19 +467,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showLogin() {
-        webViewManager.showLoginWindow()
+        let selection = ASRProviderStore.selected
+        guard let provider = missingLoginProvider(in: selection)
+                ?? selection.sortedProviders.first(where: \.requiresLogin) else {
+            return
+        }
+        openLogin(for: provider)
+    }
+
+    private func synchronizeBageshuoVocabularyIfSelected(reason: String) {
+        guard ASRProviderStore.selected.usesBageshuoASR else { return }
+
+        if bageshuoVocabularySyncTask != nil {
+            bageshuoVocabularySyncPending = true
+            return
+        }
+
+        AppLog.info("Bage Shuo vocabulary auto-sync requested reason=\(reason)")
+        bageshuoVocabularySyncPending = false
+        bageshuoVocabularySyncTask = Task { [weak self] in
+            let result = await BageshuoVocabularySynchronizer.shared.synchronizeBidirectionally()
+            guard let self else { return }
+            self.settingsPanel.refreshBageshuoVocabularyWordCount(result.wordCount)
+            switch result.status {
+            case .synced:
+                AppLog.info(
+                    "Bage Shuo vocabulary auto-sync complete count=\(result.wordCount) pushed=\(result.pushedWordCount)"
+                )
+            case .failed:
+                AppLog.info(
+                    "Bage Shuo vocabulary auto-sync failed error=\(result.errorDescription ?? "unknown") pushed=\(result.pushedWordCount)"
+                )
+            }
+
+            let shouldRetry = self.bageshuoVocabularySyncPending
+            self.bageshuoVocabularySyncPending = false
+            self.bageshuoVocabularySyncTask = nil
+            if shouldRetry {
+                self.synchronizeBageshuoVocabularyIfSelected(reason: "coalesced-change")
+            }
+        }
+    }
+
+    private func openLogin(for provider: ASRProvider) {
+        switch provider {
+        case .web:
+            webViewManager.showLoginWindow()
+        case .bageshuo:
+            bageshuoWebViewManager.showLoginWindow()
+        case .android:
+            break
+        }
     }
 
     @objc private func refreshLoginParams() {
         AppLog.info("Refresh login params requested")
+        let selection = ASRProviderStore.selected
+        guard let provider = missingLoginProvider(in: selection)
+                ?? selection.sortedProviders.first(where: \.requiresLogin) else {
+            return
+        }
+        refreshLoginParams(for: provider)
+    }
+
+    private func refreshLoginParams(for provider: ASRProvider) {
+        AppLog.info("Refresh login params requested provider=\(provider.rawValue)")
         Task {
-            if await webViewManager.extractAndSaveASRParams() {
-                appState.loginStatus = .loggedIn
-            } else {
-                appState.loginStatus = .notLoggedIn
-                webViewManager.showLoginWindow()
+            let didSave: Bool
+            switch provider {
+            case .bageshuo:
+                didSave = await bageshuoWebViewManager.extractAndSaveASRParams()
+            case .web:
+                didSave = await webViewManager.extractAndSaveASRParams()
+            case .android:
+                didSave = false
             }
-            settingsPanel.refreshLoginStatus(appState.loginStatus)
+            if !didSave {
+                openLogin(for: provider)
+            }
+            refreshSelectedProviderLoginStatus()
             rebuildMenu()
         }
     }
@@ -482,7 +583,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             appVersion: appVersion,
             microphoneDevices: microphoneDevices,
             selectedMicrophoneUID: selectedUID,
-            selectedASRProvider: ASRProviderStore.selected,
+            selectedASRProviders: ASRProviderStore.selected,
+            providerLoginStatuses: loginStatuses(for: ASRProviderStore.selected),
             onCapture: { [weak self] slot, shortcut in
                 guard let self else { return false }
                 let accepted: Bool
@@ -527,9 +629,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onSelectMicrophone: { uid in
                 AudioDeviceStore.setSelectedUID(uid)
             },
-            onSelectASRProvider: { [weak self] provider in
-                ASRProviderStore.selected = provider
-                self?.settingsPanel.refreshLoginStatus(self?.appState.loginStatus ?? .notLoggedIn)
+            onSelectASRProviders: { [weak self] selection in
+                ASRProviderStore.selected = selection
+                self?.refreshSelectedProviderLoginStatus()
+                self?.synchronizeBageshuoVocabularyIfSelected(reason: "provider-selection")
                 self?.rebuildMenu()
             },
             onSelectLanguage: { [weak self] language in
@@ -555,6 +658,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             onRepairLogin: { [weak self] in
                 self?.refreshLoginParams()
+            },
+            onBageshuoVocabularyChanged: { [weak self] in
+                self?.synchronizeBageshuoVocabularyIfSelected(reason: "local-vocabulary-changed")
             },
             onCopyLogPath: { [weak self] in
                 self?.copyLogPath()
@@ -648,27 +754,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func logOut() {
-        webViewManager.logOut()
-        settingsPanel.refreshLoginStatus(appState.loginStatus)
+        for provider in ASRProviderStore.selected.sortedProviders {
+            logOut(provider: provider)
+        }
+        refreshSelectedProviderLoginStatus()
         rebuildMenu()
     }
 
-    @objc private func copyLoginDebugInfo() {
-        let debugInfo: String?
-        switch ASRProviderStore.selected {
+    private func logOut(provider: ASRProvider) {
+        switch provider {
+        case .bageshuo:
+            bageshuoWebViewManager.logOut()
         case .web:
-            debugInfo = ASRParamsStore.loginDebugInfo()
+            webViewManager.logOut()
         case .android:
-            debugInfo = DoubaoAndroidCredentialStore.debugInfo()
-        case .mix:
-            debugInfo = [
-                ASRParamsStore.loginDebugInfo(),
-                DoubaoAndroidCredentialStore.debugInfo()
-            ]
-            .compactMap { $0 }
-            .joined(separator: "\n\n")
+            break
         }
-        guard let debugInfo else { return }
+    }
+
+    @objc private func copyLoginDebugInfo() {
+        let debugInfo = ASRProviderStore.selected.sortedProviders.compactMap { provider in
+            switch provider {
+            case .web:
+                ASRParamsStore.loginDebugInfo()
+            case .android:
+                DoubaoAndroidCredentialStore.debugInfo()
+            case .bageshuo:
+                BageshuoASRParamsStore.loginDebugInfo()
+            }
+        }.joined(separator: "\n\n")
+        guard !debugInfo.isEmpty else { return }
         PasteHelper.copyOnly(debugInfo)
     }
 
@@ -707,9 +822,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleAuthExpired() {
-        if ASRProviderStore.selected.usesWebASR {
+        let selection = ASRProviderStore.selected
+        if let provider = missingLoginProvider(in: selection) {
             appState.loginStatus = .notLoggedIn
-            webViewManager.showLoginWindow()
+            openLogin(for: provider)
         }
         rebuildMenu()
     }

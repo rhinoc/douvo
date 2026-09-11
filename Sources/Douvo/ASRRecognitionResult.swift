@@ -48,4 +48,21 @@ struct ASRRecognitionResult: Sendable {
             segments: segments
         )
     }
+
+    static func bageshuo(
+        text: String,
+        kind: String,
+        isFinal: Bool,
+        metadata: [String: String] = [:]
+    ) -> ASRRecognitionResult {
+        ASRRecognitionResult(
+            text: text,
+            provider: "bageshuo",
+            kind: kind,
+            segmentCount: text.isEmpty ? 0 : 1,
+            isFinal: isFinal,
+            metadata: metadata,
+            segments: []
+        )
+    }
 }

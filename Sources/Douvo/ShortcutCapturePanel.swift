@@ -21,7 +21,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         appVersion: String,
         microphoneDevices: [AudioInputDevice],
         selectedMicrophoneUID: String?,
-        selectedASRProvider: ASRProvider,
+        selectedASRProviders: ASRProviderSelection,
+        providerLoginStatuses: [ASRProvider: LoginStatus],
         onCapture: @escaping (HotkeyShortcutSlot, HotkeyShortcut) -> Bool,
         onCaptureStateChanged: @escaping (Bool) -> Void,
         onResetToggle: @escaping () -> Void,
@@ -31,13 +32,14 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         onResetTranslation: @escaping () -> Void,
         onClearTranslation: @escaping () -> Void,
         onSelectMicrophone: @escaping (String?) -> Void,
-        onSelectASRProvider: @escaping (ASRProvider) -> Void,
+        onSelectASRProviders: @escaping (ASRProviderSelection) -> Void,
         onSelectLanguage: @escaping (AppLanguage) -> Void,
         onDeleteLocalLLMModel: @escaping (LocalLLMModel) async throws -> Void,
         onLogin: @escaping () -> Void,
         onLogout: @escaping () -> Void,
         onCopyLoginDebugInfo: @escaping () -> Void,
         onRepairLogin: @escaping () -> Void,
+        onBageshuoVocabularyChanged: @escaping () -> Void,
         onCopyLogPath: @escaping () -> Void,
         onOpenLog: @escaping () -> Void,
         onExportLogs: @escaping () -> Void,
@@ -64,7 +66,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
                 keyboardCaptureError: keyboardCaptureError,
                 microphoneDevices: microphoneDevices,
                 selectedMicrophoneUID: selectedMicrophoneUID,
-                selectedASRProvider: selectedASRProvider,
+                selectedASRProviders: selectedASRProviders,
+                providerLoginStatuses: providerLoginStatuses,
                 canCheckForUpdates: canCheckForUpdates
             )
             bringPanelToFront(panel)
@@ -84,7 +87,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             appVersion: appVersion,
             microphoneDevices: microphoneDevices,
             selectedMicrophoneUID: selectedMicrophoneUID,
-            selectedASRProvider: selectedASRProvider,
+            selectedASRProviders: selectedASRProviders,
+            providerLoginStatuses: providerLoginStatuses,
             selectedLanguage: AppLanguageStore.selected
         )
         model.canCheckForUpdates = canCheckForUpdates
@@ -106,13 +110,14 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
             onResetTranslation: onResetTranslation,
             onClearTranslation: onClearTranslation,
             onSelectMicrophone: onSelectMicrophone,
-            onSelectASRProvider: onSelectASRProvider,
+            onSelectASRProviders: onSelectASRProviders,
             onSelectLanguage: onSelectLanguage,
             onDeleteLocalLLMModel: onDeleteLocalLLMModel,
             onLogin: onLogin,
             onLogout: onLogout,
             onCopyLoginDebugInfo: onCopyLoginDebugInfo,
             onRepairLogin: onRepairLogin,
+            onBageshuoVocabularyChanged: onBageshuoVocabularyChanged,
             onCopyLogPath: onCopyLogPath,
             onOpenLog: onOpenLog,
             onExportLogs: onExportLogs,
@@ -197,8 +202,18 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         model?.shortcutErrorMessage = nil
     }
 
-    func refreshLoginStatus(_ loginStatus: LoginStatus) {
+    func refreshLoginStatus(
+        _ loginStatus: LoginStatus,
+        providerStatuses: [ASRProvider: LoginStatus] = [:]
+    ) {
         model?.loginStatus = loginStatus
+        if !providerStatuses.isEmpty {
+            model?.providerLoginStatuses = providerStatuses
+        }
+    }
+
+    func refreshBageshuoVocabularyWordCount(_ wordCount: Int) {
+        model?.bageshuoVocabularyWordCount = wordCount
     }
 
     func refreshKeyboardCaptureState(isActive: Bool, error: String?) {
@@ -279,7 +294,8 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         keyboardCaptureError: String?,
         microphoneDevices: [AudioInputDevice],
         selectedMicrophoneUID: String?,
-        selectedASRProvider: ASRProvider,
+        selectedASRProviders: ASRProviderSelection,
+        providerLoginStatuses: [ASRProvider: LoginStatus],
         canCheckForUpdates: Bool
     ) {
         model.toggleShortcut = currentToggleShortcut
@@ -293,8 +309,10 @@ final class ShortcutCapturePanel: NSObject, NSWindowDelegate {
         model.keyboardCaptureError = keyboardCaptureError
         model.microphoneDevices = microphoneDevices
         model.selectedMicrophoneUID = selectedMicrophoneUID
-        model.selectedASRProvider = selectedASRProvider
+        model.selectedASRProviders = selectedASRProviders
+        model.providerLoginStatuses = providerLoginStatuses
         model.selectedLanguage = AppLanguageStore.selected
+        model.bageshuoVocabularyWordCount = BageshuoVocabularyStore.importedWordCount
         model.canCheckForUpdates = canCheckForUpdates
         model.launchAtLoginEnabled = LaunchAtLoginStore.isEnabled
         model.refreshLocalModelStatus()
@@ -412,7 +430,8 @@ private final class SettingsPanelModel: ObservableObject {
     let appVersion: String
     @Published var microphoneDevices: [AudioInputDevice]
     @Published var selectedMicrophoneUID: String?
-    @Published var selectedASRProvider: ASRProvider
+    @Published var selectedASRProviders: ASRProviderSelection
+    @Published var providerLoginStatuses: [ASRProvider: LoginStatus]
     @Published var sendContextToAndroidASR = AndroidASRSettingsStore.sendContext
     @Published var androidPersonalLexiconEnabled = AndroidASRSettingsStore.personalLexiconEnabled
     @Published var selectedLanguage: AppLanguage
@@ -434,6 +453,7 @@ private final class SettingsPanelModel: ObservableObject {
     @Published var selectedRemoteLLMProfile = RemoteLLMSettingsStore.selectedProfile
     @Published var remoteLLMAPIKey = ""
     @Published var localVocabulary = LocalLLMSettingsStore.vocabulary
+    @Published var bageshuoVocabularyWordCount = BageshuoVocabularyStore.importedWordCount
     @Published var localPunctuationStyle = LocalLLMSettingsStore.punctuationStyle
     @Published var localRemoveFillerWords = LocalLLMSettingsStore.removeFillerWords
     @Published var localSoftenEmotionalLanguage = LocalLLMSettingsStore.softenEmotionalLanguage
@@ -466,7 +486,8 @@ private final class SettingsPanelModel: ObservableObject {
         appVersion: String,
         microphoneDevices: [AudioInputDevice],
         selectedMicrophoneUID: String?,
-        selectedASRProvider: ASRProvider,
+        selectedASRProviders: ASRProviderSelection,
+        providerLoginStatuses: [ASRProvider: LoginStatus],
         selectedLanguage: AppLanguage
     ) {
         self.toggleShortcut = toggleShortcut
@@ -481,12 +502,19 @@ private final class SettingsPanelModel: ObservableObject {
         self.appVersion = appVersion
         self.microphoneDevices = microphoneDevices
         self.selectedMicrophoneUID = selectedMicrophoneUID
-        self.selectedASRProvider = selectedASRProvider
+        self.selectedASRProviders = selectedASRProviders
+        self.providerLoginStatuses = providerLoginStatuses
         self.selectedLanguage = selectedLanguage
     }
 
     var isLoggedIn: Bool {
-        selectedASRProvider == .android || loginStatus == .loggedIn
+        selectedASRProviders.sortedProviders.allSatisfy { provider in
+            !provider.requiresLogin || providerLoginStatuses[provider] == .loggedIn
+        }
+    }
+
+    func loginStatus(for provider: ASRProvider) -> LoginStatus {
+        providerLoginStatuses[provider] ?? .notLoggedIn
     }
 
     var canEnableLocalPostProcessing: Bool {
@@ -725,13 +753,14 @@ private struct SettingsPanelView: View {
     let onResetTranslation: () -> Void
     let onClearTranslation: () -> Void
     let onSelectMicrophone: (String?) -> Void
-    let onSelectASRProvider: (ASRProvider) -> Void
+    let onSelectASRProviders: (ASRProviderSelection) -> Void
     let onSelectLanguage: (AppLanguage) -> Void
     let onDeleteLocalLLMModel: (LocalLLMModel) async throws -> Void
     let onLogin: () -> Void
     let onLogout: () -> Void
     let onCopyLoginDebugInfo: () -> Void
     let onRepairLogin: () -> Void
+    let onBageshuoVocabularyChanged: () -> Void
     let onCopyLogPath: () -> Void
     let onOpenLog: () -> Void
     let onExportLogs: () -> Void
@@ -760,8 +789,9 @@ private struct SettingsPanelView: View {
     @State private var correctionDebugError: String?
     @State private var correctionDebugTraceURL: URL?
     @State private var isRunningCorrectionDebug = false
-    @State private var isRunningASRDemoDiagnostic = false
-    @State private var selectedASRDemoProvider: ASRProvider = .web
+    @State private var runningASRDemoProviders: Set<ASRProvider> = []
+    @State private var asrDemoResults: [ASRProvider: ASRDemoDiagnosticResult] = [:]
+    @State private var asrDemoErrors: [ASRProvider: String] = [:]
     @State private var editingRemoteModelProfile: RemoteLLMModelProfile?
     @State private var isAddingRemoteModelProfile = false
 
@@ -1296,16 +1326,6 @@ private struct SettingsPanelView: View {
         )
     }
 
-    private var asrProviderBinding: Binding<ASRProvider> {
-        Binding(
-            get: { model.selectedASRProvider },
-            set: { newValue in
-                model.selectedASRProvider = newValue
-                onSelectASRProvider(newValue)
-            }
-        )
-    }
-
     private var androidASRContextBinding: Binding<Bool> {
         Binding(
             get: { model.sendContextToAndroidASR },
@@ -1335,21 +1355,22 @@ private struct SettingsPanelView: View {
                     settingsListRow(
                         L10n.text(en: "Recognition", zh: "识别方式"),
                         help: L10n.text(
-                            en: "Web uses Doubao web login.\nAndroid prepares automatically.\nDual runs both and uses AI to merge the results.",
-                            zh: "Web 使用豆包网页登录。\nAndroid 会自动准备。\n双路会同时使用两路识别，并用 AI 合并结果。"
+                            en: "Select one or more routes. Multiple routes run in parallel and use AI to merge their results. Web uses Doubao web login; Android prepares automatically; Bage Shuo uses Youdao login and realtime recognition.",
+                            zh: "可选择一个或多个渠道。多选时会并行识别，并用 AI 合并结果。Web 使用豆包网页登录，Android 会自动准备，叭哥说使用网易登录和实时识别。"
                         )
                     ) {
-                        Picker("", selection: asrProviderBinding) {
-                            ForEach(ASRProvider.allCases) { provider in
-                                Text(provider.displayName).tag(provider)
+                        ASRProviderSelectionMenu(
+                            selection: model.selectedASRProviders,
+                            loginStatuses: model.providerLoginStatuses,
+                            onSelectionChanged: { selection in
+                                model.selectedASRProviders = selection
+                                onSelectASRProviders(selection)
                             }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 220, alignment: .trailing)
-                        .focusable(false)
+                        )
+                        .frame(width: 220, height: 22, alignment: .trailing)
                     }
 
-                    if model.selectedASRProvider.usesAndroidASR {
+                    if model.selectedASRProviders.usesAndroidASR {
                         settingsDivider()
 
                         settingsListRow(L10n.text(en: "Context", zh: "上下文")) {
@@ -1378,30 +1399,17 @@ private struct SettingsPanelView: View {
 
                     settingsDivider()
 
-                    settingsListRow(L10n.text(en: "Status", zh: "状态")) {
-                        switch model.selectedASRProvider {
-                        case .web:
-                            statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Logged in", zh: "已登录") : L10n.text(en: "Not logged in", zh: "未登录"), isHealthy: model.loginStatus == .loggedIn)
-                        case .android:
-                            statusText(L10n.text(en: "Automatic", zh: "自动"), isHealthy: true)
-                        case .mix:
-                            statusText(model.loginStatus == .loggedIn ? L10n.text(en: "Web logged in + Android automatic", zh: "Web 已登录 + Android 自动") : L10n.text(en: "Web not logged in", zh: "Web 未登录"), isHealthy: model.loginStatus == .loggedIn)
-                        }
-                    }
-
-                    settingsDivider()
-
                     settingsListRow(L10n.text(en: "Account", zh: "账号")) {
-                        if model.selectedASRProvider == .android {
+                        if model.selectedASRProviders == ASRProviderSelection(.android) {
                             Button(L10n.text(en: "Reset Android Login", zh: "重置 Android 登录信息")) {
                                 resetAndroidCredentials()
                             }
                             .focusable(false)
                             .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
-                        } else if model.selectedASRProvider == .mix {
+                        } else if model.selectedASRProviders.requiresAICorrection {
                             HStack(spacing: 8) {
                                 if model.loginStatus == .loggedIn {
-                                    Button(L10n.text(en: "Refresh Web", zh: "刷新 Web"), action: onRepairLogin)
+                                    Button(L10n.text(en: "Refresh Missing", zh: "刷新缺失渠道"), action: onRepairLogin)
                                         .focusable(false)
 
                                     Button(L10n.text(en: "Log Out", zh: "退出登录")) {
@@ -1414,11 +1422,29 @@ private struct SettingsPanelView: View {
                                         .focusable(false)
                                 }
 
-                                Button(L10n.text(en: "Reset Android", zh: "重置 Android")) {
-                                    resetAndroidCredentials()
+                                if model.selectedASRProviders.usesAndroidASR {
+                                    Button(L10n.text(en: "Reset Android", zh: "重置 Android")) {
+                                        resetAndroidCredentials()
+                                    }
+                                    .focusable(false)
+                                    .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
                                 }
-                                .focusable(false)
-                                .help(L10n.text(en: "Clear cached Android IME credentials. They will be recreated on the next recording.", zh: "清除缓存的 Android 输入法凭据，下次录音会重新创建。"))
+                            }
+                        } else if model.selectedASRProviders == ASRProviderSelection(.bageshuo) {
+                            HStack(spacing: 8) {
+                                if model.loginStatus == .loggedIn {
+                                    Button(L10n.text(en: "Refresh Bage Shuo", zh: "刷新叭哥说登录"), action: onRepairLogin)
+                                        .focusable(false)
+
+                                    Button(L10n.text(en: "Log Out", zh: "退出登录")) {
+                                        onLogout()
+                                        model.loginStatus = .notLoggedIn
+                                    }
+                                    .focusable(false)
+                                } else {
+                                    Button(L10n.text(en: "Log In", zh: "登录"), action: onLogin)
+                                        .focusable(false)
+                                }
                             }
                         } else if model.loginStatus == .loggedIn {
                             HStack(spacing: 8) {
@@ -2065,6 +2091,10 @@ private struct SettingsPanelView: View {
             L10n.text(en: "Best quality", zh: "最佳质量")
         case "English · ASR cleanup":
             L10n.text(en: "English · ASR cleanup", zh: "英文 · ASR 清理")
+        case "Chinese · reasoning":
+            L10n.text(en: "Chinese · reasoning", zh: "中文 · 推理")
+        case "Chinese · quality":
+            L10n.text(en: "Chinese · quality", zh: "中文 · 质量")
         case "Local MLX model":
             L10n.text(en: "Local MLX model", zh: "本地 MLX 模型")
         default:
@@ -2814,6 +2844,21 @@ private struct SettingsPanelView: View {
                     }
             }
             .frame(width: Self.correctionContentWidth, alignment: .leading)
+
+            Text(
+                model.bageshuoVocabularyWordCount > 0
+                    ? L10n.text(
+                        en: "Bage Shuo terms synced: \(model.bageshuoVocabularyWordCount)",
+                        zh: "已同步叭哥说词条：\(model.bageshuoVocabularyWordCount)"
+                    )
+                    : L10n.text(
+                        en: "No Bage Shuo terms synced",
+                        zh: "尚未同步叭哥说词条"
+                    )
+            )
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+            .frame(width: Self.correctionContentWidth, alignment: .leading)
         }
     }
 
@@ -2850,6 +2895,7 @@ private struct SettingsPanelView: View {
         let value = phrases.joined(separator: "\n")
         model.localVocabulary = value
         LocalLLMSettingsStore.vocabulary = value
+        onBageshuoVocabularyChanged()
     }
 
     private static func normalizedVocabularyPhrases(from rawValue: String) -> [String] {
@@ -3555,35 +3601,46 @@ private struct SettingsPanelView: View {
                     settingsListRow(
                         L10n.text(en: "Recognition", zh: "语音识别"),
                         help: L10n.text(
-                            en: "Sends the bundled demo clip through one recognition route.",
-                            zh: "把内置示例音频通过单个识别渠道发送测试。"
+                            en: "Test each recognition route independently with the bundled demo clip.",
+                            zh: "分别用内置示例音频测试每一个识别渠道。"
                         ),
-                        height: 44
+                        height: nil
                     ) {
-                        HStack(spacing: 8) {
-                            Picker("", selection: $selectedASRDemoProvider) {
-                                Text("Web").tag(ASRProvider.web)
-                                Text("Android").tag(ASRProvider.android)
+                        VStack(alignment: .trailing, spacing: 6) {
+                            ForEach(ASRProvider.allCases) { provider in
+                                HStack(spacing: 8) {
+                                    Text(provider.displayName)
+                                        .frame(width: 90, alignment: .leading)
+                                    if let result = asrDemoResults[provider] {
+                                        statusText(
+                                            result.isHealthy
+                                                ? L10n.text(en: "Passed", zh: "通过")
+                                                : L10n.text(en: "Failed", zh: "失败"),
+                                            isHealthy: result.isHealthy
+                                        )
+                                    } else if asrDemoErrors[provider] != nil {
+                                        statusText(L10n.text(en: "Failed", zh: "失败"), isHealthy: false)
+                                    }
+                                    Button {
+                                        runASRDemoDiagnostic(for: provider)
+                                    } label: {
+                                        Text(
+                                            runningASRDemoProviders.contains(provider)
+                                                ? L10n.text(en: "Testing...", zh: "测试中...")
+                                                : L10n.text(en: "Test", zh: "测试")
+                                        )
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .frame(width: 78)
+                                    }
+                                    .focusable(false)
+                                    .disabled(
+                                        runningASRDemoProviders.contains(provider)
+                                            || !canRunASRDemo(provider)
+                                    )
+                                    .help(asrDemoErrors[provider] ?? "")
+                                }
                             }
-                            .pickerStyle(.segmented)
-                            .frame(width: 148)
-                            .labelsHidden()
-                            .disabled(isRunningASRDemoDiagnostic)
-
-                            Button {
-                                runASRDemoDiagnostic()
-                            } label: {
-                                Text(
-                                    isRunningASRDemoDiagnostic
-                                        ? L10n.text(en: "Testing...", zh: "测试中...")
-                                        : L10n.text(en: "Test", zh: "测试")
-                                )
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .frame(width: 78)
-                            }
-                            .focusable(false)
-                            .disabled(isRunningASRDemoDiagnostic || (selectedASRDemoProvider == .web && model.loginStatus != .loggedIn))
                         }
                     }
 
@@ -3610,7 +3667,7 @@ private struct SettingsPanelView: View {
                     ) {
                         Button(L10n.text(en: "Copy Login Diagnostics", zh: "复制登录诊断信息"), action: copyLoginDebugInfo)
                             .focusable(false)
-                            .disabled(model.selectedASRProvider.usesWebASR && model.loginStatus != .loggedIn)
+                            .disabled(model.selectedASRProviders.requiresLogin && !model.isLoggedIn)
                     }
                 }
 
@@ -3627,27 +3684,34 @@ private struct SettingsPanelView: View {
         }
     }
 
-    private func runASRDemoDiagnostic() {
-        guard !isRunningASRDemoDiagnostic else { return }
+    private func canRunASRDemo(_ provider: ASRProvider) -> Bool {
+        provider == .android || model.loginStatus(for: provider) == .loggedIn
+    }
+
+    private func runASRDemoDiagnostic(for provider: ASRProvider) {
+        guard !runningASRDemoProviders.contains(provider), canRunASRDemo(provider) else { return }
         dismissSettingsToast()
-        isRunningASRDemoDiagnostic = true
-        let provider = selectedASRDemoProvider
+        runningASRDemoProviders.insert(provider)
+        asrDemoResults[provider] = nil
+        asrDemoErrors[provider] = nil
 
         Task {
             do {
-                let result = try await ASRDemoDiagnosticRunner.run(provider: provider)
+                let result = try await ASRDemoDiagnosticRunner.run(selection: ASRProviderSelection(provider))
                 await MainActor.run {
-                    isRunningASRDemoDiagnostic = false
+                    runningASRDemoProviders.remove(provider)
+                    asrDemoResults[provider] = result
                     presentSettingsToast(
                         result.isHealthy
-                            ? L10n.text(en: "Recognition demo passed.", zh: "语音识别示例测试通过。")
-                            : L10n.text(en: "Recognition demo failed.", zh: "语音识别示例测试失败。"),
+                            ? L10n.text(en: "\(provider.displayName) demo passed.", zh: "\(provider.displayName) 示例测试通过。")
+                            : L10n.text(en: "\(provider.displayName) demo failed.", zh: "\(provider.displayName) 示例测试失败。"),
                         kind: result.isHealthy ? .success : .error
                     )
                 }
             } catch {
                 await MainActor.run {
-                    isRunningASRDemoDiagnostic = false
+                    runningASRDemoProviders.remove(provider)
+                    asrDemoErrors[provider] = TranscriptionSessionError(error).localizedDescription
                     let message = TranscriptionManager.userFacingASRErrorMessage(
                         TranscriptionSessionError(error)
                     )
@@ -4163,6 +4227,199 @@ private struct SettingsPanelView: View {
 
     private static func correctionRowContentWidth(labelWidth: CGFloat) -> CGFloat {
         settingsGroupWidth - 28 - 12 - labelWidth
+    }
+}
+
+private struct ASRProviderSelectionMenu: NSViewRepresentable {
+    let selection: ASRProviderSelection
+    let loginStatuses: [ASRProvider: LoginStatus]
+    let onSelectionChanged: (ASRProviderSelection) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+        button.isBordered = false
+        button.focusRingType = .none
+        button.alignment = .right
+        button.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        button.controlSize = .small
+        button.autoenablesItems = false
+        button.setAccessibilityLabel(L10n.text(en: "Recognition routes", zh: "识别渠道"))
+        context.coordinator.update(
+            button,
+            selection: selection,
+            loginStatuses: loginStatuses,
+            onSelectionChanged: onSelectionChanged
+        )
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.update(
+            button,
+            selection: selection,
+            loginStatuses: loginStatuses,
+            onSelectionChanged: onSelectionChanged
+        )
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private var selection = ASRProviderSelection.default
+        private var loginStatuses: [ASRProvider: LoginStatus] = [:]
+        private var onSelectionChanged: ((ASRProviderSelection) -> Void)?
+
+        func update(
+            _ button: NSPopUpButton,
+            selection: ASRProviderSelection,
+            loginStatuses: [ASRProvider: LoginStatus],
+            onSelectionChanged: @escaping (ASRProviderSelection) -> Void
+        ) {
+            self.selection = selection
+            self.loginStatuses = loginStatuses
+            self.onSelectionChanged = onSelectionChanged
+
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+
+            for provider in ASRProvider.allCases {
+                let isSelected = selection.providers.contains(provider)
+                let isEnabled = !(selection.providers.count == 1 && isSelected)
+                let item = NSMenuItem(
+                    title: provider.displayName,
+                    action: #selector(toggleProvider(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = provider.rawValue
+                item.isEnabled = isEnabled
+                item.view = ASRProviderMenuItemView(
+                    provider: provider,
+                    isSelected: isSelected,
+                    isEnabled: isEnabled,
+                    isHealthy: Self.providerStatusIsHealthy(provider, loginStatuses: loginStatuses),
+                    statusText: Self.providerStatusText(provider, loginStatuses: loginStatuses)
+                )
+                menu.addItem(item)
+            }
+
+            button.menu = menu
+            button.title = selection.displayName
+            button.setAccessibilityValue(selection.displayName)
+        }
+
+        @objc private func toggleProvider(_ sender: NSMenuItem) {
+            guard let rawValue = sender.representedObject as? String,
+                  let provider = ASRProvider(rawValue: rawValue)
+            else {
+                return
+            }
+
+            var providers = selection.providers
+            if providers.contains(provider) {
+                guard providers.count > 1 else { return }
+                providers.remove(provider)
+            } else {
+                providers.insert(provider)
+            }
+
+            onSelectionChanged?(ASRProviderSelection(providers))
+        }
+
+        private static func providerStatusText(
+            _ provider: ASRProvider,
+            loginStatuses: [ASRProvider: LoginStatus]
+        ) -> String {
+            switch provider {
+            case .android:
+                L10n.text(en: "Automatic", zh: "自动")
+            case .web, .bageshuo:
+                loginStatuses[provider] == .loggedIn
+                    ? L10n.text(en: "Logged in", zh: "已登录")
+                    : L10n.text(en: "Not logged in", zh: "未登录")
+            }
+        }
+
+        private static func providerStatusIsHealthy(
+            _ provider: ASRProvider,
+            loginStatuses: [ASRProvider: LoginStatus]
+        ) -> Bool {
+            provider == .android || loginStatuses[provider] == .loggedIn
+        }
+    }
+}
+
+private final class ASRProviderMenuItemView: NSView {
+    init(
+        provider: ASRProvider,
+        isSelected: Bool,
+        isEnabled: Bool,
+        isHealthy: Bool,
+        statusText: String
+    ) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 220, height: 26))
+        autoresizingMask = [.width]
+
+        let selectionIcon = NSImageView()
+        selectionIcon.image = NSImage(
+            systemSymbolName: "checkmark.circle.fill",
+            accessibilityDescription: nil
+        )
+        selectionIcon.translatesAutoresizingMaskIntoConstraints = false
+        selectionIcon.imageScaling = NSImageScaling.scaleProportionallyDown
+        selectionIcon.contentTintColor = isEnabled
+            ? NSColor.labelColor
+            : NSColor.disabledControlTextColor
+        selectionIcon.alphaValue = isSelected ? 1 : 0
+
+        let titleLabel = NSTextField(labelWithString: provider.displayName)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 14)
+        titleLabel.textColor = isEnabled ? .labelColor : .disabledControlTextColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+
+        let statusIcon = NSImageView()
+        statusIcon.image = NSImage(
+            systemSymbolName: isHealthy
+                ? "checkmark.circle.fill"
+                : "exclamationmark.triangle.fill",
+            accessibilityDescription: statusText
+        )
+        statusIcon.translatesAutoresizingMaskIntoConstraints = false
+        statusIcon.imageScaling = NSImageScaling.scaleProportionallyDown
+        statusIcon.contentTintColor = isEnabled
+            ? (isHealthy ? NSColor.systemGreen : NSColor.systemOrange)
+            : NSColor.disabledControlTextColor
+        statusIcon.toolTip = statusText
+        statusIcon.setAccessibilityLabel(statusText)
+
+        addSubview(selectionIcon)
+        addSubview(titleLabel)
+        addSubview(statusIcon)
+
+        NSLayoutConstraint.activate([
+            selectionIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            selectionIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            selectionIcon.widthAnchor.constraint(equalToConstant: 16),
+            selectionIcon.heightAnchor.constraint(equalToConstant: 16),
+
+            titleLabel.leadingAnchor.constraint(equalTo: selectionIcon.trailingAnchor, constant: 10),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: statusIcon.leadingAnchor, constant: -12),
+
+            statusIcon.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            statusIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusIcon.widthAnchor.constraint(equalToConstant: 16),
+            statusIcon.heightAnchor.constraint(equalToConstant: 16)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
 

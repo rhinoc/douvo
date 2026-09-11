@@ -74,7 +74,7 @@ final class AppMenuTests: XCTestCase {
 
         AppDelegate.rebuildStatusMenu(
             menu,
-            provider: .web,
+            selection: ASRProviderSelection(.web),
             loginStatus: .loggedIn,
             transcriptHistory: [],
             canCheckForUpdates: true,
@@ -94,7 +94,7 @@ final class AppMenuTests: XCTestCase {
 
         AppDelegate.rebuildStatusMenu(
             menu,
-            provider: .web,
+            selection: ASRProviderSelection(.web),
             loginStatus: .loggedIn,
             transcriptHistory: ["older transcript", "newest transcript"],
             canCheckForUpdates: true,
@@ -116,7 +116,7 @@ final class AppMenuTests: XCTestCase {
 
         AppDelegate.rebuildStatusMenu(
             menu,
-            provider: .web,
+            selection: ASRProviderSelection(.web),
             loginStatus: .loggedIn,
             transcriptHistory: [],
             canCheckForUpdates: true,
@@ -133,7 +133,7 @@ final class AppMenuTests: XCTestCase {
 
         AppDelegate.rebuildStatusMenu(
             menu,
-            provider: .android,
+            selection: ASRProviderSelection(.android),
             loginStatus: .loggedIn,
             transcriptHistory: (1...25).map { "transcript \($0)" },
             canCheckForUpdates: true,

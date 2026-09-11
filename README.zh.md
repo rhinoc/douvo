@@ -82,13 +82,14 @@ Douvo 保留豆包 ASR 路径，但把它包装成一个不绑定具体应用的
 
 ## 免责声明
 
-本项目依赖观察到的豆包 Web 和输入法客户端行为，**不是**豆包官方 API、SDK 或官方集成。
+本项目依赖观察到的豆包和网易叭哥说客户端行为，**不是**豆包或网易官方 API、SDK 或官方集成。
 
 - 你需要拥有有效的豆包账号，并自行完成登录。
 - 豆包可能随时调整网页、登录流程、设备注册、WebSocket 协议、ASR 数据格式、限流规则或访问策略。
+- 网易叭哥说可能随时调整登录流程、ticket 签名、WebSocket 协议、音频格式、限流规则或访问策略。
 - 语音识别由豆包服务端处理。使用前请自行确认豆包的服务条款和隐私政策。
 - 开启 Android 个人词库后，配置的词条会上传到豆包；词条在本地删除后仍可能保留在远端。
-- 应用会把 Web 登录参数和 Android ASR 凭据保存在本机，以便所选 provider 在不常驻浏览器窗口的情况下连接。
+- 应用会把 Web/叭哥说登录参数和 Android ASR 凭据保存在本机，以便每个所选 provider 在不常驻浏览器窗口的情况下连接。
 - 如果启用远端 AI 后处理，转写文本会发送到你配置的 provider 和 endpoint。
 - 本地 AI 后处理使用从 Hugging Face 下载或从本地文件夹加载的 MLX 模型。
 - 使用风险由使用者自行承担。维护者不对服务可用性、账号问题、数据损失、违反第三方规则或其他使用后果负责。
@@ -96,31 +97,33 @@ Douvo 保留豆包 ASR 路径，但把它包装成一个不绑定具体应用的
 
 ## 大概原理
 
-Douvo 支持三种豆包 ASR 路径：**Web**、**Android** 和 **双路**。默认是 **Web**。Android 路径参考观察到的豆包输入法客户端行为；双路会同时运行 Web 和 Android，再用 AI 后处理合并两路识别结果。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
+Douvo 支持三种 ASR 路径：豆包 **Web**、豆包 **Android** 和网易 **叭哥说**。可以在设置里选择一个或多个路径；多选时会并行运行各路识别，再用 AI 后处理合并结果。默认是 **Web**。Android 和叭哥说路径参考观察到的客户端行为。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
 
 ```mermaid
 flowchart TD
-    A[选择 Web、Android 或双路识别方式] --> B[准备所选方式需要的凭据]
+    A[选择一个或多个 Web、Android 或叭哥说路径] --> B[准备所选路径需要的凭据]
     B --> C[通过菜单栏应用触发录音]
     C --> D[AVAudioEngine 采集麦克风音频]
     D --> E{所选 ASR 路径}
     E -- Web --> F[发送 16 kHz PCM 分片到豆包 Web ASR]
     E -- Android --> G[编码 16 kHz Opus 并用 Protobuf 帧发送到豆包 Android ASR]
-    E -- 双路 --> H[同时向 Web ASR 发送 PCM 并向 Android ASR 发送 Opus Protobuf 帧]
-    F --> I[悬浮窗显示实时识别结果]
-    G --> I
-    H --> I
-    I --> J[收到最终 ASR 文本或 Web 与 Android 两路文本]
-    J --> K{是否开启 AI 后处理?}
-    K -- 否 --> O[应用确定性的标点和词库 fallback]
-    K -- 本地 --> L[在设备上运行本地 MLX 模型]
-    K -- 远端 --> M[把文本发送到用户配置的远端 LLM provider]
-    L --> N[清洗、校验并归一化纠错结果]
-    M --> N
-    N --> O
-    O --> P[通过 pasteboard 和 Command-V 插入最终文本]
-    P --> Q[安全时恢复原剪贴板文本]
-    J --> R[写入本地 trace、耗时和日志用于诊断]
+    E -- 多选 --> H[把各路所需音频格式并行发送到对应 ASR]
+    E -- 叭哥说 --> I[请求签名 ticket 并向网易流式发送 16 kHz PCM]
+    F --> J[悬浮窗显示实时识别结果]
+    G --> J
+    H --> J
+    I --> J
+    J --> K[收到最终 ASR 文本或多路文本]
+    K --> L{是否开启 AI 后处理?}
+    L -- 否 --> P[应用确定性的标点和词库 fallback]
+    L -- 本地 --> M[在设备上运行本地 MLX 模型]
+    L -- 远端 --> N[把文本发送到用户配置的远端 LLM provider]
+    M --> Q[清洗、校验并归一化纠错结果]
+    N --> Q
+    Q --> P
+    P --> R[通过 pasteboard 和 Command-V 插入最终文本]
+    R --> S[安全时恢复原剪贴板文本]
+    K --> T[写入本地 trace、耗时和日志用于诊断]
 ```
 
 ## 系统要求
@@ -177,8 +180,8 @@ open /Applications/Douvo.app
 
 ## 使用方式
 
-1. 点击菜单栏图标，选择 **Log In**。
-2. 在弹出的窗口里完成豆包登录。
+1. 点击菜单栏图标，打开 **Settings... -> Account -> Recognition**。
+2. 选择一个或多个识别 provider。叭哥说在 Douvo 没有可用登录态时会优先导入本机客户端 Cookie 并尝试恢复本机会话；如果在 Douvo 弹窗里的网易官方页面登录，则保留这份登录态作为当前凭据。账号密码、手机验证码等方式由官方页面提供，Web 仍需完成豆包登录。
 3. 把光标放到任意文本输入框。
 4. 按触发键开始录音；如果配置了按住说话，也可以按住对应按键。
 5. 说话。
@@ -186,7 +189,7 @@ open /Applications/Douvo.app
 7. 录音过程中按翻译键，可以把当前录音切换到翻译模式。
 8. 录音过程中按 **Escape** 可以取消。
 
-菜单栏里的 **Settings...** 可以修改触发键、选择麦克风、选择识别方式、刷新登录、配置 AI 功能、复制诊断信息或打开日志。
+菜单栏里的 **Settings...** 可以修改触发键、选择麦克风、选择一个或多个识别路径、刷新登录、配置 AI 功能、复制诊断信息或打开日志。
 
 ### AI 后处理
 
@@ -194,8 +197,10 @@ open /Applications/Douvo.app
 
 - 选择 **Local** 下载内置 MLX 模型，或添加本地 MLX 模型文件夹。
 - 内置 **S1-mini by Superwhisper 4bit**（`s1Mini`）是一个仅支持英文、335 MB 的 ASR 清理模型，适合普通英文口述整理。中文、中英混合、翻译或选区编辑请使用 Qwen3.5 模型。
+- 内置 **Spark-X2.5 1.7B 和 4B**（`sparkX25OneSevenB`、`sparkX25FourB`）会通过原生 Swift/MLX Spark 架构在本机运行讯飞开源模型，适合中文纠错和推理；原始 BF16 权重大小约为 3.4 GB 和 8.2 GB。
 - 选择 **Remote** 添加 provider、base URL、model name 和 API key。
 - 添加用户词库，覆盖项目术语、文件路径、产品名称和常见 ASR 错词。
+- 如果选择了叭哥说且已登录，Douvo 会自动把叭哥说账号词库合并到本地词库；本地词库新增词条后会自动添加到叭哥说，删除本地词条不会删除远端词条。
 - 选择 Natural、Concise、Structured 或 Custom 等输出风格，并调整风格强度。
 - 配置翻译快捷键和目标语言。
 - 配置可选上下文，例如当前时间、前台应用和窗口标题。

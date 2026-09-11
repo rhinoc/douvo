@@ -105,7 +105,7 @@ enum LogExportStore {
             "created_at": isoTimestamp(),
             "export_id": createdAt,
             "app_version": appVersion,
-            "selected_asr_provider": ASRProviderStore.selected.rawValue,
+            "selected_asr_providers": ASRProviderStore.selected.storageValue,
             "included": [
                 "Logs/douvo.log and rotated douvo.*.log files",
                 "Traces/*.json",

@@ -2,7 +2,7 @@ import Foundation
 
 struct ASRLabOptions: Equatable {
     let audioURL: URL
-    let provider: ASRProvider
+    let selection: ASRProviderSelection
     let context: String
     let vocabulary: String
 }
@@ -11,19 +11,21 @@ enum ASRLabCommand {
     static func options(from arguments: [String]) throws -> ASRLabOptions {
         guard let commandIndex = arguments.firstIndex(of: "--asr-lab"),
               arguments.indices.contains(commandIndex + 1) else {
-            throw commandError("Usage: Douvo --asr-lab <audio-file> [--provider web|android|mix] [--vocabulary <terms>]")
+            throw commandError("Usage: Douvo --asr-lab <audio-file> [--providers web,android,bageshuo] [--vocabulary <terms>]")
         }
 
         let audioURL = URL(fileURLWithPath: arguments[commandIndex + 1])
-        let provider: ASRProvider
-        if let providerIndex = arguments.firstIndex(of: "--provider") {
-            guard arguments.indices.contains(providerIndex + 1),
-                  let parsed = ASRProvider(rawValue: arguments[providerIndex + 1]) else {
-                throw commandError("Invalid ASR provider; expected web, android, or mix")
+        let selection: ASRProviderSelection
+        let providersFlag = arguments.firstIndex(of: "--providers")
+            ?? arguments.firstIndex(of: "--provider")
+        if let providersFlag {
+            guard arguments.indices.contains(providersFlag + 1),
+                  let parsed = ASRProviderSelection.parse(arguments[providersFlag + 1]) else {
+                throw commandError("Invalid ASR providers; expected a comma-separated list of web, android, and bageshuo")
             }
-            provider = parsed
+            selection = parsed
         } else {
-            provider = .android
+            selection = ASRProviderSelection(.android)
         }
 
         let context: String
@@ -48,7 +50,7 @@ enum ASRLabCommand {
 
         return ASRLabOptions(
             audioURL: audioURL,
-            provider: provider,
+            selection: selection,
             context: context,
             vocabulary: vocabulary
         )
@@ -62,7 +64,7 @@ enum ASRLabCommand {
             }
 
             let result = try await ASRDemoDiagnosticRunner.run(
-                provider: options.provider,
+                selection: options.selection,
                 audioURL: options.audioURL,
                 androidContext: options.context,
                 androidVocabulary: options.vocabulary

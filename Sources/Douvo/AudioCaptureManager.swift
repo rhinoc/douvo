@@ -84,10 +84,16 @@ struct AudioLevelVisualizer {
 }
 
 final class AudioCaptureManager: @unchecked Sendable {
-    enum CaptureMode {
-        case webPCM
-        case androidOpus
-        case webPCMAndAndroidOpus
+    struct CaptureMode: OptionSet, Sendable {
+        let rawValue: Int
+
+        static let webPCM = CaptureMode(rawValue: 1 << 0)
+        static let bageshuoPCM = CaptureMode(rawValue: 1 << 1)
+        static let androidOpus = CaptureMode(rawValue: 1 << 2)
+
+        var usesWebPCM: Bool { contains(.webPCM) }
+        var usesBageshuoPCM: Bool { contains(.bageshuoPCM) }
+        var usesAndroidOpus: Bool { contains(.androidOpus) }
     }
 
     private enum CaptureState {
@@ -115,22 +121,30 @@ final class AudioCaptureManager: @unchecked Sendable {
     private var androidOpusPacketCount = 0
     private var androidOpusByteCount = 0
     private var androidOpusSummarySamples: [String] = []
+    private var bageshuoPCMChunkCount = 0
+    private var bageshuoPCMByteCount = 0
+    private var bageshuoPCMSummarySamples: [String] = []
 
     // Align outbound packets to the doubao web client: 2048 samples @16kHz ≈ 128ms.
     private static let packetSampleCount = 2048
     private static let packetByteCount = packetSampleCount * 2
+    // Bage Shuo's default realtime frame is 200ms of 16kHz mono S16LE audio.
+    private static let bageshuoPacketSampleCount = 3200
+    private static let bageshuoPacketByteCount = bageshuoPacketSampleCount * 2
     private static let levelBufferSampleCount: AVAudioFrameCount = 512
     private static let tailSilencePacketCount = 2
     private static let opusFrameSampleCount = 320
     private static let androidOpusTailSilenceFrameCount = 25
     private static let maxSummarySamples = 12
     private var pcmAccumulator = Data()
+    private var bageshuoPCMAccumulator = Data()
     private var opusSampleAccumulator: [Float] = []
     private var debugAudioRecorder: RecentAudioRecorder?
     private var inputConditioner = AudioInputConditioner()
 
     var onAudioData: ((Data) -> Void)?
     var onWebPCMData: ((Data) -> Void)?
+    var onBageshuoPCMData: ((Data) -> Void)?
     var onAndroidOpusData: ((Data) -> Void)?
     var onLevel: ((Float) -> Void)?
 
@@ -203,6 +217,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
         resetCaptureMetrics()
         pcmAccumulator.removeAll(keepingCapacity: true)
+        bageshuoPCMAccumulator.removeAll(keepingCapacity: true)
         opusSampleAccumulator.removeAll(keepingCapacity: true)
         inputConditioner.reset()
         debugAudioRecorder = RecentAudioRecorder.start()
@@ -277,6 +292,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         converter = nil
         opusEncoder = nil
         pcmAccumulator.removeAll(keepingCapacity: true)
+        bageshuoPCMAccumulator.removeAll(keepingCapacity: true)
         opusSampleAccumulator.removeAll(keepingCapacity: true)
         _ = debugAudioRecorder?.finish()
         debugAudioRecorder = nil
@@ -340,6 +356,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             flushTailAudio()
         } else {
             pcmAccumulator.removeAll(keepingCapacity: true)
+            bageshuoPCMAccumulator.removeAll(keepingCapacity: true)
             opusSampleAccumulator.removeAll(keepingCapacity: true)
         }
         opusEncoder = nil
@@ -505,8 +522,9 @@ final class AudioCaptureManager: @unchecked Sendable {
             onLevel(level)
         }
 
-        switch captureMode {
-        case .webPCM:
+        debugAudioRecorder?.append(pcm)
+
+        if captureMode.usesWebPCM {
             pcmAccumulator.append(pcm)
             while pcmAccumulator.count >= Self.packetByteCount {
                 let packet = pcmAccumulator.prefix(Self.packetByteCount)
@@ -515,19 +533,18 @@ final class AudioCaptureManager: @unchecked Sendable {
                 recordWebPCMPacket(bytes: packet.count)
                 emitWebPCMPacket(Data(packet))
             }
-        case .androidOpus:
-            debugAudioRecorder?.append(pcm)
-            opusSampleAccumulator.append(contentsOf: conditionedSamples)
-            emitAvailableOpusPackets()
-        case .webPCMAndAndroidOpus:
-            pcmAccumulator.append(pcm)
-            while pcmAccumulator.count >= Self.packetByteCount {
-                let packet = pcmAccumulator.prefix(Self.packetByteCount)
-                pcmAccumulator.removeFirst(Self.packetByteCount)
+        }
+        if captureMode.usesBageshuoPCM {
+            bageshuoPCMAccumulator.append(pcm)
+            while bageshuoPCMAccumulator.count >= Self.bageshuoPacketByteCount {
+                let packet = bageshuoPCMAccumulator.prefix(Self.bageshuoPacketByteCount)
+                bageshuoPCMAccumulator.removeFirst(Self.bageshuoPacketByteCount)
                 chunkCount += 1
-                recordWebPCMPacket(bytes: packet.count)
-                emitWebPCMPacket(Data(packet))
+                recordBageshuoPCMPacket(bytes: packet.count)
+                emitBageshuoPCMPacket(Data(packet))
             }
+        }
+        if captureMode.usesAndroidOpus {
             opusSampleAccumulator.append(contentsOf: conditionedSamples)
             emitAvailableOpusPackets()
         }
@@ -548,17 +565,18 @@ final class AudioCaptureManager: @unchecked Sendable {
     private func flushTailAudio() {
         guard hasAudioConsumer else {
             pcmAccumulator.removeAll(keepingCapacity: true)
+            bageshuoPCMAccumulator.removeAll(keepingCapacity: true)
             opusSampleAccumulator.removeAll(keepingCapacity: true)
             return
         }
 
-        switch captureMode {
-        case .webPCM:
+        if captureMode.usesWebPCM {
             flushWebTailAudio()
-        case .androidOpus:
-            flushAndroidOpusTailAudio()
-        case .webPCMAndAndroidOpus:
-            flushWebTailAudio()
+        }
+        if captureMode.usesBageshuoPCM {
+            flushBageshuoTailAudio()
+        }
+        if captureMode.usesAndroidOpus {
             flushAndroidOpusTailAudio()
         }
     }
@@ -582,6 +600,31 @@ final class AudioCaptureManager: @unchecked Sendable {
             emitWebPCMPacket(silencePacket)
         }
         AppLog.info("Audio tail flushed remainderBytes=\(flushedRemainderBytes) silencePackets=\(Self.tailSilencePacketCount)")
+    }
+
+    private func flushBageshuoTailAudio() {
+        var flushedRemainderBytes = 0
+        if !bageshuoPCMAccumulator.isEmpty {
+            flushedRemainderBytes = bageshuoPCMAccumulator.count
+            if bageshuoPCMAccumulator.count < Self.bageshuoPacketByteCount {
+                bageshuoPCMAccumulator.append(
+                    Data(count: Self.bageshuoPacketByteCount - bageshuoPCMAccumulator.count)
+                )
+            }
+            while !bageshuoPCMAccumulator.isEmpty {
+                let packet = bageshuoPCMAccumulator.prefix(Self.bageshuoPacketByteCount)
+                bageshuoPCMAccumulator.removeFirst(min(Self.bageshuoPacketByteCount, bageshuoPCMAccumulator.count))
+                recordBageshuoPCMPacket(bytes: packet.count)
+                emitBageshuoPCMPacket(Data(packet))
+            }
+        }
+
+        let silencePacket = Data(count: Self.bageshuoPacketByteCount)
+        for _ in 0..<Self.tailSilencePacketCount {
+            recordBageshuoPCMPacket(bytes: silencePacket.count)
+            emitBageshuoPCMPacket(silencePacket)
+        }
+        AppLog.info("Bage Shuo audio tail flushed remainderBytes=\(flushedRemainderBytes) silencePackets=\(Self.tailSilencePacketCount)")
     }
 
     private func flushAndroidOpusTailAudio() {
@@ -628,12 +671,20 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
     }
 
+    private func recordBageshuoPCMPacket(bytes: Int) {
+        bageshuoPCMChunkCount += 1
+        bageshuoPCMByteCount += bytes
+        if Self.shouldSampleProgress(bageshuoPCMChunkCount) {
+            Self.appendSummarySample("\(bageshuoPCMChunkCount):\(bytes)", to: &bageshuoPCMSummarySamples)
+        }
+    }
+
     private func logCaptureSummary(recordingURL: URL?) {
         let levelRange = levelSampleCount > 0
             ? "\(Self.format(levelMin))...\(Self.format(levelMax)) last=\(Self.format(levelLast))"
             : "none"
         AppLog.info(
-            "Audio capture summary mode=\(captureMode.logName) totalPackets=\(chunkCount) levelSamples=\(levelSampleCount) levelRange=\(levelRange) levelSamplesPreview=\(Self.formatSamples(levelSummarySamples)) webPackets=\(webPCMChunkCount) webBytes=\(webPCMByteCount) webPacketSamples=\(Self.formatSamples(webPCMSummarySamples)) androidPackets=\(androidOpusPacketCount) androidBytes=\(androidOpusByteCount) androidPacketSamples=\(Self.formatSamples(androidOpusSummarySamples)) recordingSaved=\(recordingURL != nil)"
+            "Audio capture summary mode=\(captureMode.logName) totalPackets=\(chunkCount) levelSamples=\(levelSampleCount) levelRange=\(levelRange) levelSamplesPreview=\(Self.formatSamples(levelSummarySamples)) webPackets=\(webPCMChunkCount) webBytes=\(webPCMByteCount) webPacketSamples=\(Self.formatSamples(webPCMSummarySamples)) bageshuoPackets=\(bageshuoPCMChunkCount) bageshuoBytes=\(bageshuoPCMByteCount) bageshuoPacketSamples=\(Self.formatSamples(bageshuoPCMSummarySamples)) androidPackets=\(androidOpusPacketCount) androidBytes=\(androidOpusByteCount) androidPacketSamples=\(Self.formatSamples(androidOpusSummarySamples)) recordingSaved=\(recordingURL != nil)"
         )
     }
 
@@ -650,6 +701,9 @@ final class AudioCaptureManager: @unchecked Sendable {
         androidOpusPacketCount = 0
         androidOpusByteCount = 0
         androidOpusSummarySamples.removeAll(keepingCapacity: true)
+        bageshuoPCMChunkCount = 0
+        bageshuoPCMByteCount = 0
+        bageshuoPCMSummarySamples.removeAll(keepingCapacity: true)
     }
 
     private static func shouldSampleProgress(_ count: Int) -> Bool {
@@ -673,9 +727,12 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func emitWebPCMPacket(_ data: Data) {
-        debugAudioRecorder?.append(data)
         onWebPCMData?(data)
         onAudioData?(data)
+    }
+
+    private func emitBageshuoPCMPacket(_ data: Data) {
+        onBageshuoPCMData?(data)
     }
 
     private func emitAndroidOpusPacket(_ data: Data) {
@@ -684,7 +741,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private var hasAudioConsumer: Bool {
-        onAudioData != nil || onWebPCMData != nil || onAndroidOpusData != nil
+        onAudioData != nil || onWebPCMData != nil || onBageshuoPCMData != nil || onAndroidOpusData != nil
     }
 
     private static func currentDefaultInputDevice() -> (id: AudioDeviceID, name: String)? {
@@ -718,30 +775,37 @@ final class AudioCaptureManager: @unchecked Sendable {
 
 struct DemoASRAudioPackets: Sendable {
     let webPCM: [Data]
+    let bageshuoPCM: [Data]
     let androidOpus: [Data]
     let sampleCount: Int
 }
 
 enum DemoASRAudioPipeline {
     private static let webPacketSampleCount = 2048
+    private static let bageshuoPacketSampleCount = 3200
     private static let androidOpusFrameSampleCount = 320
     private static let webTailSilencePacketCount = 2
     private static let androidOpusTailSilenceFrameCount = 25
 
-    static func packets(from fileURL: URL, provider: ASRProvider) throws -> DemoASRAudioPackets {
+    static func packets(from fileURL: URL, selection: ASRProviderSelection) throws -> DemoASRAudioPackets {
         let samples = try samples16kMonoFloat(from: fileURL)
         var webPackets: [Data] = []
+        var bageshuoPackets: [Data] = []
         var androidPackets: [Data] = []
 
-        if provider.usesWebASR {
+        if selection.usesWebASR {
             webPackets = webPCMPackets(from: samples)
         }
-        if provider.usesAndroidASR {
+        if selection.usesBageshuoASR {
+            bageshuoPackets = bageshuoPCMPackets(from: samples)
+        }
+        if selection.usesAndroidASR {
             androidPackets = try androidOpusPackets(from: samples)
         }
 
         return DemoASRAudioPackets(
             webPCM: webPackets,
+            bageshuoPCM: bageshuoPackets,
             androidOpus: androidPackets,
             sampleCount: samples.count
         )
@@ -811,6 +875,29 @@ enum DemoASRAudioPipeline {
         return packets
     }
 
+    private static func bageshuoPCMPackets(from samples: [Float]) -> [Data] {
+        var pcm = pcm16Data(from: samples)
+        let packetByteCount = bageshuoPacketSampleCount * 2
+        var packets: [Data] = []
+
+        if !pcm.isEmpty, pcm.count % packetByteCount != 0 {
+            pcm.append(Data(count: packetByteCount - (pcm.count % packetByteCount)))
+        }
+
+        var index = 0
+        while index < pcm.count {
+            let end = min(index + packetByteCount, pcm.count)
+            packets.append(pcm.subdata(in: index..<end))
+            index = end
+        }
+
+        let silence = Data(count: packetByteCount)
+        for _ in 0..<webTailSilencePacketCount {
+            packets.append(silence)
+        }
+        return packets
+    }
+
     private static func androidOpusPackets(from samples: [Float]) throws -> [Data] {
         var input = samples
         if input.count % androidOpusFrameSampleCount != 0 {
@@ -846,23 +933,11 @@ enum DemoASRAudioPipeline {
 
 private extension AudioCaptureManager.CaptureMode {
     var logName: String {
-        switch self {
-        case .webPCM:
-            "web_pcm"
-        case .androidOpus:
-            "android_opus"
-        case .webPCMAndAndroidOpus:
-            "web_pcm_and_android_opus"
-        }
-    }
-
-    var usesAndroidOpus: Bool {
-        switch self {
-        case .webPCM:
-            false
-        case .androidOpus, .webPCMAndAndroidOpus:
-            true
-        }
+        var routes: [String] = []
+        if usesWebPCM { routes.append("web_pcm") }
+        if usesBageshuoPCM { routes.append("bageshuo_pcm") }
+        if usesAndroidOpus { routes.append("android_opus") }
+        return routes.joined(separator: "+")
     }
 }
 

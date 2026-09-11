@@ -6,6 +6,8 @@ final class LocalLLMDownloadManagerTests: XCTestCase {
     func testBuiltInMLXRepositoryIDsCanBeParsedForDownloads() {
         XCTAssertNotNil(LocalLLMModel.hubRepoID(from: "mlx-community/Qwen3.5-0.8B-MLX-4bit"))
         XCTAssertNotNil(LocalLLMModel.hubRepoID(from: "mlx-community/Qwen3.5-0.8B-8bit"))
+        XCTAssertNotNil(LocalLLMModel.hubRepoID(from: "XHToken/Spark-X2.5-1.7B"))
+        XCTAssertNotNil(LocalLLMModel.hubRepoID(from: "XHToken/Spark-X2.5-4B"))
         XCTAssertNil(LocalLLMModel.hubRepoID(from: "missing-namespace"))
     }
 

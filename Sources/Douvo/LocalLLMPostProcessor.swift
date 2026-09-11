@@ -10,6 +10,7 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
     enum PromptFormat: Hashable, Sendable {
         case douvo
         case s1Mini
+        case spark2_5
     }
 
     enum Source: Hashable, Sendable {
@@ -38,6 +39,10 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
 
     var isS1Mini: Bool {
         promptFormat == .s1Mini
+    }
+
+    var isSpark2_5: Bool {
+        promptFormat == .spark2_5
     }
 
     var repositoryID: String {
@@ -121,6 +126,22 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
         repositoryID: "mlx-community/S1-mini-MLX-4bit",
         promptFormat: .s1Mini
     )
+    static let sparkX25OneSevenB = builtIn(
+        rawValue: "sparkX25OneSevenB",
+        displayName: "Spark-X2.5 1.7B",
+        detailText: "Chinese · reasoning",
+        downloadSizeText: "3.4 GB",
+        repositoryID: "XHToken/Spark-X2.5-1.7B",
+        promptFormat: .spark2_5
+    )
+    static let sparkX25FourB = builtIn(
+        rawValue: "sparkX25FourB",
+        displayName: "Spark-X2.5 4B",
+        detailText: "Chinese · quality",
+        downloadSizeText: "8.2 GB",
+        repositoryID: "XHToken/Spark-X2.5-4B",
+        promptFormat: .spark2_5
+    )
     static var allCases: [LocalLLMModel] {
         builtInCases + LocalLLMSettingsStore.customModels
     }
@@ -203,6 +224,8 @@ struct LocalLLMModel: Hashable, Identifiable, Sendable {
     private static let builtInCases: [LocalLLMModel] = [
         .light,
         .s1Mini,
+        .sparkX25OneSevenB,
+        .sparkX25FourB,
         .qwen35EightBit08B,
         .qwen35EightBit2B,
         .quality
@@ -326,7 +349,7 @@ struct LocalLLMPromptConfiguration: Sendable {
         LocalLLMPromptConfiguration(
             systemPromptTemplate: LocalLLMSettingsStore.systemPrompt,
             userPromptTemplate: LocalLLMSettingsStore.userPromptTemplate,
-            vocabulary: LocalLLMSettingsStore.vocabulary,
+            vocabulary: LocalLLMSettingsStore.effectiveVocabulary,
             punctuationStyle: LocalLLMSettingsStore.punctuationStyle,
             removeFillerWords: LocalLLMSettingsStore.removeFillerWords,
             softenEmotionalLanguage: LocalLLMSettingsStore.softenEmotionalLanguage,
@@ -947,15 +970,26 @@ actor LocalLLMPostProcessor {
             let task = Task {
                 try Task.checkCancellation()
                 AppLog.info("Loading local LLM model=\(model.repositoryID)")
-                let container = try await #huggingFaceLoadModelContainer(
-                    configuration: model.configuration,
-                    progressHandler: { progress in
-                        let fractionCompleted = progress.fractionCompleted
-                        onProgress?(fractionCompleted)
-                        let percent = Int(fractionCompleted * 100)
-                        AppLog.info("Local LLM download model=\(model.repositoryID) progress=\(percent)% completed=\(progress.completedUnitCount) total=\(progress.totalUnitCount)")
-                    }
-                )
+                let progressHandler: @Sendable (Progress) -> Void = { progress in
+                    let fractionCompleted = progress.fractionCompleted
+                    onProgress?(fractionCompleted)
+                    let percent = Int(fractionCompleted * 100)
+                    AppLog.info("Local LLM download model=\(model.repositoryID) progress=\(percent)% completed=\(progress.completedUnitCount) total=\(progress.totalUnitCount)")
+                }
+                let container: ModelContainer
+                if model.isSpark2_5 {
+                    container = try await Spark2_5ModelFactory.shared.loadContainer(
+                        from: #hubDownloader(),
+                        using: #huggingFaceTokenizerLoader(),
+                        configuration: model.configuration,
+                        progressHandler: progressHandler
+                    )
+                } else {
+                    container = try await #huggingFaceLoadModelContainer(
+                        configuration: model.configuration,
+                        progressHandler: progressHandler
+                    )
+                }
                 try Task.checkCancellation()
                 onProgress?(1)
                 AppLog.info("Loaded local LLM model=\(model.repositoryID)")
@@ -2130,7 +2164,7 @@ actor LocalLLMPostProcessor {
         let lowercasedOutput = output.lowercased()
         guard !blockedResponsePrefixes.contains(where: { lowercasedOutput.hasPrefix($0) }) else { return false }
         guard !blockedResponseFragments.contains(where: { lowercasedOutput.contains($0) }) else { return false }
-        guard !looksLikeMixPromptLeak(lowercasedOutput) else { return false }
+        guard !looksLikeMultiRoutePromptLeak(lowercasedOutput) else { return false }
         return true
     }
 
@@ -2188,26 +2222,27 @@ actor LocalLLMPostProcessor {
         "中置信度"
     ]
 
-    private static func looksLikeMixPromptLeak(_ lowercasedOutput: String) -> Bool {
+    private static func looksLikeMultiRoutePromptLeak(_ lowercasedOutput: String) -> Bool {
         let directInstructionMarkers = [
-            "本次语音输入有两路 asr 识别结果",
-            "请综合两路信号",
-            "两路内容可能有重叠",
-            "双路 asr 输入"
+            "本次语音输入有多路 asr 识别结果",
+            "请综合所有信号",
+            "多路内容可能有重叠",
+            "多路 asr 输入"
         ]
         if directInstructionMarkers.contains(where: { lowercasedOutput.contains($0) }) {
             return true
         }
 
-        let hasResultOne = lowercasedOutput.contains("识别结果一")
-        let hasResultTwo = lowercasedOutput.contains("识别结果二")
-        if hasResultOne && hasResultTwo {
+        let hasMultipleProviderLabels = ["web", "android", "bage shuo", "叭哥说"]
+            .filter { lowercasedOutput.contains($0) }
+            .count >= 2
+        if lowercasedOutput.contains("识别结果") && hasMultipleProviderLabels {
             return true
         }
 
-        let hasProviderLabel = lowercasedOutput.contains("doubao web")
+        let hasDoubaoProviderLabel = lowercasedOutput.contains("doubao web")
             || lowercasedOutput.contains("doubao android")
-        return hasProviderLabel && (hasResultOne || hasResultTwo)
+        return hasDoubaoProviderLabel && lowercasedOutput.contains("识别结果")
     }
 
     private static func now() -> TimeInterval {

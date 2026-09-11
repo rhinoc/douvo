@@ -1,0 +1,22 @@
+{
+  "name": "spark-x25-smoke",
+  "model": "sparkX25OneSevenB",
+  "runs": 1,
+  "punctuationStyle": "complete",
+  "removeFillerWords": true,
+  "softenEmotionalLanguage": false,
+  "outputStyle": "natural",
+  "outputStyleStrength": "light",
+  "reasoningMode": "disabled",
+  "maxTokens": 64,
+  "systemPrompt": "你是 ASR 转写后处理器。只输出整理后的正文，不解释。",
+  "userPrompt": "原始转写：\n{{original}}\n\n只输出最终正文。",
+  "inputs": [
+    {
+      "id": "chinese-correction",
+      "text": "帮我把会议改到下午四点",
+      "mustContain": "下午四点",
+      "allowFallback": false
+    }
+  ]
+}

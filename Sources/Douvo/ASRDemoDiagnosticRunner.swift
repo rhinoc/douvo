@@ -1,7 +1,7 @@
 import Foundation
 
 struct ASRDemoDiagnosticResult: Sendable {
-    let provider: ASRProvider
+    let selection: ASRProviderSelection
     let openedProviders: [String]
     let finishedProviders: [String]
     let resultCharactersByProvider: [String: Int]
@@ -12,7 +12,7 @@ struct ASRDemoDiagnosticResult: Sendable {
     let durationMilliseconds: Int
 
     var isHealthy: Bool {
-        let activeProviders = provider.activeProviderKeys
+        let activeProviders = selection.activeProviderKeys
         return errorsByProvider.isEmpty
             && activeProviders.isSubset(of: Set(openedProviders))
             && activeProviders.isSubset(of: Set(finishedProviders))
@@ -20,7 +20,7 @@ struct ASRDemoDiagnosticResult: Sendable {
     }
 
     var summary: String {
-        let routeSummary = provider.activeProviderKeys.sorted().map { route in
+        let routeSummary = selection.activeProviderKeys.sorted().map { route in
             let chars = resultCharactersByProvider[route] ?? 0
             if let error = errorsByProvider[route] {
                 return "\(route): failed (\(error))"
@@ -33,36 +33,44 @@ struct ASRDemoDiagnosticResult: Sendable {
             }
             return "\(route): not opened"
         }.joined(separator: "; ")
-        return "\(provider.rawValue) demo \(isHealthy ? "ok" : "failed") in \(durationMilliseconds)ms; \(routeSummary)"
+        return "\(selection.storageValue) demo \(isHealthy ? "ok" : "failed") in \(durationMilliseconds)ms; \(routeSummary)"
     }
 }
 
 enum ASRDemoDiagnosticRunner {
-    static func run(provider: ASRProvider) async throws -> ASRDemoDiagnosticResult {
+    static func run(selection: ASRProviderSelection) async throws -> ASRDemoDiagnosticResult {
         let audioURL = try DemoAudioStore.url()
-        return try await run(provider: provider, audioURL: audioURL)
+        return try await run(selection: selection, audioURL: audioURL)
     }
 
     static func run(
-        provider: ASRProvider,
+        selection: ASRProviderSelection,
         audioURL: URL,
         androidContext: String = "",
         androidVocabulary: String = ""
     ) async throws -> ASRDemoDiagnosticResult {
-        let packets = try DemoASRAudioPipeline.packets(from: audioURL, provider: provider)
-        AppLog.info("ASR demo diagnostic audio prepared provider=\(provider.rawValue) path=\(audioURL.path) samples=\(packets.sampleCount) webPackets=\(packets.webPCM.count) androidPackets=\(packets.androidOpus.count)")
+        let packets = try DemoASRAudioPipeline.packets(from: audioURL, selection: selection)
+        AppLog.info("ASR demo diagnostic audio prepared providers=\(selection.storageValue) path=\(audioURL.path) samples=\(packets.sampleCount) webPackets=\(packets.webPCM.count) bageshuoPackets=\(packets.bageshuoPCM.count) androidPackets=\(packets.androidOpus.count)")
 
         var webParams: DoubaoASRParams?
-        if provider.usesWebASR {
+        if selection.usesWebASR {
             guard let params = ASRParamsStore.load() else {
                 throw NSError(domain: "Douvo.ASRDemo", code: 1, userInfo: [NSLocalizedDescriptionKey: "Web recognition parameters are missing"])
             }
             webParams = params
         }
 
+        var bageshuoParams: BageshuoASRParams?
+        if selection.usesBageshuoASR {
+            guard let params = BageshuoASRParamsStore.load() else {
+                throw NSError(domain: "Douvo.ASRDemo", code: 3, userInfo: [NSLocalizedDescriptionKey: "Bage Shuo recognition parameters are missing"])
+            }
+            bageshuoParams = params
+        }
+
         var androidCredentials: DoubaoAndroidCredentials?
         var usePersonalLexicon = false
-        if provider.usesAndroidASR {
+        if selection.usesAndroidASR {
             let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
             androidCredentials = credentials
             let words = DoubaoAndroidPersonalLexicon.words(from: androidVocabulary)
@@ -76,9 +84,10 @@ enum ASRDemoDiagnosticRunner {
             }
         }
 
-        let session = ASRDemoDiagnosticSession(provider: provider, audioURL: audioURL)
+        let session = ASRDemoDiagnosticSession(selection: selection, audioURL: audioURL)
         return try await session.run(
             webParams: webParams,
+            bageshuoParams: bageshuoParams,
             androidCredentials: androidCredentials,
             androidContext: androidContext,
             usePersonalLexicon: usePersonalLexicon,
@@ -101,12 +110,13 @@ enum ASRDemoDiagnosticRunner {
 }
 
 private final class ASRDemoDiagnosticSession: @unchecked Sendable {
-    private let provider: ASRProvider
+    private let selection: ASRProviderSelection
     private let audioURL: URL
     private let activeProviders: Set<String>
     private let lock = NSLock()
     private let startedAt = Date()
     private var webClient: DoubaoASRClient?
+    private var bageshuoClient: BageshuoASRClient?
     private var androidClient: DoubaoAndroidASRClient?
     private var openedProviders = Set<String>()
     private var finishedProviders = Set<String>()
@@ -114,14 +124,15 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     private var errorsByProvider: [String: String] = [:]
     private var errorDetailsByProvider: [String: TranscriptionSessionError] = [:]
 
-    init(provider: ASRProvider, audioURL: URL) {
-        self.provider = provider
+    init(selection: ASRProviderSelection, audioURL: URL) {
+        self.selection = selection
         self.audioURL = audioURL
-        activeProviders = provider.activeProviderKeys
+        activeProviders = selection.activeProviderKeys
     }
 
     func run(
         webParams: DoubaoASRParams?,
+        bageshuoParams: BageshuoASRParams?,
         androidCredentials: DoubaoAndroidCredentials?,
         androidContext: String,
         usePersonalLexicon: Bool,
@@ -132,6 +143,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         do {
             try await connect(
                 webParams: webParams,
+                bageshuoParams: bageshuoParams,
                 androidCredentials: androidCredentials,
                 androidContext: androidContext,
                 usePersonalLexicon: usePersonalLexicon
@@ -160,7 +172,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     }
 
     private func configureClients() {
-        if provider.usesWebASR {
+        if selection.usesWebASR {
             let client = DoubaoASRClient()
             client.onOpen = { [weak self] in self?.markOpened("web") }
             client.onResult = { [weak self] result in self?.recordResult(result) }
@@ -175,7 +187,22 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             webClient = client
         }
 
-        if provider.usesAndroidASR {
+        if selection.usesBageshuoASR {
+            let client = BageshuoASRClient()
+            client.onOpen = { [weak self] in self?.markOpened("bageshuo") }
+            client.onResult = { [weak self] result in self?.recordResult(result) }
+            client.onFinish = { [weak self] in self?.markFinished("bageshuo") }
+            client.onError = { [weak self] error in self?.markError(provider: "bageshuo", error: TranscriptionSessionError(error)) }
+            client.onAuthError = { [weak self] error in
+                self?.markError(
+                    provider: "bageshuo",
+                    error: TranscriptionSessionError(error)
+                )
+            }
+            bageshuoClient = client
+        }
+
+        if selection.usesAndroidASR {
             let client = DoubaoAndroidASRClient()
             client.onOpen = { [weak self] in self?.markOpened("android") }
             client.onResult = { [weak self] result in self?.recordResult(result) }
@@ -193,12 +220,16 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
 
     private func connect(
         webParams: DoubaoASRParams?,
+        bageshuoParams: BageshuoASRParams?,
         androidCredentials: DoubaoAndroidCredentials?,
         androidContext: String,
         usePersonalLexicon: Bool
     ) async throws {
         if let webParams {
             webClient?.connect(params: webParams)
+        }
+        if let bageshuoParams {
+            bageshuoClient?.connect(params: bageshuoParams)
         }
         if let androidCredentials {
             try await androidClient?.connect(
@@ -245,6 +276,16 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
                 }
             }
 
+            if openedProvidersSnapshot.contains("bageshuo"), let bageshuoClient {
+                group.addTask {
+                    for packet in packets.bageshuoPCM {
+                        bageshuoClient.sendAudio(packet)
+                        try await Task.sleep(for: .milliseconds(200))
+                    }
+                    bageshuoClient.finishSending()
+                }
+            }
+
             if openedProvidersSnapshot.contains("android"), let androidClient {
                 group.addTask {
                     for packet in packets.androidOpus {
@@ -272,6 +313,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
 
     private func disconnect() async {
         webClient?.disconnect()
+        bageshuoClient?.disconnect()
         androidClient?.disconnect()
         await androidClient?.waitUntilDisconnected()
     }
@@ -364,7 +406,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         lock.unlock()
 
         return ASRDemoDiagnosticResult(
-            provider: provider,
+            selection: selection,
             openedProviders: opened,
             finishedProviders: finished,
             resultCharactersByProvider: resultCharacters,
@@ -381,7 +423,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         let payload: [String: Any] = [
             "created_at": ISO8601DateFormatter().string(from: Date()),
             "reason": "asr_demo_diagnostic",
-            "selected_asr_provider": result.provider.rawValue,
+            "selected_asr_providers": result.selection.storageValue,
             "opened_providers": result.openedProviders,
             "finished_providers": result.finishedProviders,
             "result_chars_by_provider": result.resultCharactersByProvider,
@@ -401,7 +443,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             "audio_path": result.audioPath,
             "duration_ms": result.durationMilliseconds
         ]
-        _ = ASRErrorDiagnosticStore.write(payload: payload, provider: result.provider.rawValue, reason: "demo_diagnostic")
+        _ = ASRErrorDiagnosticStore.write(payload: payload, provider: result.selection.storageValue, reason: "demo_diagnostic")
     }
 }
 

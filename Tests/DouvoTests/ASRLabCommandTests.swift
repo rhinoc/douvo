@@ -35,17 +35,25 @@ final class ASRLabCommandTests: XCTestCase {
         let options = try ASRLabCommand.options(from: ["Douvo", "--asr-lab", "/tmp/test.aiff"])
 
         XCTAssertEqual(options.audioURL.path, "/tmp/test.aiff")
-        XCTAssertEqual(options.provider, .android)
+        XCTAssertEqual(options.selection, ASRProviderSelection(.android))
         XCTAssertEqual(options.context, "")
         XCTAssertEqual(options.vocabulary, "")
     }
 
-    func testOptionsAcceptExplicitProvider() throws {
+    func testOptionsAcceptMultipleProviders() throws {
+        let options = try ASRLabCommand.options(from: [
+            "Douvo", "--asr-lab", "/tmp/test.aiff", "--providers", "web,android,bageshuo"
+        ])
+
+        XCTAssertEqual(options.selection, ASRProviderSelection([.web, .android, .bageshuo]))
+    }
+
+    func testOptionsMigrateLegacyMixProvider() throws {
         let options = try ASRLabCommand.options(from: [
             "Douvo", "--asr-lab", "/tmp/test.aiff", "--provider", "mix"
         ])
 
-        XCTAssertEqual(options.provider, .mix)
+        XCTAssertEqual(options.selection, ASRProviderSelection([.web, .android]))
     }
 
     func testOptionsAcceptAndroidContext() throws {

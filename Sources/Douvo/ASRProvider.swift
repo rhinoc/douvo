@@ -1,9 +1,9 @@
 import Foundation
 
-enum ASRProvider: String, CaseIterable, Identifiable, Codable {
+enum ASRProvider: String, CaseIterable, Identifiable, Codable, Hashable {
     case web
     case android
-    case mix
+    case bageshuo
 
     var id: String { rawValue }
 
@@ -13,8 +13,8 @@ enum ASRProvider: String, CaseIterable, Identifiable, Codable {
             "Web"
         case .android:
             "Android"
-        case .mix:
-            L10n.text(en: "Dual", zh: "双路")
+        case .bageshuo:
+            L10n.text(en: "Bage Shuo", zh: "叭哥说")
         }
     }
 
@@ -24,45 +24,108 @@ enum ASRProvider: String, CaseIterable, Identifiable, Codable {
             L10n.text(en: "Doubao Web recognition", zh: "豆包网页识别")
         case .android:
             L10n.text(en: "Doubao Android input method", zh: "豆包 Android 输入法")
-        case .mix:
-            L10n.text(en: "Web + Android with AI merge", zh: "Web + Android，经 AI 合并")
+        case .bageshuo:
+            L10n.text(en: "Youdao Bage Shuo realtime recognition", zh: "网易叭哥说实时识别")
         }
     }
 
-    var usesWebASR: Bool {
-        self == .web || self == .mix
+    var usesWebASR: Bool { self == .web }
+    var usesAndroidASR: Bool { self == .android }
+    var usesBageshuoASR: Bool { self == .bageshuo }
+    var requiresLogin: Bool { self == .web || self == .bageshuo }
+}
+
+struct ASRProviderSelection: Equatable, Hashable, Sendable, Codable {
+    let providers: Set<ASRProvider>
+
+    static let `default` = ASRProviderSelection([.web])
+
+    init(_ providers: Set<ASRProvider>) {
+        self.providers = providers.isEmpty ? [.web] : providers
     }
 
-    var usesAndroidASR: Bool {
-        self == .android || self == .mix
+    init(_ provider: ASRProvider) {
+        self.init([provider])
+    }
+
+    var sortedProviders: [ASRProvider] {
+        ASRProvider.allCases.filter { providers.contains($0) }
+    }
+
+    var storageValue: String {
+        sortedProviders.map(\.rawValue).joined(separator: ",")
+    }
+
+    var displayName: String {
+        sortedProviders.map(\.displayName).joined(separator: " + ")
+    }
+
+    var detail: String {
+        if providers.count == 1 {
+            return sortedProviders[0].detail
+        }
+        return L10n.text(
+            en: "\(displayName) with AI merge",
+            zh: "\(displayName)，经 AI 合并"
+        )
+    }
+
+    var usesWebASR: Bool { providers.contains(.web) }
+    var usesAndroidASR: Bool { providers.contains(.android) }
+    var usesBageshuoASR: Bool { providers.contains(.bageshuo) }
+
+    var requiresLogin: Bool {
+        sortedProviders.contains(where: { $0.requiresLogin })
+    }
+
+    var requiresAICorrection: Bool {
+        providers.count > 1
     }
 
     var activeProviderKeys: Set<String> {
-        switch self {
-        case .web:
-            ["web"]
-        case .android:
-            ["android"]
-        case .mix:
-            ["web", "android"]
+        Set(providers.map(\.rawValue))
+    }
+
+    static func parse(_ value: String) -> ASRProviderSelection? {
+        let values = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !values.isEmpty else { return nil }
+
+        // Read the old configuration as the equivalent two-provider selection.
+        if values.count == 1, values[0] == "mix" {
+            return ASRProviderSelection([.web, .android])
         }
+
+        var providers = Set<ASRProvider>()
+        for value in values {
+            guard let provider = ASRProvider(rawValue: value) else { return nil }
+            providers.insert(provider)
+        }
+        return providers.isEmpty ? nil : ASRProviderSelection(providers)
     }
 }
 
 enum ASRProviderStore {
-    private static let key = "asrProvider"
+    private static let providersKey = "asrProviders"
+    private static let legacyProviderKey = "asrProvider"
 
-    static var selected: ASRProvider {
+    static var selected: ASRProviderSelection {
         get {
-            guard let rawValue = UserDefaults.standard.string(forKey: key),
-                  let provider = ASRProvider(rawValue: rawValue) else {
-                return .web
+            if let values = UserDefaults.standard.array(forKey: providersKey) as? [String],
+               let selection = ASRProviderSelection.parse(values.joined(separator: ",")) {
+                return selection
             }
-            return provider
+
+            if let legacyValue = UserDefaults.standard.string(forKey: legacyProviderKey),
+               let selection = ASRProviderSelection.parse(legacyValue) {
+                return selection
+            }
+            return .default
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: key)
-            AppLog.info("ASR provider set to \(newValue.rawValue)")
+            UserDefaults.standard.set(newValue.sortedProviders.map(\.rawValue), forKey: providersKey)
+            AppLog.info("ASR providers set to \(newValue.storageValue)")
         }
     }
 }

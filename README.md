@@ -82,13 +82,14 @@ If you do not run into these pain points, the original Doubao IME is likely the 
 
 ## Disclaimer
 
-This project depends on observed Doubao web and IME client behavior. It is **not** an official Doubao API, SDK, or integration.
+This project depends on observed Doubao and Youdao Bage Shuo client behavior. It is **not** an official API, SDK, or integration for either service.
 
 - You need a valid Doubao account and must log in yourself.
 - Doubao may change its website, authentication flow, device registration, WebSocket protocols, ASR payload formats, rate limits, or access policy at any time.
+- Youdao Bage Shuo may change its login flow, ticket signing, WebSocket protocol, audio format, rate limits, or access policy at any time.
 - Audio sent for recognition is processed by Doubao's service. Review Doubao's own terms and privacy policy before using this app.
 - Enabling Android Personal Lexicon uploads the configured vocabulary terms to Doubao; uploaded terms may persist remotely after local removal.
-- Web login parameters and Android ASR credentials are stored locally so the selected provider can connect without keeping a browser window open.
+- Web/Bage Shuo login parameters and Android ASR credentials are stored locally so each selected provider can connect without keeping a browser window open.
 - If remote AI post-processing is enabled, transcript text is sent to the provider and endpoint you configure.
 - Local AI post-processing uses MLX models downloaded from Hugging Face or loaded from a local model folder.
 - Use this project at your own risk. The maintainers are not responsible for service availability, account issues, data loss, policy violations, or other consequences.
@@ -96,31 +97,33 @@ This project depends on observed Doubao web and IME client behavior. It is **not
 
 ## How it works
 
-Douvo supports three Doubao ASR paths: **Web**, **Android**, and **Dual**. The default is **Web**. The Android path follows observed Doubao IME client behavior, and Dual runs Web and Android together before merging the recognition results with AI post-processing. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
+Douvo supports three ASR paths: Doubao **Web**, Doubao **Android**, and Youdao **Bage Shuo**. Select one or more paths in Settings; multiple paths run in parallel and their results are merged with AI post-processing. The default is **Web**. The Android and Bage Shuo paths follow observed client behavior. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
 
 ```mermaid
 flowchart TD
-    A[Choose Web, Android, or Dual recognition mode] --> B[Prepare credentials required by the selected mode]
+    A[Choose one or more Web, Android, or Bage Shuo paths] --> B[Prepare credentials required by the selected paths]
     B --> C[Trigger recording from the menu bar app]
     C --> D[Capture microphone audio with AVAudioEngine]
     D --> E{Selected ASR path}
     E -- Web --> F[Stream 16 kHz PCM chunks to Doubao Web ASR]
     E -- Android --> G[Encode 16 kHz Opus and send Protobuf frames to Doubao Android ASR]
-    E -- Dual --> H[Send PCM to Web ASR and Opus Protobuf frames to Android ASR]
-    F --> I[Show partial transcript in the floating overlay]
-    G --> I
-    H --> I
-    I --> J[Receive final ASR transcript or paired Web and Android transcripts]
-    J --> K{AI post-processing enabled?}
-    K -- No --> O[Apply deterministic punctuation and vocabulary fallback]
-    K -- Local --> L[Run local MLX model on device]
-    K -- Remote --> M[Send transcript to the configured remote LLM provider]
-    L --> N[Clean, validate, and normalize corrected text]
-    M --> N
-    N --> O
-    O --> P[Insert final text with pasteboard and Command-V]
-    P --> Q[Restore clipboard when safe]
-    J --> R[Write local traces, timings, and logs for diagnostics]
+    E -- Multiple --> H[Send each selected audio format to its ASR path in parallel]
+    E -- Bage Shuo --> I[Request a signed ticket and stream 16 kHz PCM to Youdao]
+    F --> K[Show partial transcript in the floating overlay]
+    G --> K
+    H --> K
+    I --> K
+    K --> L[Receive final ASR transcript or transcripts from multiple paths]
+    L --> M{AI post-processing enabled?}
+    M -- No --> P[Apply deterministic punctuation and vocabulary fallback]
+    M -- Local --> N[Run local MLX model on device]
+    M -- Remote --> O[Send transcript to the configured remote LLM provider]
+    N --> Q[Clean, validate, and normalize corrected text]
+    O --> Q
+    Q --> P
+    P --> R[Insert final text with pasteboard and Command-V]
+    R --> S[Restore clipboard when safe]
+    L --> T[Write local traces, timings, and logs for diagnostics]
 ```
 
 ## Requirements
@@ -177,8 +180,8 @@ Local AI post-processing runs on device. Remote AI post-processing sends transcr
 
 ## Usage
 
-1. Open the menu bar item and choose **Log In**.
-2. Complete Doubao login in the popup window.
+1. Open the menu bar item and choose **Settings... -> Account -> Recognition**.
+2. Choose one or more providers. Bage Shuo first imports the installed Bage Shuo app's cookies when Douvo has no usable login; if you log in through Douvo's official Youdao page, that login is kept as the active credential. Web still uses the Doubao login popup.
 3. Place your cursor in any text field.
 4. Press the trigger key to start recording, or hold the hold-to-talk key if configured.
 5. Speak.
@@ -186,7 +189,7 @@ Local AI post-processing runs on device. Remote AI post-processing sends transcr
 7. Press the translation key while recording to switch the current recording into translation mode.
 8. Press **Escape** while recording to cancel.
 
-Use **Settings...** from the menu bar to change trigger keys, choose a microphone, choose the recognition mode, refresh login, configure AI features, copy diagnostics, or open the app log.
+Use **Settings...** from the menu bar to change trigger keys, choose a microphone, choose one or more recognition paths, refresh login, configure AI features, copy diagnostics, or open the app log.
 
 ### AI Post-processing
 
@@ -194,8 +197,10 @@ Open **Settings... -> Features** to configure punctuation, vocabulary, and AI-ba
 
 - Choose **Local** to download a built-in MLX model or add a local MLX model folder.
 - Built-in **S1-mini by Superwhisper 4bit** (`s1Mini`) is an English-only, 335 MB ASR cleanup model. It is optimized for ordinary English dictation cleanup; use a Qwen3.5 model for Chinese, mixed-language, translation, or selection editing.
+- Built-in **Spark-X2.5 1.7B and 4B** (`sparkX25OneSevenB`, `sparkX25FourB`) run the official open checkpoints locally through the native Swift/MLX Spark architecture. They are useful for Chinese correction and reasoning; the original BF16 checkpoints are about 3.4 GB and 8.2 GB.
 - Choose **Remote** to add a provider, base URL, model name, and API key.
 - Add vocabulary hints for project terms, file paths, product names, and common ASR mistakes.
+- When Bage Shuo is selected and logged in, Douvo automatically merges its account hot-word list with the local correction vocabulary. New local terms are added to Bage Shuo after the local vocabulary changes; removing a local term does not delete the remote term.
 - Choose output styles such as Natural, Concise, Structured, or Custom, and tune style strength.
 - Configure a translation shortcut and target language.
 - Configure optional context such as current time, frontmost app, and window title.

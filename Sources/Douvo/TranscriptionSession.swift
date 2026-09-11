@@ -64,19 +64,22 @@ enum TranscriptionSessionEvent: Sendable {
 actor TranscriptionSession {
     typealias EventHandler = @MainActor @Sendable (TranscriptionSessionEvent) -> Void
 
-    private let provider: ASRProvider
+    private let selection: ASRProviderSelection
     private let webASRClient: DoubaoASRClient?
+    private let bageshuoASRClient: BageshuoASRClient?
     private let androidASRClient: DoubaoAndroidASRClient?
     private let audioCapture: AudioCaptureManager
     private let onEvent: EventHandler
     private var audioStartTask: Task<Void, Never>?
 
-    init(provider: ASRProvider, onEvent: @escaping EventHandler) {
-        let webASRClient = provider.usesWebASR ? DoubaoASRClient() : nil
-        let androidASRClient = provider.usesAndroidASR ? DoubaoAndroidASRClient() : nil
+    init(selection: ASRProviderSelection, onEvent: @escaping EventHandler) {
+        let webASRClient = selection.usesWebASR ? DoubaoASRClient() : nil
+        let bageshuoASRClient = selection.usesBageshuoASR ? BageshuoASRClient() : nil
+        let androidASRClient = selection.usesAndroidASR ? DoubaoAndroidASRClient() : nil
         let audioCapture = AudioCaptureManager()
-        self.provider = provider
+        self.selection = selection
         self.webASRClient = webASRClient
+        self.bageshuoASRClient = bageshuoASRClient
         self.androidASRClient = androidASRClient
         self.audioCapture = audioCapture
         self.onEvent = onEvent
@@ -101,6 +104,22 @@ actor TranscriptionSession {
             Task { await self?.emit(.asrAuthError("web", info)) }
         }
 
+        bageshuoASRClient?.onOpen = { [weak self] in
+            Task { await self?.emit(.asrOpened("bageshuo")) }
+        }
+        bageshuoASRClient?.onResult = onResult
+        bageshuoASRClient?.onFinish = { [weak self] in
+            Task { await self?.emit(.asrFinished("bageshuo")) }
+        }
+        bageshuoASRClient?.onError = { [weak self] error in
+            let info = TranscriptionSessionError(error)
+            Task { await self?.emit(.asrError("bageshuo", info)) }
+        }
+        bageshuoASRClient?.onAuthError = { [weak self] error in
+            let info = TranscriptionSessionError(error)
+            Task { await self?.emit(.asrAuthError("bageshuo", info)) }
+        }
+
         androidASRClient?.onOpen = { [weak self] in
             Task { await self?.emit(.asrOpened("android")) }
         }
@@ -120,6 +139,9 @@ actor TranscriptionSession {
         audioCapture.onWebPCMData = { [weak webASRClient] data in
             webASRClient?.sendAudio(data)
         }
+        audioCapture.onBageshuoPCMData = { [weak bageshuoASRClient] data in
+            bageshuoASRClient?.sendAudio(data)
+        }
         audioCapture.onAndroidOpusData = { [weak androidASRClient] data in
             androidASRClient?.sendAudio(data)
         }
@@ -130,83 +152,40 @@ actor TranscriptionSession {
 
     func start(
         webParams: DoubaoASRParams?,
+        bageshuoParams: BageshuoASRParams?,
         androidContext: String = "",
         androidVocabulary: String = ""
     ) async throws {
         audioStartTask?.cancel()
         audioStartTask = nil
 
-        switch provider {
-        case .web:
+        if selection.usesWebASR {
             guard let webParams, let webASRClient else {
                 throw NSError(domain: "Douvo.ASR", code: 10, userInfo: [NSLocalizedDescriptionKey: "Web recognition parameters are missing"])
             }
             webASRClient.connect(params: webParams)
-            let audioCapture = self.audioCapture
-            let weakSelf = WeakRef(self)
-            audioStartTask = Task.detached {
-                do {
-                    try Task.checkCancellation()
-                    try audioCapture.startCapture(mode: .webPCM)
-                    try Task.checkCancellation()
-                    await weakSelf.value?.emit(.audioStarted)
-                } catch is CancellationError {
-                    _ = audioCapture.stopCapture()
-                } catch {
-                    guard !Task.isCancelled else {
-                        _ = audioCapture.stopCapture()
-                        return
-                    }
-                    webASRClient.disconnect()
-                    await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
-                }
+        }
+
+        if selection.usesBageshuoASR {
+            guard let bageshuoParams, let bageshuoASRClient else {
+                throw NSError(domain: "Douvo.BageshuoASR", code: 10, userInfo: [NSLocalizedDescriptionKey: "Bage Shuo recognition parameters are missing"])
             }
-        case .android:
+            bageshuoASRClient.connect(params: bageshuoParams)
+        }
+
+        var androidConnected = false
+        if selection.usesAndroidASR {
             guard let androidASRClient else {
                 throw NSError(domain: "Douvo.ASR", code: 11, userInfo: [NSLocalizedDescriptionKey: "Android recognition client is unavailable"])
             }
-            let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
-            let usePersonalLexicon = await preparePersonalLexicon(
-                vocabulary: androidVocabulary,
-                credentials: credentials
-            )
-            try await androidASRClient.connect(
-                credentials: credentials,
-                context: androidContext,
-                usePersonalLexicon: usePersonalLexicon
-            )
-            let audioCapture = self.audioCapture
-            let weakSelf = WeakRef(self)
-            audioStartTask = Task.detached {
-                do {
-                    try Task.checkCancellation()
-                    try audioCapture.startCapture(mode: .androidOpus)
-                    try Task.checkCancellation()
-                    await weakSelf.value?.emit(.audioStarted)
-                } catch is CancellationError {
-                    _ = audioCapture.stopCapture()
-                } catch {
-                    guard !Task.isCancelled else {
-                        _ = audioCapture.stopCapture()
-                        return
-                    }
-                    androidASRClient.finishSessionThenDisconnect()
-                    await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
-                }
-            }
-        case .mix:
-            guard let webParams, let webASRClient, let androidASRClient else {
-                throw NSError(domain: "Douvo.ASR", code: 12, userInfo: [NSLocalizedDescriptionKey: "Dual recognition clients are unavailable"])
-            }
-            var androidConnected = false
             do {
-                let androidCredentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
+                let credentials = try await DoubaoAndroidCredentialStore.ensureCredentials()
                 let usePersonalLexicon = await preparePersonalLexicon(
                     vocabulary: androidVocabulary,
-                    credentials: androidCredentials
+                    credentials: credentials
                 )
                 try await androidASRClient.connect(
-                    credentials: androidCredentials,
+                    credentials: credentials,
                     context: androidContext,
                     usePersonalLexicon: usePersonalLexicon
                 )
@@ -217,29 +196,39 @@ actor TranscriptionSession {
                 guard !Task.isCancelled else { throw CancellationError() }
                 await emit(.asrError("android", TranscriptionSessionError(error)))
             }
-            webASRClient.connect(params: webParams)
-            let weakSelf = WeakRef(self)
-            let audioCapture = self.audioCapture
-            let captureMode: AudioCaptureManager.CaptureMode = androidConnected
-                ? .webPCMAndAndroidOpus
-                : .webPCM
-            audioStartTask = Task.detached {
-                do {
-                    try Task.checkCancellation()
-                    try audioCapture.startCapture(mode: captureMode)
-                    try Task.checkCancellation()
-                    await weakSelf.value?.emit(.audioStarted)
-                } catch is CancellationError {
+        }
+
+        if !selection.usesWebASR && !selection.usesBageshuoASR && !androidConnected {
+            throw NSError(domain: "Douvo.ASR", code: 12, userInfo: [NSLocalizedDescriptionKey: "No ASR provider connected"])
+        }
+
+        var captureMode = AudioCaptureManager.CaptureMode()
+        if selection.usesWebASR { captureMode.insert(.webPCM) }
+        if selection.usesBageshuoASR { captureMode.insert(.bageshuoPCM) }
+        if selection.usesAndroidASR { captureMode.insert(.androidOpus) }
+
+        let audioCapture = self.audioCapture
+        let weakSelf = WeakRef(self)
+        let webASRClient = self.webASRClient
+        let bageshuoASRClient = self.bageshuoASRClient
+        let androidASRClient = self.androidASRClient
+        audioStartTask = Task.detached {
+            do {
+                try Task.checkCancellation()
+                try audioCapture.startCapture(mode: captureMode)
+                try Task.checkCancellation()
+                await weakSelf.value?.emit(.audioStarted)
+            } catch is CancellationError {
+                _ = audioCapture.stopCapture()
+            } catch {
+                guard !Task.isCancelled else {
                     _ = audioCapture.stopCapture()
-                } catch {
-                    guard !Task.isCancelled else {
-                        _ = audioCapture.stopCapture()
-                        return
-                    }
-                    webASRClient.disconnect()
-                    androidASRClient.finishSessionThenDisconnect()
-                    await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
+                    return
                 }
+                webASRClient?.disconnect()
+                bageshuoASRClient?.disconnect()
+                androidASRClient?.finishSessionThenDisconnect()
+                await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
             }
         }
     }
@@ -275,6 +264,7 @@ actor TranscriptionSession {
             await emit(.recordingSaved(recordingURL.path))
         }
         webASRClient?.finishSending()
+        bageshuoASRClient?.finishSending()
         androidASRClient?.finishSending()
         return recordingURL
     }
@@ -284,6 +274,7 @@ actor TranscriptionSession {
         audioStartTask = nil
         _ = audioCapture.stopCapture()
         webASRClient?.disconnect()
+        bageshuoASRClient?.disconnect()
         androidASRClient?.finishSessionThenDisconnect()
     }
 

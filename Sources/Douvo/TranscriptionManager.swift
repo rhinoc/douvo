@@ -52,6 +52,13 @@ final class TranscriptionManager {
         )
     }
 
+    private static var bageshuoAuthExpiredMessage: String {
+        L10n.text(
+            en: "Bage Shuo login expired.",
+            zh: "叭哥说登录已失效"
+        )
+    }
+
     private static var recognitionFailedMessage: String {
         L10n.text(en: "Recognition failed.", zh: "识别失败")
     }
@@ -66,6 +73,7 @@ final class TranscriptionManager {
 
     private let appState: AppState
     private let webViewManager: WebViewManager
+    private let bageshuoWebViewManager: BageshuoWebViewManager
     private let overlayPanel: OverlayPanel
     private let hotkeyManager: HotkeyManager
 
@@ -111,11 +119,13 @@ final class TranscriptionManager {
     init(
         appState: AppState,
         webViewManager: WebViewManager,
+        bageshuoWebViewManager: BageshuoWebViewManager,
         overlayPanel: OverlayPanel,
         hotkeyManager: HotkeyManager
     ) {
         self.appState = appState
         self.webViewManager = webViewManager
+        self.bageshuoWebViewManager = bageshuoWebViewManager
         self.overlayPanel = overlayPanel
         self.hotkeyManager = hotkeyManager
     }
@@ -394,8 +404,8 @@ final class TranscriptionManager {
         writeASRErrorDiagnostic(provider: provider, error: authError, reason: "asr_auth_error", willContinue: willContinue)
         if shouldContinueAfterASRProviderFailure(provider: provider, error: authError) {
             clearASRAuthState(provider: provider)
-            if provider == "web" {
-                AppLog.info("Web ASR auth expired; opening login while continuing with remaining provider")
+            if provider == "web" || provider == "bageshuo" {
+                AppLog.info("ASR auth expired; opening login while continuing with remaining provider provider=\(provider)")
                 onAuthExpired?()
             }
             return
@@ -480,20 +490,20 @@ final class TranscriptionManager {
 
     private func startRecording() {
         let startupStartedAt = ProcessInfo.processInfo.systemUptime
-        let provider = ASRProviderStore.selected
+        let selection = ASRProviderStore.selected
         // Capture app/window context before Douvo shows its recording overlay.
         let shouldCaptureContext = LocalLLMPostProcessor.isCorrectionEnabled
-            || (provider.usesAndroidASR && AndroidASRSettingsStore.sendContext)
+            || (selection.usesAndroidASR && AndroidASRSettingsStore.sendContext)
         let environmentContext = shouldCaptureContext ? PromptEnvironmentContext.current() : ""
         let includeRecentDictationContext = shouldCaptureContext
             && LocalLLMSettingsStore.includeRecentDictationContext
-        AppLog.info("Start recording requested provider=\(provider.rawValue) loginStatus=\(appState.loginStatus)")
+        AppLog.info("Start recording requested providers=\(selection.storageValue) loginStatus=\(appState.loginStatus)")
         if transcriptionTrace != nil {
             finishCurrentTrace(outcome: "superseded", metadata: ["reason": "new_recording_started"])
         }
         transcriptionTrace = TranscriptionTrace()
         transcriptionTrace?.event("recording.start_requested", metadata: [
-            "asr_provider": provider.rawValue,
+            "asr_providers": selection.storageValue,
             "login_status": String(describing: appState.loginStatus)
         ])
         transcriptionTrace?.startSpan("recording.user_audio")
@@ -502,7 +512,7 @@ final class TranscriptionManager {
         asrResultProgressSamples.removeAll(keepingCapacity: true)
         maxASRResultCharsByProvider.removeAll()
         latestProviderTranscripts.removeAll()
-        activeASRProviders = provider.activeProviderKeys
+        activeASRProviders = selection.activeProviderKeys
         openedASRProviders.removeAll()
         failedASRProviders.removeAll()
         audioReady = false
@@ -564,28 +574,18 @@ final class TranscriptionManager {
         }
 
         var webParams: DoubaoASRParams?
-        if provider == .mix, !LocalLLMPostProcessor.isCorrectionEnabled {
-            AppLog.error("Start blocked: Dual ASR requires AI Correction")
-            appState.errorMessage = L10n.text(en: "Dual recognition requires AI.", zh: "双路识别需要先开启 AI")
+        var bageshuoParams: BageshuoASRParams?
+        if selection.requiresAICorrection, !LocalLLMPostProcessor.isCorrectionEnabled {
+            AppLog.error("Start blocked: multi-route ASR requires AI Correction")
+            appState.errorMessage = L10n.text(en: "Multi-route recognition requires AI.", zh: "多路识别需要先开启 AI")
             setRecordingState(.idle)
             overlayPanel.show()
-            finishCurrentTrace(outcome: "blocked", metadata: ["reason": "mix_requires_ai_correction"])
+            finishCurrentTrace(outcome: "blocked", metadata: ["reason": "multi_route_requires_ai_correction"])
             resetToIdle(after: 1.8)
             return
         }
 
-        if provider.usesWebASR {
-            guard appState.loginStatus == .loggedIn else {
-                AppLog.error("Start blocked: not logged in")
-                appState.errorMessage = L10n.text(en: "Please log in to Doubao first.", zh: "请先登录豆包")
-                setRecordingState(.idle)
-                overlayPanel.show()
-                webViewManager.showLoginWindow()
-                finishCurrentTrace(outcome: "blocked", metadata: ["reason": "not_logged_in"])
-                resetToIdle(after: 1.5)
-                return
-            }
-
+        if selection.usesWebASR {
             transcriptionTrace?.startSpan("asr.load_params")
             let loadParamsStartedAt = ProcessInfo.processInfo.systemUptime
             guard let params = ASRParamsStore.load() else {
@@ -606,15 +606,41 @@ final class TranscriptionManager {
             transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "loaded"])
             AppLog.info("Connecting Web ASR params cookieCount=\(params.cookies.count) deviceIdSet=\(!params.deviceId.isEmpty) webIdSet=\(!params.webId.isEmpty)")
             transcriptionTrace?.event("asr.connect_requested", metadata: [
-                "asr_provider": provider.rawValue,
+                "asr_providers": selection.storageValue,
                 "active_providers": activeASRProviders.sorted().joined(separator: ","),
                 "cookie_count": String(params.cookies.count),
                 "has_device_id": String(!params.deviceId.isEmpty),
                 "has_web_id": String(!params.webId.isEmpty)
             ])
-        } else {
+        }
+
+        if selection.usesBageshuoASR {
+            transcriptionTrace?.startSpan("asr.load_params")
+            let loadParamsStartedAt = ProcessInfo.processInfo.systemUptime
+            guard let params = BageshuoASRParamsStore.load() else {
+                AppLog.info("Recording startup stage=asr_load_params result=missing ms=\(Self.milliseconds(since: loadParamsStartedAt)) total_ms=\(Self.milliseconds(since: startupStartedAt))")
+                transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "missing"])
+                appState.errorMessage = Self.bageshuoAuthExpiredMessage
+                appState.loginStatus = .notLoggedIn
+                setRecordingState(.idle)
+                overlayPanel.show()
+                bageshuoWebViewManager.showLoginWindow()
+                finishCurrentTrace(outcome: "blocked", metadata: ["reason": "asr_params_missing"])
+                resetToIdle(after: 1.5)
+                return
+            }
+            bageshuoParams = params
+            transcriptionTrace?.finishSpan("asr.load_params", metadata: ["result": "loaded"])
             transcriptionTrace?.event("asr.connect_requested", metadata: [
-                "asr_provider": provider.rawValue,
+                "asr_providers": selection.storageValue,
+                "active_providers": activeASRProviders.sorted().joined(separator: ","),
+                "cookie_count": String(params.cookies.count)
+            ])
+        }
+
+        if !selection.usesWebASR && !selection.usesBageshuoASR {
+            transcriptionTrace?.event("asr.connect_requested", metadata: [
+                "asr_providers": selection.storageValue,
                 "active_providers": activeASRProviders.sorted().joined(separator: ",")
             ])
         }
@@ -624,7 +650,7 @@ final class TranscriptionManager {
         transcriptionTrace?.startSpan("asr.connect")
 
         let sessionID = UUID()
-        let session = TranscriptionSession(provider: provider) { [weak self] event in
+        let session = TranscriptionSession(selection: selection) { [weak self] event in
             self?.handleSessionEvent(event, sessionID: sessionID)
         }
         activeSessionID = sessionID
@@ -647,11 +673,11 @@ final class TranscriptionManager {
                 self.activeContextSnapshot = contextSnapshot
                 let androidContext = AndroidASRContextBuilder.make(
                     snapshot: contextSnapshot,
-                    includeContext: provider.usesAndroidASR && AndroidASRSettingsStore.sendContext
+                    includeContext: selection.usesAndroidASR && AndroidASRSettingsStore.sendContext
                 )
-                let androidVocabulary = provider.usesAndroidASR
+                let androidVocabulary = selection.usesAndroidASR
                     && AndroidASRSettingsStore.personalLexiconEnabled
-                    ? LocalLLMSettingsStore.vocabulary
+                    ? LocalLLMSettingsStore.effectiveVocabulary
                     : ""
                 let androidVocabularyCount = DoubaoAndroidPersonalLexicon.words(
                     from: androidVocabulary
@@ -668,13 +694,14 @@ final class TranscriptionManager {
                 )
                 try await session.start(
                     webParams: webParams,
+                    bageshuoParams: bageshuoParams,
                     androidContext: androidContext,
                     androidVocabulary: androidVocabulary
                 )
             } catch {
                 AppLog.error("Session start failed: \(error)")
                 await MainActor.run {
-                    self.handleSessionStartFailure(error, provider: provider, sessionID: sessionID)
+                    self.handleSessionStartFailure(error, selection: selection, sessionID: sessionID)
                 }
             }
         }
@@ -810,13 +837,9 @@ final class TranscriptionManager {
             transcriptionTrace?.set("correction.input_mode", correctionRequest.inputMode)
             transcriptionTrace?.set("correction.prompt_chars", correctionRequest.promptText.count)
             transcriptionTrace?.set("correction.fallback_chars", correctionRequest.fallbackText.count)
-            if let webText = correctionRequest.webText {
-                transcriptionTrace?.set("asr.web.final_text", webText)
-                transcriptionTrace?.set("asr.web.final_chars", webText.count)
-            }
-            if let androidText = correctionRequest.androidText {
-                transcriptionTrace?.set("asr.android.final_text", androidText)
-                transcriptionTrace?.set("asr.android.final_chars", androidText.count)
+            for (provider, providerText) in correctionRequest.providerTexts {
+                transcriptionTrace?.set("asr.\(provider).final_text", providerText)
+                transcriptionTrace?.set("asr.\(provider).final_chars", providerText.count)
             }
             isCompletingTranscription = true
             completionTask?.cancel()
@@ -861,8 +884,7 @@ final class TranscriptionManager {
         let promptText: String
         let fallbackText: String
         let inputMode: String
-        let webText: String?
-        let androidText: String?
+        let providerTexts: [String: String]
         let promptConfiguration: LocalLLMPromptConfiguration?
         let generationProfile: LocalLLMGenerationProfile?
 
@@ -870,16 +892,14 @@ final class TranscriptionManager {
             promptText: String,
             fallbackText: String,
             inputMode: String,
-            webText: String?,
-            androidText: String?,
+            providerTexts: [String: String],
             promptConfiguration: LocalLLMPromptConfiguration?,
             generationProfile: LocalLLMGenerationProfile? = nil
         ) {
             self.promptText = promptText
             self.fallbackText = fallbackText
             self.inputMode = inputMode
-            self.webText = webText
-            self.androidText = androidText
+            self.providerTexts = providerTexts
             self.promptConfiguration = promptConfiguration
             self.generationProfile = generationProfile
         }
@@ -905,52 +925,47 @@ final class TranscriptionManager {
             )
         }
 
-        guard ASRProviderStore.selected == .mix else {
+        let selection = ASRProviderStore.selected
+        guard selection.requiresAICorrection else {
             return CorrectionRequest(
                 promptText: recognizedText,
                 fallbackText: recognizedText,
                 inputMode: "single",
-                webText: nil,
-                androidText: nil,
+                providerTexts: [:],
                 promptConfiguration: nil
             )
         }
 
-        let webText = providerTranscript("web")
-        let androidText = providerTranscript("android")
-        guard !webText.isEmpty, !androidText.isEmpty else {
-            let fallback = [webText, androidText, recognizedText]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first { !$0.isEmpty } ?? recognizedText
+        let providerTexts = providerTranscripts(for: selection)
+        guard providerTexts.count >= 2 else {
+            let fallback = preferredMultiFallback(providerTexts, recognizedText: recognizedText)
             return CorrectionRequest(
                 promptText: fallback,
                 fallbackText: fallback,
-                inputMode: "mix_single_available",
-                webText: webText.isEmpty ? nil : webText,
-                androidText: androidText.isEmpty ? nil : androidText,
+                inputMode: "multi_single_available",
+                providerTexts: providerTexts,
                 promptConfiguration: nil
             )
         }
 
-        if Self.areEquivalentMixTranscripts(webText, androidText) {
+        if Self.areEquivalentTranscripts(Array(providerTexts.values)) {
+            let text = preferredMultiFallback(providerTexts, recognizedText: recognizedText)
             return CorrectionRequest(
-                promptText: webText,
-                fallbackText: webText,
-                inputMode: "mix_equivalent",
-                webText: webText,
-                androidText: androidText,
+                promptText: text,
+                fallbackText: text,
+                inputMode: "multi_equivalent",
+                providerTexts: providerTexts,
                 promptConfiguration: nil
             )
         }
 
-        let fallback = preferredMixFallback(webText: webText, androidText: androidText)
+        let fallback = preferredMultiFallback(providerTexts, recognizedText: recognizedText)
         return CorrectionRequest(
-            promptText: Self.mixCorrectionPromptText(webText: webText, androidText: androidText),
+            promptText: Self.multiCorrectionPromptText(providerTexts: providerTexts),
             fallbackText: fallback,
-            inputMode: "mix_dual",
-            webText: webText,
-            androidText: androidText,
-            promptConfiguration: Self.mixPromptConfiguration()
+            inputMode: "multi",
+            providerTexts: providerTexts,
+            promptConfiguration: Self.multiPromptConfiguration()
         )
     }
 
@@ -966,8 +981,7 @@ final class TranscriptionManager {
             promptText: spokenCommand,
             fallbackText: selectedText,
             inputMode: "selection_edit",
-            webText: nil,
-            androidText: nil,
+            providerTexts: [:],
             promptConfiguration: promptConfiguration,
             generationProfile: generationProfile
         )
@@ -975,29 +989,24 @@ final class TranscriptionManager {
 
     private func translationCorrectionRequest(recognizedText: String) -> CorrectionRequest {
         let targetLanguage = LocalLLMSettingsStore.translationTargetLanguage.promptName
-        if ASRProviderStore.selected == .mix {
-            let webText = providerTranscript("web")
-            let androidText = providerTranscript("android")
-            if !webText.isEmpty, !androidText.isEmpty {
+        if ASRProviderStore.selected.requiresAICorrection {
+            let providerTexts = providerTranscripts(for: ASRProviderStore.selected)
+            if providerTexts.count >= 2 {
                 return CorrectionRequest(
-                    promptText: Self.mixCorrectionPromptText(webText: webText, androidText: androidText),
-                    fallbackText: preferredMixFallback(webText: webText, androidText: androidText),
-                    inputMode: "translation_mix_dual",
-                    webText: webText,
-                    androidText: androidText,
-                    promptConfiguration: Self.translationMixPromptConfiguration(targetLanguage: targetLanguage)
+                    promptText: Self.multiCorrectionPromptText(providerTexts: providerTexts),
+                    fallbackText: preferredMultiFallback(providerTexts, recognizedText: recognizedText),
+                    inputMode: "translation_multi",
+                    providerTexts: providerTexts,
+                    promptConfiguration: Self.translationMultiPromptConfiguration(targetLanguage: targetLanguage)
                 )
             }
 
-            let fallback = [webText, androidText, recognizedText]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first { !$0.isEmpty } ?? recognizedText
+            let fallback = preferredMultiFallback(providerTexts, recognizedText: recognizedText)
             return CorrectionRequest(
                 promptText: fallback,
                 fallbackText: fallback,
-                inputMode: "translation_mix_single_available",
-                webText: webText.isEmpty ? nil : webText,
-                androidText: androidText.isEmpty ? nil : androidText,
+                inputMode: "translation_multi_single_available",
+                providerTexts: providerTexts,
                 promptConfiguration: Self.translationPromptConfiguration(targetLanguage: targetLanguage)
             )
         }
@@ -1006,8 +1015,7 @@ final class TranscriptionManager {
             promptText: recognizedText,
             fallbackText: recognizedText,
             inputMode: "translation",
-            webText: nil,
-            androidText: nil,
+            providerTexts: [:],
             promptConfiguration: Self.translationPromptConfiguration(targetLanguage: targetLanguage)
         )
     }
@@ -1016,13 +1024,29 @@ final class TranscriptionManager {
         latestProviderTranscripts[provider]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func preferredMixFallback(webText: String, androidText: String) -> String {
-        if !webText.isEmpty { return webText }
-        return androidText
+    private func providerTranscripts(for selection: ASRProviderSelection) -> [String: String] {
+        selection.sortedProviders.reduce(into: [String: String]()) { result, provider in
+            let text = providerTranscript(provider.rawValue)
+            if !text.isEmpty {
+                result[provider.rawValue] = text
+            }
+        }
+    }
+
+    private func preferredMultiFallback(
+        _ providerTexts: [String: String],
+        recognizedText: String
+    ) -> String {
+        for provider in ASRProvider.allCases {
+            if let text = providerTexts[provider.rawValue], !text.isEmpty {
+                return text
+            }
+        }
+        return recognizedText
     }
 
     private func displayTranscript() -> String {
-        if ASRProviderStore.selected != .mix {
+        if !ASRProviderStore.selected.requiresAICorrection {
             return latestProviderTranscripts.values.first ?? ""
         }
 
@@ -1032,13 +1056,12 @@ final class TranscriptionManager {
             .max { lhs, rhs in lhs.count < rhs.count } ?? ""
     }
 
-    nonisolated static func areEquivalentMixTranscripts(_ lhs: String, _ rhs: String) -> Bool {
-        let lhs = normalizeMixTranscriptForEquality(lhs)
-        let rhs = normalizeMixTranscriptForEquality(rhs)
-        return !lhs.isEmpty && lhs == rhs
+    nonisolated static func areEquivalentTranscripts(_ texts: [String]) -> Bool {
+        let normalized = texts.map(normalizeMultiTranscriptForEquality).filter { !$0.isEmpty }
+        return normalized.count >= 2 && Set(normalized).count == 1
     }
 
-    private nonisolated static func normalizeMixTranscriptForEquality(_ text: String) -> String {
+    private nonisolated static func normalizeMultiTranscriptForEquality(_ text: String) -> String {
         text.lowercased().unicodeScalars
             .filter { scalar in
                 !CharacterSet.whitespacesAndNewlines.contains(scalar)
@@ -1092,7 +1115,9 @@ final class TranscriptionManager {
         appState.transcript = ""
         appState.errorMessage = failedProvider == "web"
             ? Self.authExpiredMessage
-            : Self.androidAuthExpiredMessage
+            : failedProvider == "bageshuo"
+                ? Self.bageshuoAuthExpiredMessage
+                : Self.androidAuthExpiredMessage
         logASRResultSummary(reason: "auth_failure")
         finishCurrentTrace(outcome: "failed", metadata: ["reason": "auth_expired"])
         resetToIdle(after: 1.5)
@@ -1325,7 +1350,7 @@ final class TranscriptionManager {
             "created_at": ISO8601DateFormatter().string(from: Date()),
             "reason": reason,
             "provider": provider,
-            "selected_asr_provider": ASRProviderStore.selected.rawValue,
+            "selected_asr_providers": ASRProviderStore.selected.storageValue,
             "recording_state": String(describing: appState.recordingState),
             "will_continue_with_remaining_provider": willContinue,
             "active_providers": activeASRProviders.sorted(),
@@ -1360,6 +1385,9 @@ final class TranscriptionManager {
         case "web":
             ASRParamsStore.clear()
             appState.loginStatus = .notLoggedIn
+        case "bageshuo":
+            BageshuoASRParamsStore.clear()
+            appState.loginStatus = .notLoggedIn
         case "android":
             DoubaoAndroidCredentialStore.clear()
         default:
@@ -1393,7 +1421,7 @@ final class TranscriptionManager {
 
     private func handleSessionStartFailure(
         _ error: Error,
-        provider: ASRProvider,
+        selection: ASRProviderSelection,
         sessionID: UUID
     ) {
         guard activeSessionID == sessionID else { return }
@@ -1401,7 +1429,7 @@ final class TranscriptionManager {
         transcriptionTrace?.finishSpan("asr.connect", metadata: ["result": "failed"])
         transcriptionTrace?.finishSpan("audio.start_capture", metadata: ["result": "not_started"])
         writeASRErrorDiagnostic(
-            provider: provider.rawValue,
+            provider: "session",
             error: sessionError,
             reason: "session_start_failed",
             willContinue: false
@@ -1427,35 +1455,31 @@ final class TranscriptionManager {
         String(text.prefix(120)).replacingOccurrences(of: "\n", with: "\\n")
     }
 
-    nonisolated static func mixCorrectionPromptText(webText: String, androidText: String) -> String {
-        """
-        识别结果一（Doubao Web）：
-        \(webText)
-
-        识别结果二（Doubao Android）：
-        \(androidText)
-
-        只输出合并后的最终正文：
-        """
+    nonisolated static func multiCorrectionPromptText(providerTexts: [String: String]) -> String {
+        let sections = ASRProvider.allCases.compactMap { provider -> String? in
+            guard let text = providerTexts[provider.rawValue], !text.isEmpty else { return nil }
+            return "识别结果（\(provider.displayName)）：\n\(text)"
+        }
+        return sections.joined(separator: "\n\n") + "\n\n只输出合并后的最终正文："
     }
 
-    private static func mixPromptConfiguration() -> LocalLLMPromptConfiguration {
+    private static func multiPromptConfiguration() -> LocalLLMPromptConfiguration {
         let current = LocalLLMPromptConfiguration.current
         let systemPrompt = """
         \(current.systemPromptTemplate)
 
-        # 双路 ASR 合并
-        - 本次输入包含两路 ASR 识别结果；请综合两路信号，合并成一个最终文本
-        - 两路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
-        - 用另一结果补足明显漏识别或错识别的片段
+        # 多路 ASR 合并
+        - 本次输入包含多路 ASR 识别结果；请综合所有信号，合并成一个最终文本
+        - 各路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
+        - 用其他结果补足明显漏识别或错识别的片段
         - 不要重复输出同一内容
-        - 不要输出“识别结果一”“识别结果二”“Doubao Web”“Doubao Android”等输入标签
+        - 不要输出“识别结果”“Web”“Android”“Bage Shuo”“叭哥说”等输入标签
         """
 
         return LocalLLMPromptConfiguration(
             systemPromptTemplate: systemPrompt,
             userPromptTemplate: """
-            双路 ASR 输入：
+            多路 ASR 输入：
             {{original}}
 
             只输出合并后的最终正文：
@@ -1515,17 +1539,17 @@ final class TranscriptionManager {
         )
     }
 
-    private static func translationMixPromptConfiguration(targetLanguage: String) -> LocalLLMPromptConfiguration {
+    private static func translationMultiPromptConfiguration(targetLanguage: String) -> LocalLLMPromptConfiguration {
         let current = translationPromptConfiguration(targetLanguage: targetLanguage)
         let systemPrompt = """
         \(current.systemPromptTemplate)
 
-        # 双路 ASR 合并
-        - 本次输入包含两路 ASR 识别结果；请综合两路信号后再翻译
-        - 两路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
-        - 用另一结果补足明显漏识别或错识别的片段
+        # 多路 ASR 合并
+        - 本次输入包含多路 ASR 识别结果；请综合所有信号后再翻译
+        - 各路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
+        - 用其他结果补足明显漏识别或错识别的片段
         - 不要重复输出同一内容
-        - 不要输出“识别结果一”“识别结果二”“Doubao Web”“Doubao Android”等输入标签
+        - 不要输出“识别结果”“Web”“Android”“Bage Shuo”“叭哥说”等输入标签
         """
 
         return LocalLLMPromptConfiguration(
@@ -1616,6 +1640,11 @@ final class TranscriptionManager {
             return L10n.text(
                 en: "Web recognition failed: \(visibleDetail)",
                 zh: "Web 识别失败：\(visibleDetail)"
+            )
+        case "Douvo.BageshuoASR":
+            return L10n.text(
+                en: "Bage Shuo recognition failed: \(visibleDetail)",
+                zh: "叭哥说识别失败：\(visibleDetail)"
             )
         default:
             return L10n.text(

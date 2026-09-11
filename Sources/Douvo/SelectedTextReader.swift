@@ -103,23 +103,14 @@ enum SelectedTextReader {
         }
     }
 
-    private struct PasteboardSnapshot {
-        let changeCount: Int
-        let items: [PasteboardItemSnapshot]
-    }
-
-    private struct PasteboardItemSnapshot {
-        let values: [(type: NSPasteboard.PasteboardType, value: Any)]
-    }
-
     private static func copyFallbackSelection(
         maxCharacters: Int,
         reason: String
     ) -> SelectedTextReadResult {
         let pasteboard = NSPasteboard.general
-        let snapshot = pasteboardSnapshot(from: pasteboard)
+        let snapshot = ClipboardPasteboardSnapshot(from: pasteboard)
         AppLog.info(
-            "Selection edit copy fallback start reason=\(reason) previousChangeCount=\(snapshot.changeCount) previousItems=\(snapshot.items.count)"
+            "Selection edit copy fallback start reason=\(reason) previousChangeCount=\(snapshot.changeCount) previousItems=\(snapshot.itemCount)"
         )
 
         postCommandC()
@@ -136,7 +127,14 @@ enum SelectedTextReader {
 
         let copiedText = pasteboard.string(forType: .string)
         let result = validate(copiedText, maxCharacters: maxCharacters)
-        restorePasteboard(snapshot, to: pasteboard)
+        let restored = snapshot.restore(
+            to: pasteboard,
+            ifChangeCountIs: copiedChangeCount,
+            andStringIs: copiedText
+        )
+        if !restored {
+            AppLog.info("Selection edit copy fallback skipped clipboard restore: clipboard changed")
+        }
 
         switch result {
         case .none:
@@ -153,32 +151,6 @@ enum SelectedTextReader {
             )
         }
         return result
-    }
-
-    private static func pasteboardSnapshot(from pasteboard: NSPasteboard) -> PasteboardSnapshot {
-        let itemSnapshots = (pasteboard.pasteboardItems ?? []).map { item in
-            let values = item.types.compactMap { type -> (type: NSPasteboard.PasteboardType, value: Any)? in
-                guard let value = item.propertyList(forType: type) else { return nil }
-                return (type, value)
-            }
-            return PasteboardItemSnapshot(values: values)
-        }
-        return PasteboardSnapshot(changeCount: pasteboard.changeCount, items: itemSnapshots)
-    }
-
-    private static func restorePasteboard(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        let restoredItems = snapshot.items.map { snapshotItem in
-            let item = NSPasteboardItem()
-            for value in snapshotItem.values {
-                item.setPropertyList(value.value, forType: value.type)
-            }
-            return item
-        }
-        if !restoredItems.isEmpty {
-            pasteboard.writeObjects(restoredItems)
-        }
-        AppLog.info("Selection edit copy fallback restored clipboard previousChangeCount=\(snapshot.changeCount)")
     }
 
     private static func postCommandC() {
