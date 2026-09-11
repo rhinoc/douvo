@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.35</title>
+      <sparkle:version>0.1.35</sparkle:version>
+      <pubDate>Fri, 11 Sep 2026 08:44:17 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Fixed
+
+- Use a clickable multi-select recognition provider popover with visible selections and login health indicators. Keep recognition diagnostics focused on test actions and show results in toasts.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.35/douvo-0.1.35-macos.dmg"
+        sparkle:edSignature="EgWdrHParbji7iMDP8VhGpNcZNaHOXC94y9/jEXvlG4P++JCeO6cL7F3XoX5ITVZwhaY7RPLKxA9va5oF15aCA==" length="18716352"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.34</title>
       <sparkle:version>0.1.34</sparkle:version>
       <pubDate>Fri, 11 Sep 2026 05:58:05 +0000</pubDate>
