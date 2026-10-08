@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.37</title>
+      <sparkle:version>0.1.37</sparkle:version>
+      <pubDate>Thu, 08 Oct 2026 11:54:54 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Fixed
+
+- Match Chatterfly speech contexts to the native configuration and recognize expired passport tokens as authentication failures.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.37/douvo-0.1.37-macos.dmg"
+        sparkle:edSignature="c5fzjEzIUYPiC/8NohSeTWkeGwC4YW9HamKYj8vbffsYeYAgXUXO4V/qPr+xHKapNGOM+pza1EPl3W/XtBDOCw==" length="18788194"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.36</title>
       <sparkle:version>0.1.36</sparkle:version>
       <pubDate>Thu, 08 Oct 2026 05:49:48 +0000</pubDate>
