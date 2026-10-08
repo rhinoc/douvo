@@ -114,18 +114,35 @@ final class ChatterflyFeatureTests: XCTestCase {
         XCTAssertEqual(ChatterflyNativeIdentityStore.currentUserID(at: url), "native-user")
     }
 
-    func testRIPEMD160MatchesKnownEmptyDigest() {
-        XCTAssertEqual(
-            ChatterflyRIPEMD160.digest(Data()).map { String(format: "%02x", $0) }.joined(),
-            "9c1185a5c5e9fc54612808977ee8f548b2258d31"
-        )
-    }
-
     func testASRConfigurationMaterialUsesNativeRSABlockSize() throws {
         let material = try ChatterflyCrypto.encryptASRConfiguration(Data("{}".utf8))
         XCTAssertEqual(material.encryptedKey.count, 512)
         XCTAssertEqual(material.encodedIV.count, 24)
+        XCTAssertEqual(Data(base64Encoded: material.encodedIV)?.count, 16)
         XCTAssertEqual(Data(base64Encoded: material.encryptedConfiguration)?.count, 16)
+    }
+
+    func testChatterflySpeechContextsOmitEmptyNativeIdentifiers() throws {
+        let configuration = ChatterflyASRClient.nativeConfiguration(speechTerms: ["douvo"])
+        let config = try XCTUnwrap(configuration["config"] as? [String: Any])
+        let contexts = try XCTUnwrap(config["speech_contexts"] as? [[String: Any]])
+        let context = try XCTUnwrap(contexts.first)
+        let instants = try XCTUnwrap(context["instants"] as? [String: Any])
+
+        XCTAssertNil(context["url"])
+        XCTAssertNil(context["contact_id"])
+        XCTAssertEqual(instants["phrases"] as? [String], ["douvo"])
+        let emptyConfiguration = ChatterflyASRClient.nativeConfiguration(speechTerms: [])
+        let emptyConfig = emptyConfiguration["config"] as? [String: Any]
+        let emptyContexts = emptyConfig?["speech_contexts"] as? [[String: Any]]
+        XCTAssertEqual(emptyContexts?.count, 0)
+    }
+
+    func testChatterflyPassportExpiryIsAuthenticationFailure() {
+        XCTAssertTrue(ChatterflyASRClient.isAuthenticationFailureCode(40103))
+        XCTAssertTrue(ChatterflyASRClient.isAuthenticationFailureCode(401))
+        XCTAssertTrue(ChatterflyASRClient.isAuthenticationFailureCode(403))
+        XCTAssertFalse(ChatterflyASRClient.isAuthenticationFailureCode(3))
     }
 
     func testEncryptWallPacketUsesGatewayFieldsAndSeparateRsaKey() throws {

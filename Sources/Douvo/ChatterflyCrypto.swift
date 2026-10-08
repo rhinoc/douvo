@@ -75,17 +75,13 @@ struct ChatterflyCrypto {
             key,
             publicKeyBase64: asrRSAPublicKeyBase64,
             algorithm: .rsaEncryptionRaw,
-            oaepHash: asrOAEPHash()
+            oaepHash: .sha256
         ).base64EncodedString()
         return ASRConfigurationMaterial(
             encryptedConfiguration: encryptedConfiguration,
             encryptedKey: encryptedKey,
             encodedIV: iv.base64EncodedString()
         )
-    }
-
-    private static func asrOAEPHash() -> ChatterflyOAEPHash {
-        .sha256
     }
 
     private static func rsaEncrypt(
@@ -212,163 +208,17 @@ struct ChatterflyCrypto {
 }
 
 private enum ChatterflyOAEPHash {
-    case ripemd160
-    case sha1
     case sha256
 
     var digestLength: Int {
-        switch self {
-        case .ripemd160: return 20
-        case .sha1: return Int(CC_SHA1_DIGEST_LENGTH)
-        case .sha256: return Int(CC_SHA256_DIGEST_LENGTH)
-        }
+        Int(CC_SHA256_DIGEST_LENGTH)
     }
 
     func digest(_ data: Data) -> Data {
-        switch self {
-        case .ripemd160:
-            return ChatterflyRIPEMD160.digest(data)
-        case .sha1:
-            var digest = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
-            data.withUnsafeBytes { bytes in
-                _ = CC_SHA1(bytes.baseAddress, CC_LONG(data.count), &digest)
-            }
-            return Data(digest)
-        case .sha256:
-            var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-            data.withUnsafeBytes { bytes in
-                _ = CC_SHA256(bytes.baseAddress, CC_LONG(data.count), &digest)
-            }
-            return Data(digest)
+        var digest = [UInt8](repeating: 0, count: digestLength)
+        data.withUnsafeBytes { bytes in
+            _ = CC_SHA256(bytes.baseAddress, CC_LONG(data.count), &digest)
         }
-    }
-}
-
-enum ChatterflyRIPEMD160 {
-    private static let leftRotation: [UInt32] = [
-        11, 14, 15, 12, 5, 8, 7, 9, 11, 13, 14, 15, 6, 7, 9, 8,
-        7, 6, 8, 13, 11, 9, 7, 15, 7, 12, 15, 9, 11, 7, 13, 12,
-        11, 13, 6, 7, 14, 9, 13, 15, 14, 8, 13, 6, 5, 12, 7, 5,
-        11, 12, 14, 15, 14, 15, 9, 8, 9, 14, 5, 6, 8, 6, 5, 12,
-        9, 15, 5, 11, 6, 8, 13, 12, 5, 12, 13, 14, 11, 8, 5, 6
-    ]
-    private static let rightRotation: [UInt32] = [
-        8, 9, 9, 11, 13, 15, 15, 5, 7, 7, 8, 11, 14, 14, 12, 6,
-        9, 13, 15, 7, 12, 8, 9, 11, 7, 7, 12, 7, 6, 15, 13, 11,
-        9, 7, 15, 11, 8, 6, 6, 14, 12, 13, 5, 14, 13, 13, 7, 5,
-        15, 5, 8, 11, 14, 14, 6, 14, 6, 9, 12, 9, 12, 5, 15, 8,
-        8, 5, 12, 9, 12, 5, 14, 6, 8, 13, 6, 5, 15, 13, 11, 11
-    ]
-    private static let leftIndex: [Int] = [
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-        7, 4, 13, 1, 10, 6, 15, 3, 12, 0, 9, 5, 2, 14, 11, 8,
-        3, 10, 14, 4, 9, 15, 8, 1, 2, 7, 0, 6, 13, 11, 5, 12,
-        1, 9, 11, 10, 0, 8, 12, 4, 13, 3, 7, 15, 14, 5, 6, 2,
-        4, 0, 5, 9, 7, 12, 2, 10, 14, 1, 3, 8, 11, 6, 15, 13
-    ]
-    private static let rightIndex: [Int] = [
-        5, 14, 7, 0, 9, 2, 11, 4, 13, 6, 15, 8, 1, 10, 3, 12,
-        6, 11, 3, 7, 0, 13, 5, 10, 14, 15, 8, 12, 4, 9, 1, 2,
-        15, 5, 1, 3, 7, 14, 6, 9, 11, 8, 12, 2, 10, 0, 4, 13,
-        8, 6, 4, 1, 3, 11, 15, 0, 5, 12, 2, 13, 9, 7, 10, 14,
-        12, 15, 10, 4, 1, 5, 8, 7, 6, 2, 13, 14, 0, 3, 9, 11
-    ]
-    private static let leftConstant: [UInt32] = [0, 0x5a82_7999, 0x6ed9_eba1, 0x8f1b_bcdc, 0xa953_fd4e]
-    private static let rightConstant: [UInt32] = [0x50a2_8be6, 0x5c4d_d124, 0x6d70_3ef3, 0x7a6d_76e9, 0]
-
-    static func digest(_ input: Data) -> Data {
-        var data = input
-        let bitLength = UInt64(data.count) * 8
-        data.append(0x80)
-        while data.count % 64 != 56 { data.append(0) }
-        for shift in stride(from: 0, through: 56, by: 8) {
-            data.append(UInt8((bitLength >> UInt64(shift)) & 0xff))
-        }
-
-        var h0: UInt32 = 0x6745_2301
-        var h1: UInt32 = 0xefcd_ab89
-        var h2: UInt32 = 0x98ba_dcfe
-        var h3: UInt32 = 0x1032_5476
-        var h4: UInt32 = 0xc3d2_e1f0
-
-        for offset in stride(from: 0, to: data.count, by: 64) {
-            var words = [UInt32](repeating: 0, count: 16)
-            for index in 0..<16 {
-                let base = offset + index * 4
-                words[index] = UInt32(data[base])
-                    | (UInt32(data[base + 1]) << 8)
-                    | (UInt32(data[base + 2]) << 16)
-                    | (UInt32(data[base + 3]) << 24)
-            }
-
-            var leftA = h0, leftB = h1, leftC = h2, leftD = h3, leftE = h4
-            var rightA = h0, rightB = h1, rightC = h2, rightD = h3, rightE = h4
-            for index in 0..<80 {
-                let leftRound = index / 16
-                let rightRound = leftRound
-                let leftValue = rotateLeft(
-                    leftA &+ function(index: index, x: leftB, y: leftC, z: leftD)
-                        &+ words[leftIndex[index]]
-                        &+ leftConstant[leftRound],
-                    by: leftRotation[index]
-                ) &+ leftE
-                leftA = leftE
-                leftE = leftD
-                leftD = rotateLeft(leftC, by: 10)
-                leftC = leftB
-                leftB = leftValue
-
-                let rightValue = rotateLeft(
-                    rightA &+ function(index: index, x: rightB, y: rightC, z: rightD, parallel: true)
-                        &+ words[rightIndex[index]]
-                        &+ rightConstant[rightRound],
-                    by: rightRotation[index]
-                ) &+ rightE
-                rightA = rightE
-                rightE = rightD
-                rightD = rotateLeft(rightC, by: 10)
-                rightC = rightB
-                rightB = rightValue
-            }
-
-            let temporary = h1 &+ leftC &+ rightD
-            h1 = h2 &+ leftD &+ rightE
-            h2 = h3 &+ leftE &+ rightA
-            h3 = h4 &+ leftA &+ rightB
-            h4 = h0 &+ leftB &+ rightC
-            h0 = temporary
-        }
-
-        var output = Data()
-        for value in [h0, h1, h2, h3, h4] {
-            output.append(UInt8(value & 0xff))
-            output.append(UInt8((value >> 8) & 0xff))
-            output.append(UInt8((value >> 16) & 0xff))
-            output.append(UInt8((value >> 24) & 0xff))
-        }
-        return output
-    }
-
-    private static func function(index: Int, x: UInt32, y: UInt32, z: UInt32, parallel: Bool = false) -> UInt32 {
-        if parallel {
-            switch index / 16 {
-            case 0: return x ^ (y | ~z)
-            case 1: return (x & z) | (y & ~z)
-            case 2: return (x | ~y) ^ z
-            case 3: return (x & y) | (~x & z)
-            default: return x ^ y ^ z
-            }
-        }
-        switch index / 16 {
-        case 0: return x ^ y ^ z
-        case 1: return (x & y) | (~x & z)
-        case 2: return (x | ~y) ^ z
-        case 3: return (x & z) | (y & ~z)
-        default: return x ^ (y | ~z)
-        }
-    }
-
-    private static func rotateLeft(_ value: UInt32, by count: UInt32) -> UInt32 {
-        (value << count) | (value >> (32 - count))
+        return Data(digest)
     }
 }

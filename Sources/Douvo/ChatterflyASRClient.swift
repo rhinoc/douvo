@@ -126,15 +126,13 @@ final class ChatterflyASRClient: NSObject, URLSessionWebSocketDelegate, @uncheck
 
     private var pendingConfiguration = ""
 
-    private static func nativeConfiguration(speechTerms: [String]) -> [String: Any] {
+    static func nativeConfiguration(speechTerms: [String]) -> [String: Any] {
         let deviceUUID = ChatterflyEncryptWallClient.nativeASRDeviceID()
             ?? UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let operatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersion = "\(operatingSystemVersion.majorVersion).\(operatingSystemVersion.minorVersion).\(operatingSystemVersion.patchVersion)"
         let speechContexts: [[String: Any]] = speechTerms.isEmpty ? [] : [
             [
-                "url": "",
-                "contact_id": "",
                 "instants": ["phrases": speechTerms]
             ]
         ]
@@ -272,7 +270,7 @@ final class ChatterflyASRClient: NSObject, URLSessionWebSocketDelegate, @uncheck
             fputs("Chatterfly ASR server error code=\(code) message=\(message)\n", stderr)
             report(
                 Self.makeError("\(message) (code=\(code))", code: code),
-                authenticationFailure: code == 401 || code == 403
+                authenticationFailure: Self.isAuthenticationFailureCode(code)
             )
             return
         }
@@ -498,6 +496,10 @@ final class ChatterflyASRClient: NSObject, URLSessionWebSocketDelegate, @uncheck
         if let value = value as? NSNumber { return value.intValue }
         if let value = value as? String { return Int(value) }
         return nil
+    }
+
+    static func isAuthenticationFailureCode(_ code: Int) -> Bool {
+        code == 401 || code == 403 || code == 40103
     }
 
     private static func boolValue(_ value: Any?) -> Bool? {
