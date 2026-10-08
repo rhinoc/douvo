@@ -3,7 +3,7 @@
   <img src="./docs/assets/douvo-icon.png" alt="Douvo icon" width="96" height="96" />
   <h1>Douvo</h1>
   <p>
-    A lightweight macOS voice input app with Doubao ASR and optional AI post-processing.<br />
+    A lightweight macOS voice input app with multiple ASR providers and optional AI post-processing.<br />
     Press a key, speak, clean up the transcript, and insert it into the app you are already using.
   </p>
   <p>
@@ -82,26 +82,28 @@ If you do not run into these pain points, the original Doubao IME is likely the 
 
 ## Disclaimer
 
-This project depends on observed Doubao and Youdao Bage Shuo client behavior. It is **not** an official API, SDK, or integration for either service.
+This project depends on observed Doubao, Youdao Bage Shuo, and Chatterfly client behavior. It is **not** an official API, SDK, or integration for any of these services.
 
 - You need a valid Doubao account and must log in yourself.
 - Doubao may change its website, authentication flow, device registration, WebSocket protocols, ASR payload formats, rate limits, or access policy at any time.
 - Youdao Bage Shuo may change its login flow, ticket signing, WebSocket protocol, audio format, rate limits, or access policy at any time.
+- Chatterfly may change its login flow, native credentials, WebSocket protocol, audio format, rate limits, or access policy at any time.
 - Audio sent for recognition is processed by Doubao's service. Review Doubao's own terms and privacy policy before using this app.
+- Audio sent through the Chatterfly route is processed by Chatterfly's service. Review its terms and privacy policy before using this app.
 - Enabling Android Personal Lexicon uploads the configured vocabulary terms to Doubao; uploaded terms may persist remotely after local removal.
-- Web/Bage Shuo login parameters and Android ASR credentials are stored locally so each selected provider can connect without keeping a browser window open.
+- Doubao Web/Bage Shuo login parameters, Android ASR credentials, and Chatterfly login credentials are stored locally in Douvo's Application Support directory. Douvo can also use an installed Chatterfly input method's local login until you log out of Chatterfly in Douvo.
 - If remote AI post-processing is enabled, transcript text is sent to the provider and endpoint you configure.
 - Local AI post-processing uses MLX models downloaded from Hugging Face or loaded from a local model folder.
 - Use this project at your own risk. The maintainers are not responsible for service availability, account issues, data loss, policy violations, or other consequences.
-- This project is not affiliated with, endorsed by, or sponsored by Doubao or ByteDance.
+- This project is not affiliated with, endorsed by, or sponsored by Doubao, ByteDance, or Chatterfly.
 
 ## How it works
 
-Douvo supports three ASR paths: Doubao **Web**, Doubao **Android**, and Youdao **Bage Shuo**. Select one or more paths in Settings; multiple paths run in parallel and their results are merged with AI post-processing. The default is **Web**. The Android and Bage Shuo paths follow observed client behavior. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
+Douvo supports four ASR paths: Doubao **Web**, Doubao **Android**, Youdao **Bage Shuo**, and **Chatterfly**. Select one or more paths in Settings; multiple paths run in parallel and their results are merged with AI post-processing. The default is **Web**. The Android, Bage Shuo, and Chatterfly paths follow observed client behavior. See **[ASR Providers](./docs/asr-providers.md)** for the protocol details.
 
 ```mermaid
 flowchart TD
-    A[Choose one or more Web, Android, or Bage Shuo paths] --> B[Prepare credentials required by the selected paths]
+    A[Choose one or more Web, Android, Bage Shuo, or Chatterfly paths] --> B[Prepare credentials required by the selected paths]
     B --> C[Trigger recording from the menu bar app]
     C --> D[Capture microphone audio with AVAudioEngine]
     D --> E{Selected ASR path}
@@ -109,10 +111,12 @@ flowchart TD
     E -- Android --> G[Encode 16 kHz Opus and send Protobuf frames to Doubao Android ASR]
     E -- Multiple --> H[Send each selected audio format to its ASR path in parallel]
     E -- Bage Shuo --> I[Request a signed ticket and stream 16 kHz PCM to Youdao]
+    E -- Chatterfly --> J[Stream framed 16 kHz Opus to Chatterfly]
     F --> K[Show partial transcript in the floating overlay]
     G --> K
     H --> K
     I --> K
+    J --> K
     K --> L[Receive final ASR transcript or transcripts from multiple paths]
     L --> M{AI post-processing enabled?}
     M -- No --> P[Apply deterministic punctuation and vocabulary fallback]
@@ -181,7 +185,7 @@ Local AI post-processing runs on device. Remote AI post-processing sends transcr
 ## Usage
 
 1. Open the menu bar item and choose **Settings... -> Account -> Recognition**.
-2. Choose one or more providers. Bage Shuo first imports the installed Bage Shuo app's cookies when Douvo has no usable login; if you log in through Douvo's official Youdao page, that login is kept as the active credential. Web still uses the Doubao login popup.
+2. Choose one or more providers. Bage Shuo imports the installed Bage Shuo app's cookies when needed; Chatterfly uses the installed input method's login when available, or opens its login page in Douvo. Web still uses the Doubao login popup.
 3. Place your cursor in any text field.
 4. Press the trigger key to start recording, or hold the hold-to-talk key if configured.
 5. Speak.

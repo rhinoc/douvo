@@ -1353,8 +1353,8 @@ private struct SettingsPanelView: View {
                     settingsListRow(
                         L10n.text(en: "Recognition", zh: "识别方式"),
                         help: L10n.text(
-                            en: "Select one or more routes. Multiple routes run in parallel and use AI to merge their results. Web uses Doubao web login; Android prepares automatically; Bage Shuo uses Youdao login and realtime recognition.",
-                            zh: "可选择一个或多个渠道。多选时会并行识别，并用 AI 合并结果。Web 使用豆包网页登录，Android 会自动准备，叭哥说使用网易登录和实时识别。"
+                            en: "Select one or more routes. Multiple routes run in parallel and use AI to merge their results. Chatterfly uses its speech service and can use your installed input method login.",
+                            zh: "可选择一个或多个渠道。多选时会并行识别，并用 AI 合并结果。Chatterfly 可使用其语音服务和已安装输入法的登录态。"
                         )
                     ) {
                         ASRProviderSelectionMenu(
@@ -4324,7 +4324,7 @@ private struct ASRProviderSelectionMenu: View {
         switch provider {
         case .android:
             L10n.text(en: "Automatic", zh: "自动")
-        case .web, .bageshuo:
+        case .web, .bageshuo, .chatterfly:
             loginStatuses[provider] == .loggedIn
                 ? L10n.text(en: "Logged in", zh: "已登录")
                 : L10n.text(en: "Not logged in", zh: "未登录")
@@ -4776,11 +4776,11 @@ private struct HighlightedPromptTextEditor: NSViewRepresentable {
         }
 
         private static let variablePattern = try? NSRegularExpression(
-            pattern: #"\{\{\s*(original|selected_text|translation_language|vocabularies|vocabulary_reference|recent_dictation_context|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)\s*\}\}"#
+            pattern: #"\{\{\s*(original|selected_text|translation_language|vocabularies|vocabulary_reference|recent_dictation_context|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|active_app_bundle_id|user_identity)\s*\}\}"#
         )
 
         private static let controlPattern = try? NSRegularExpression(
-            pattern: #"\{\{\s*(#if\s+(original|selected_text|translation_language|vocabularies|vocabulary_reference|recent_dictation_context|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|user_identity)|else|/if)\s*\}\}"#
+            pattern: #"\{\{\s*(#if\s+(original|selected_text|translation_language|vocabularies|vocabulary_reference|recent_dictation_context|punctuation_style|punctuation_instruction|remove_filler_words|soften_emotional_language|output_style_instruction|environment_context|active_app_bundle_id|user_identity)(\s*==\s*"[^"]*")?|else|/if)\s*\}\}"#
         )
 
         private static var baseAttributes: [NSAttributedString.Key: Any] {

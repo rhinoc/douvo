@@ -24,6 +24,7 @@ Douvo 支持一小部分类似 Mustache 的语法：
 | `{{variable}}` | 插入变量值。未知变量会渲染为空文本。 |
 | `{{#if variable}}...{{/if}}` | 只有变量值非空时才渲染这个区块。 |
 | `{{#if variable}}...{{else}}...{{/if}}` | 变量值非空时渲染前半段，否则渲染 `else` 后半段。 |
+| `{{#if variable == "value"}}...{{/if}}` | 变量值与引号中的文本完全相等时才渲染这个区块。 |
 
 ## 变量
 
@@ -38,6 +39,7 @@ Douvo 支持一小部分类似 Mustache 的语法：
 | `soften_emotional_language` | System Prompt, User Message | 开启弱化情绪时为 `true`，否则为空。 |
 | `output_style_instruction` | System Prompt, User Message | 由输出风格、风格强度或自定义输出风格生成的指令。Output Style 为 `Original` 时为空。 |
 | `environment_context` | System Prompt, User Message | 可选的当前环境信息，例如本地时间、星期、时区、前台应用，以及用户开启时的窗口标题。所有上下文开关关闭或没有可用值时为空。 |
+| `active_app_bundle_id` | System Prompt, User Message | 当前前台应用的 Bundle ID，例如 `com.microsoft.VSCode`。前台应用上下文开关关闭或没有可用应用时为空。 |
 | `user_identity` | System Prompt, User Message | 用户主动提供的身份、领域、术语偏好或写作场景。User Identity 为空时为空。 |
 
 ## 示例
@@ -96,6 +98,15 @@ Douvo 支持一小部分类似 Mustache 的语法：
 只用于消歧、术语判断、日期时间理解和输出场景判断。不要根据它新增事实。
 
 {{environment_context}}
+{{/if}}
+```
+
+按当前前台应用追加规则：
+
+```text
+{{#if active_app_bundle_id == "com.microsoft.VSCode"}}
+# VS Code 场景
+代码、路径、命令和 API 名称保持原样，不要改写成自然语言。
 {{/if}}
 ```
 

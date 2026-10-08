@@ -28,6 +28,7 @@ final class HotkeyManager: @unchecked Sendable {
     private let debounceInterval: TimeInterval = 0.25
     private var shouldConsumeEscape = false
     private var isShortcutHandlingSuspended = false
+    private var isEventTapDisabledByApplication = false
     private(set) var isEventTapActive = false {
         didSet {
             if isEventTapActive != oldValue {
@@ -168,6 +169,24 @@ final class HotkeyManager: @unchecked Sendable {
         AppLog.info("Hotkey shortcut handling suspended=\(suspended)")
     }
 
+    func setEventTapEnabled(_ enabled: Bool) {
+        guard let eventTap else {
+            AppLog.info("Hotkey event tap enable request ignored enabled=\(enabled) reason=not_created")
+            return
+        }
+        if enabled {
+            isEventTapDisabledByApplication = false
+            guard !CGEvent.tapIsEnabled(tap: eventTap) else { return }
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+        } else {
+            isEventTapDisabledByApplication = true
+            guard CGEvent.tapIsEnabled(tap: eventTap) else { return }
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+        resetPressedState()
+        AppLog.info("Hotkey event tap enabled=\(enabled) reason=application")
+    }
+
     @discardableResult
     func resetShortcutToDefault() -> Bool {
         setToggleShortcut(.defaultShortcut)
@@ -234,15 +253,19 @@ final class HotkeyManager: @unchecked Sendable {
 
     fileprivate func handleEvent(_ proxy: CGEventTapProxy, _ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if isEventTapDisabledByApplication {
+                AppLog.info("Hotkey event tap remains disabled reason=application")
+                return Unmanaged.passUnretained(event)
+            }
             AppLog.error("Hotkey event tap disabled by system; re-enabling type=\(type.rawValue)")
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         if isShortcutHandlingSuspended {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         if type == .keyDown {
@@ -257,7 +280,7 @@ final class HotkeyManager: @unchecked Sendable {
             return handleFlagsChanged(event)
         }
 
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     private func handleKeyDown(_ event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -288,7 +311,7 @@ final class HotkeyManager: @unchecked Sendable {
         }
 
         guard let toggleShortcut, !toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         if !toggleTriggerDown {
@@ -314,7 +337,7 @@ final class HotkeyManager: @unchecked Sendable {
         }
 
         guard let toggleShortcut, !toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode, toggleTriggerDown else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         toggleTriggerDown = false
@@ -361,7 +384,7 @@ final class HotkeyManager: @unchecked Sendable {
         }
 
         guard let toggleShortcut, toggleShortcut.isModifier, keyCode == toggleShortcut.keyCode else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         let isDown = toggleShortcut.flagIsDown(in: event.flags)
@@ -424,7 +447,7 @@ private func hotkeyCallback(
     userInfo: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
     guard let userInfo else {
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
     let manager = Unmanaged<HotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
     return manager.handleEvent(proxy, type, event)

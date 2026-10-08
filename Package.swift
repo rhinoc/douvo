@@ -45,6 +45,7 @@ let package = Package(
                 .copy("Resources/mlx-swift_Cmlx.bundle")
             ],
             linkerSettings: [
+                .linkedFramework("Security", .when(platforms: [.macOS])),
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist",
                     "-Xlinker", "Sources/Douvo/Info.plist"

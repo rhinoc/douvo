@@ -1,6 +1,6 @@
 # ASR Providers
 
-Douvo supports three ASR recognition paths: Doubao `Web`, Doubao `Android`, and Youdao `Bage Shuo`. Choose one or more paths in **Settings... -> Account -> Recognition**. Multiple paths run in parallel and require AI post-processing to merge their results. The default provider is `Web`.
+Douvo supports four ASR recognition paths: Doubao `Web`, Doubao `Android`, Youdao `Bage Shuo`, and `Chatterfly`. Choose one or more paths in **Settings... -> Account -> Recognition**. Multiple paths run in parallel and require AI post-processing to merge their results. The default provider is `Web`.
 
 All paths are based on observed client behavior, not an official public API. Any path may break if the service changes authentication, risk controls, WebSocket protocols, audio formats, or response payloads.
 
@@ -64,6 +64,38 @@ AVAudioEngine -> 16 kHz mono PCM_S16LE -> WebSocket binary frame
 ```
 
 The current capture path emits 200 ms frames (6,400 bytes) and buffers audio until `utterance.ready`. The final processed text arrives from `generation.completed`, while partial text is shown through the same floating overlay and insertion pipeline as the Doubao providers.
+
+## Chatterfly Provider
+
+The Chatterfly provider follows the installed Chatterfly input method's native streaming speech route. It joins the same recording session and transcript pipeline as Web, Android, and Bage Shuo; selecting it with another route uses the normal multi-route AI merge.
+
+### Authentication and Local Credentials
+
+Douvo first uses a usable Chatterfly token captured by its embedded login page and stored in `~/Library/Application Support/Douvo/chatterfly_auth.json`, following the local-file credential store used by Bage Shuo. If no Douvo token is available, it can use the installed input method's local account token from:
+
+```text
+~/Library/Application Support/Chatterfly/InputMethod/ChatterflyPY.users/accs.dat
+```
+
+When neither credential is available, the Account settings login action opens Chatterfly's login page in an embedded `WKWebView`. The native account file is encrypted by Chatterfly; Douvo reads its token for authorization and does not rewrite the input method's account data. Logging out in Douvo clears its local token file and suppresses use of the installed input method token until the next successful Douvo login.
+
+### Manual Vocabulary
+
+Before starting recognition, Douvo reads its effective vocabulary: manually configured Douvo terms plus terms imported from Bage Shuo. Those terms are placed in `config.speech_contexts` as `instants.phrases`; the ASR configuration is then encrypted and sent over the Chatterfly WebSocket. Vocabulary text is omitted from Douvo's configuration log.
+
+### WebSocket and Audio
+
+The provider connects to:
+
+```text
+wss://srss.chatterfly.tencent.com/srss/v1/speech/streaming_recognize
+```
+
+The WebSocket request sends a bearer token and an encrypted native speech configuration. Configuration encryption material is carried in `X-Srss-Cipher-Key-Type`, `X-Srss-Cipher-Key-Sec`, and `X-Srss-Cipher-Key-Vec`; the WebSocket sends the encrypted configuration after it opens.
+
+Audio shares Douvo's 16 kHz mono Opus encoder with the Android route. Each Opus packet is prefixed with a two-byte big-endian packet length before it is sent as a binary WebSocket message. When recording stops, Douvo sends the native empty JSON finish frame and waits for Chatterfly's final transcript event.
+
+Partial and final transcript events enter Douvo's standard overlay, transcript accumulator, AI post-processing, and insertion flow. The Account diagnostics demo also sends the bundled sample audio through this route.
 
 ## Web Provider
 
@@ -265,7 +297,7 @@ say -v Tingting -o /tmp/douvo-asr-lab.aiff '请创建一个 worktree，然后提
 swift run Douvo --asr-lab /tmp/douvo-asr-lab.aiff --providers android
 ```
 
-Use `--providers web,android,bageshuo` to select one or more routes. Each route
+Use `--providers web,android,bageshuo,chatterfly` to select one or more routes. Each route
 can also be tested independently from **Settings... -> System -> Recognition**.
 Bage Shuo uses the local Bage Shuo login parameters saved by Douvo. Android experiments can add
 `--context 'prior conversation'`. Use `--vocabulary 'worktree,Claude Code'` to
@@ -275,7 +307,7 @@ selected route fails to open, finish, or produce text.
 
 ## Multi-route Recognition
 
-When multiple routes are selected, Douvo starts every selected provider for the same recording and sends each route its required audio format. Web and Bage Shuo receive PCM; Android receives Opus Protobuf frames. The routes are independent, so one route can fail while the remaining routes continue.
+When multiple routes are selected, Douvo starts every selected provider for the same recording and sends each route its required audio format. Web and Bage Shuo receive PCM; Android receives Opus Protobuf frames; Chatterfly receives length-prefixed Opus frames. The routes are independent, so one route can fail while the remaining routes continue.
 
 Multi-route recognition requires:
 
@@ -288,24 +320,24 @@ During recording, the same microphone capture is converted into each required au
 ```text
 AVAudioEngine -> 16 kHz mono PCM -> Web ASR
                          |-> Bage Shuo ASR
-                         \-> AudioToolbox Opus encoder -> Android ASR
+                         \-> AudioToolbox Opus encoder -> Android and Chatterfly ASR
 ```
 
 Douvo keeps a separate transcript accumulator for every selected provider so routes do not overwrite each other's intermediate results. On completion, the correction prompt includes every non-empty provider transcript. The model is instructed to combine overlapping content, use any route to fill obvious omissions or misrecognitions, and avoid duplicate output. If only one route produces text, Douvo falls back to that transcript. If all available routes produce equivalent text, Douvo skips the merge prompt and uses the single transcript.
 
 ## Comparison
 
-| Item | Web | Android | Bage Shuo | Multi-route |
-| --- | --- | --- | --- | --- |
-| Entry point | Doubao Web ASR | Doubao IME Android ASR | Youdao Bage Shuo realtime ASR | Any selected combination |
-| Requires WebView login | Yes | No | Fallback only | For each selected login-based route |
-| Requires AI post-processing | No | No | No | Yes |
-| Local identity | Doubao cookies, `device_id`, `web_id` | `cdid`, `openudid`, `clientudid`, `deviceId`, `installId`, ASR token | Youdao cookies, signed ticket context | All selected routes |
-| Local credential file | `asr_params.json` | `android_asr_credentials.json` | `bageshuo_asr_params.json` | All selected files |
-| ASR host | `ws-samantha.doubao.com` | `frontier-audio-ime-ws.doubao.com` | Ticket-selected Youdao host | All selected hosts |
-| Message format | JSON control frames + binary PCM audio frames | Protobuf task/session messages + Opus audio frames | JSON control frames + binary PCM audio frames | Each route's native format |
-| Audio format | 16 kHz mono PCM | 16 kHz mono Opus | 16 kHz mono `PCM_S16LE` | Each route's native format |
-| Common failures | Expired login, incomplete cookies, changed web fields | Device registration failure, token fetch failure, Protobuf or risk-control changes | Expired login, ticket/signature changes, returned audio-policy changes | Any route failure, correction backend unavailable |
+| Item | Web | Android | Bage Shuo | Chatterfly | Multi-route |
+| --- | --- | --- | --- | --- | --- |
+| Entry point | Doubao Web ASR | Doubao IME Android ASR | Youdao Bage Shuo realtime ASR | Chatterfly native speech service | Any selected combination |
+| Requires WebView login | Yes | No | Fallback only | Fallback only | For each selected login-based route |
+| Requires AI post-processing | No | No | No | No | Yes |
+| Local identity | Doubao cookies, `device_id`, `web_id` | `cdid`, `openudid`, `clientudid`, `deviceId`, `installId`, ASR token | Youdao cookies, signed ticket context | Chatterfly token from local file or installed app | All selected routes |
+| Local credential file | `asr_params.json` | `android_asr_credentials.json` | `bageshuo_asr_params.json` | `chatterfly_auth.json`; optional installed app `accs.dat` | All selected credentials |
+| ASR host | `ws-samantha.doubao.com` | `frontier-audio-ime-ws.doubao.com` | Ticket-selected Youdao host | `srss.chatterfly.tencent.com` | All selected hosts |
+| Message format | JSON control frames + binary PCM audio frames | Protobuf task/session messages + Opus audio frames | JSON control frames + binary PCM audio frames | Encrypted JSON config + length-prefixed Opus frames | Each route's native format |
+| Audio format | 16 kHz mono PCM | 16 kHz mono Opus | 16 kHz mono `PCM_S16LE` | 16 kHz mono Opus | Each route's native format |
+| Common failures | Expired login, incomplete cookies, changed web fields | Device registration failure, token fetch failure, Protobuf or risk-control changes | Expired login, ticket/signature changes, returned audio-policy changes | Missing or expired login, changed native WebSocket protocol | Any route failure, correction backend unavailable |
 
 ## Network Notes
 
@@ -327,10 +359,14 @@ The Web provider needs normal access to Doubao Web and `ws-samantha.doubao.com`,
 The Bage Shuo provider needs `dict-typeless.youdao.com`, the WebSocket host returned
 by its ticket response, and a valid Youdao login cookie set.
 
+The Chatterfly provider needs `account.chatterfly.tencent.com` when logging in and
+`sec.chatterfly.tencent.com` for the encrypted login exchange, plus
+`srss.chatterfly.tencent.com` for streaming recognition.
+
 ## Privacy and Risk
 
-- Doubao Web, Doubao Android, and Bage Shuo send microphone audio to their respective service for recognition.
+- Doubao Web, Doubao Android, Bage Shuo, and Chatterfly send microphone audio to their respective service for recognition.
 - Enabling Android Personal Lexicon uploads the configured vocabulary terms to Doubao and may persist them remotely after local removal.
-- The Web provider stores Doubao web login parameters; Bage Shuo stores Youdao web login parameters; the Android provider stores IME-style device credentials and an ASR token.
+- The Web provider stores Doubao web login parameters; Bage Shuo stores Youdao web login parameters; Android stores IME-style device credentials and an ASR token; Chatterfly stores its login token locally and can read the installed input method's encrypted native account data.
 - Do not commit or share `asr_params.json`, `bageshuo_asr_params.json`, `android_asr_credentials.json`, or credential values copied from logs.
 - None of these providers is an official stable API, so they may require future maintenance when a client or service changes behavior.

@@ -24,6 +24,7 @@ Douvo supports a small Mustache-like syntax:
 | `{{variable}}` | Inserts the variable value. Unknown variables render as empty text. |
 | `{{#if variable}}...{{/if}}` | Renders the block only when the variable value is non-empty. |
 | `{{#if variable}}...{{else}}...{{/if}}` | Renders the first block when non-empty, otherwise renders the `else` block. |
+| `{{#if variable == "value"}}...{{/if}}` | Renders the block only when the variable exactly equals the quoted text. |
 
 ## Variables
 
@@ -38,6 +39,7 @@ Douvo supports a small Mustache-like syntax:
 | `soften_emotional_language` | System Prompt, User Message | `true` when emotion softening is enabled, otherwise empty. |
 | `output_style_instruction` | System Prompt, User Message | Instruction generated from Output Style, Style Strength, or Custom output style. Empty when Output Style is `Original`. |
 | `environment_context` | System Prompt, User Message | Optional current environment lines, such as local time, weekday, timezone, frontmost app, and window title when enabled. Empty when all context toggles are off or no value is available. |
+| `active_app_bundle_id` | System Prompt, User Message | The current frontmost application's Bundle ID, such as `com.microsoft.VSCode`. Empty when frontmost-app context is disabled or no app is available. |
 | `user_identity` | System Prompt, User Message | Optional user-provided identity, domain, terminology preferences, or writing context. Empty when User Identity is blank. |
 
 ## Examples
@@ -96,6 +98,15 @@ Conditional environment context block:
 Use this only for disambiguation, terminology, dates, and output context. Do not add facts from it.
 
 {{environment_context}}
+{{/if}}
+```
+
+Add rules for the current frontmost application:
+
+```text
+{{#if active_app_bundle_id == "com.microsoft.VSCode"}}
+# VS Code context
+Preserve code, paths, commands, and API names exactly; do not rewrite them as natural language.
 {{/if}}
 ```
 

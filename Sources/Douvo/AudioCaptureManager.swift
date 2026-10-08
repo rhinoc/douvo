@@ -799,7 +799,7 @@ enum DemoASRAudioPipeline {
         if selection.usesBageshuoASR {
             bageshuoPackets = bageshuoPCMPackets(from: samples)
         }
-        if selection.usesAndroidASR {
+        if selection.usesAndroidASR || selection.usesChatterflyASR {
             androidPackets = try androidOpusPackets(from: samples)
         }
 

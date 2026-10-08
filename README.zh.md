@@ -3,7 +3,7 @@
   <img src="./docs/assets/douvo-icon.png" alt="Douvo icon" width="96" height="96" />
   <h1>Douvo</h1>
   <p>
-    一个使用豆包 ASR，并可选大模型纠错的轻量 macOS 语音输入工具。<br />
+    一个支持多个 ASR provider，并可选大模型纠错的轻量 macOS 语音输入工具。<br />
     按一下快捷键，说话，整理转写结果，然后插入到你正在使用的应用里。
   </p>
   <p>
@@ -82,26 +82,28 @@ Douvo 保留豆包 ASR 路径，但把它包装成一个不绑定具体应用的
 
 ## 免责声明
 
-本项目依赖观察到的豆包和网易叭哥说客户端行为，**不是**豆包或网易官方 API、SDK 或官方集成。
+本项目依赖观察到的豆包、网易叭哥说和 Chatterfly 客户端行为，**不是**这些服务的官方 API、SDK 或官方集成。
 
 - 你需要拥有有效的豆包账号，并自行完成登录。
 - 豆包可能随时调整网页、登录流程、设备注册、WebSocket 协议、ASR 数据格式、限流规则或访问策略。
 - 网易叭哥说可能随时调整登录流程、ticket 签名、WebSocket 协议、音频格式、限流规则或访问策略。
+- Chatterfly 可能随时调整登录流程、本机凭据、WebSocket 协议、音频格式、限流规则或访问策略。
 - 语音识别由豆包服务端处理。使用前请自行确认豆包的服务条款和隐私政策。
+- Chatterfly 渠道发送的音频由 Chatterfly 服务处理。使用前请自行确认其服务条款和隐私政策。
 - 开启 Android 个人词库后，配置的词条会上传到豆包；词条在本地删除后仍可能保留在远端。
-- 应用会把 Web/叭哥说登录参数和 Android ASR 凭据保存在本机，以便每个所选 provider 在不常驻浏览器窗口的情况下连接。
+- 豆包 Web/叭哥说登录参数、Android ASR 凭据和 Chatterfly 登录凭据都保存在 Douvo 的本机 Application Support 目录中。在 Douvo 退出 Chatterfly 登录前，也可以使用已安装 Chatterfly 输入法的本机登录态。
 - 如果启用远端 AI 后处理，转写文本会发送到你配置的 provider 和 endpoint。
 - 本地 AI 后处理使用从 Hugging Face 下载或从本地文件夹加载的 MLX 模型。
 - 使用风险由使用者自行承担。维护者不对服务可用性、账号问题、数据损失、违反第三方规则或其他使用后果负责。
-- 本项目与豆包或字节跳动没有从属、背书或赞助关系。
+- 本项目与豆包、字节跳动或 Chatterfly 没有从属、背书或赞助关系。
 
 ## 大概原理
 
-Douvo 支持三种 ASR 路径：豆包 **Web**、豆包 **Android** 和网易 **叭哥说**。可以在设置里选择一个或多个路径；多选时会并行运行各路识别，再用 AI 后处理合并结果。默认是 **Web**。Android 和叭哥说路径参考观察到的客户端行为。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
+Douvo 支持四种 ASR 路径：豆包 **Web**、豆包 **Android**、网易 **叭哥说**和 **Chatterfly**。可以在设置里选择一个或多个路径；多选时会并行运行各路识别，再用 AI 后处理合并结果。默认是 **Web**。Android、叭哥说和 Chatterfly 路径参考观察到的客户端行为。协议细节见 **[ASR Providers](./docs/asr-providers.md)**。
 
 ```mermaid
 flowchart TD
-    A[选择一个或多个 Web、Android 或叭哥说路径] --> B[准备所选路径需要的凭据]
+    A[选择一个或多个 Web、Android、叭哥说或 Chatterfly 路径] --> B[准备所选路径需要的凭据]
     B --> C[通过菜单栏应用触发录音]
     C --> D[AVAudioEngine 采集麦克风音频]
     D --> E{所选 ASR 路径}
@@ -109,10 +111,12 @@ flowchart TD
     E -- Android --> G[编码 16 kHz Opus 并用 Protobuf 帧发送到豆包 Android ASR]
     E -- 多选 --> H[把各路所需音频格式并行发送到对应 ASR]
     E -- 叭哥说 --> I[请求签名 ticket 并向网易流式发送 16 kHz PCM]
+    E -- Chatterfly --> I2[向 Chatterfly 流式发送带长度帧的 16 kHz Opus]
     F --> J[悬浮窗显示实时识别结果]
     G --> J
     H --> J
     I --> J
+    I2 --> J
     J --> K[收到最终 ASR 文本或多路文本]
     K --> L{是否开启 AI 后处理?}
     L -- 否 --> P[应用确定性的标点和词库 fallback]
@@ -181,7 +185,7 @@ open /Applications/Douvo.app
 ## 使用方式
 
 1. 点击菜单栏图标，打开 **Settings... -> Account -> Recognition**。
-2. 选择一个或多个识别 provider。叭哥说在 Douvo 没有可用登录态时会优先导入本机客户端 Cookie 并尝试恢复本机会话；如果在 Douvo 弹窗里的网易官方页面登录，则保留这份登录态作为当前凭据。账号密码、手机验证码等方式由官方页面提供，Web 仍需完成豆包登录。
+2. 选择一个或多个识别 provider。叭哥说会在需要时导入本机客户端 Cookie；Chatterfly 会优先使用已安装输入法的登录态，也可以在 Douvo 弹窗里的 Chatterfly 页面登录。Web 仍需完成豆包登录。
 3. 把光标放到任意文本输入框。
 4. 按触发键开始录音；如果配置了按住说话，也可以按住对应按键。
 5. 说话。

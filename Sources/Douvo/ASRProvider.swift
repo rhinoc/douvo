@@ -4,6 +4,7 @@ enum ASRProvider: String, CaseIterable, Identifiable, Codable, Hashable {
     case web
     case android
     case bageshuo
+    case chatterfly
 
     var id: String { rawValue }
 
@@ -15,6 +16,8 @@ enum ASRProvider: String, CaseIterable, Identifiable, Codable, Hashable {
             "Android"
         case .bageshuo:
             L10n.text(en: "Bage Shuo", zh: "叭哥说")
+        case .chatterfly:
+            "Chatterfly"
         }
     }
 
@@ -26,13 +29,16 @@ enum ASRProvider: String, CaseIterable, Identifiable, Codable, Hashable {
             L10n.text(en: "Doubao Android input method", zh: "豆包 Android 输入法")
         case .bageshuo:
             L10n.text(en: "Youdao Bage Shuo realtime recognition", zh: "网易叭哥说实时识别")
+        case .chatterfly:
+            L10n.text(en: "Chatterfly realtime recognition", zh: "Chatterfly 实时语音识别")
         }
     }
 
     var usesWebASR: Bool { self == .web }
     var usesAndroidASR: Bool { self == .android }
     var usesBageshuoASR: Bool { self == .bageshuo }
-    var requiresLogin: Bool { self == .web || self == .bageshuo }
+    var usesChatterflyASR: Bool { self == .chatterfly }
+    var requiresLogin: Bool { self == .web || self == .bageshuo || self == .chatterfly }
 }
 
 struct ASRProviderSelection: Equatable, Hashable, Sendable, Codable {
@@ -73,6 +79,7 @@ struct ASRProviderSelection: Equatable, Hashable, Sendable, Codable {
     var usesWebASR: Bool { providers.contains(.web) }
     var usesAndroidASR: Bool { providers.contains(.android) }
     var usesBageshuoASR: Bool { providers.contains(.bageshuo) }
+    var usesChatterflyASR: Bool { providers.contains(.chatterfly) }
 
     var requiresLogin: Bool {
         sortedProviders.contains(where: { $0.requiresLogin })

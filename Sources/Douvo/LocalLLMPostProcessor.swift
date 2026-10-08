@@ -282,6 +282,7 @@ struct LocalLLMPromptConfiguration: Sendable {
     let outputStyleStrength: LocalLLMOutputStyleStrength
     let customOutputStyleInstruction: String
     let environmentContext: String
+    let activeAppBundleID: String
     let userIdentity: String
     let selectedText: String
     let translationLanguage: String
@@ -305,6 +306,7 @@ struct LocalLLMPromptConfiguration: Sendable {
         outputStyleStrength: LocalLLMOutputStyleStrength,
         customOutputStyleInstruction: String,
         environmentContext: String,
+        activeAppBundleID: String = "",
         userIdentity: String,
         selectedText: String,
         translationLanguage: String = "",
@@ -320,6 +322,7 @@ struct LocalLLMPromptConfiguration: Sendable {
         self.outputStyleStrength = outputStyleStrength
         self.customOutputStyleInstruction = customOutputStyleInstruction
         self.environmentContext = environmentContext
+        self.activeAppBundleID = activeAppBundleID
         self.userIdentity = userIdentity
         self.selectedText = selectedText
         self.translationLanguage = translationLanguage
@@ -338,6 +341,7 @@ struct LocalLLMPromptConfiguration: Sendable {
             outputStyleStrength: outputStyleStrength,
             customOutputStyleInstruction: customOutputStyleInstruction,
             environmentContext: environmentContext,
+            activeAppBundleID: activeAppBundleID,
             userIdentity: userIdentity,
             selectedText: selectedText,
             translationLanguage: translationLanguage,
@@ -346,7 +350,8 @@ struct LocalLLMPromptConfiguration: Sendable {
     }
 
     static var current: LocalLLMPromptConfiguration {
-        LocalLLMPromptConfiguration(
+        let environmentSnapshot = PromptEnvironmentContext.capture()
+        return LocalLLMPromptConfiguration(
             systemPromptTemplate: LocalLLMSettingsStore.systemPrompt,
             userPromptTemplate: LocalLLMSettingsStore.userPromptTemplate,
             vocabulary: LocalLLMSettingsStore.effectiveVocabulary,
@@ -356,7 +361,8 @@ struct LocalLLMPromptConfiguration: Sendable {
             outputStyle: LocalLLMSettingsStore.outputStyle,
             outputStyleStrength: LocalLLMSettingsStore.outputStyleStrength,
             customOutputStyleInstruction: LocalLLMSettingsStore.customOutputStyleInstruction,
-            environmentContext: PromptEnvironmentContext.current(),
+            environmentContext: environmentSnapshot.text,
+            activeAppBundleID: environmentSnapshot.activeAppBundleID,
             userIdentity: LocalLLMSettingsStore.userIdentity,
             selectedText: "",
             translationLanguage: ""
@@ -1206,6 +1212,7 @@ actor LocalLLMPostProcessor {
             softenEmotionalLanguage: configuration.softenEmotionalLanguage,
             outputStyleInstruction: configuration.outputStyleInstruction,
             environmentContext: configuration.environmentContext,
+            activeAppBundleID: configuration.activeAppBundleID,
             userIdentity: configuration.userIdentity,
             selectedText: configuration.selectedText,
             translationLanguage: configuration.translationLanguage,
@@ -1233,6 +1240,7 @@ actor LocalLLMPostProcessor {
             softenEmotionalLanguage: configuration.softenEmotionalLanguage,
             outputStyleInstruction: configuration.outputStyleInstruction,
             environmentContext: configuration.environmentContext,
+            activeAppBundleID: configuration.activeAppBundleID,
             userIdentity: configuration.userIdentity,
             selectedText: configuration.selectedText,
             translationLanguage: configuration.translationLanguage,
@@ -1250,6 +1258,7 @@ actor LocalLLMPostProcessor {
         softenEmotionalLanguage: Bool,
         outputStyleInstruction: String,
         environmentContext: String,
+        activeAppBundleID: String,
         userIdentity: String,
         selectedText: String,
         translationLanguage: String,
@@ -1268,6 +1277,7 @@ actor LocalLLMPostProcessor {
                 "soften_emotional_language": softenEmotionalLanguage ? "true" : "",
                 "output_style_instruction": outputStyleInstruction,
                 "environment_context": environmentContext,
+                "active_app_bundle_id": activeAppBundleID,
                 "user_identity": userIdentity,
                 "translation_language": translationLanguage,
                 "recent_dictation_context": recentDictationContext
@@ -2233,7 +2243,7 @@ actor LocalLLMPostProcessor {
             return true
         }
 
-        let hasMultipleProviderLabels = ["web", "android", "bage shuo", "叭哥说"]
+        let hasMultipleProviderLabels = ["web", "android", "bage shuo", "叭哥说", "chatterfly"]
             .filter { lowercasedOutput.contains($0) }
             .count >= 2
         if lowercasedOutput.contains("识别结果") && hasMultipleProviderLabels {
@@ -2496,7 +2506,7 @@ private enum PromptTemplateRenderer {
             }
 
             if tag.hasPrefix("#if ") {
-                let variableName = String(tag.dropFirst(4))
+                let conditionExpression = String(tag.dropFirst(4))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let trueBranch = renderSection(
                     template,
@@ -2516,7 +2526,9 @@ private enum PromptTemplateRenderer {
                     falseBranch = ""
                 }
 
-                output += isTruthy(values[variableName]) ? trueBranch.output : falseBranch
+                output += conditionMatches(conditionExpression, values: values)
+                    ? trueBranch.output
+                    : falseBranch
             } else if tag == "else" || tag == "/if" {
                 continue
             } else {
@@ -2532,5 +2544,41 @@ private enum PromptTemplateRenderer {
             return false
         }
         return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func conditionMatches(
+        _ expression: String,
+        values: [String: String]
+    ) -> Bool {
+        let trimmedExpression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let equalityRange = trimmedExpression.range(of: "==") {
+            let variableName = trimmedExpression[..<equalityRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let literal = trimmedExpression[equalityRange.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !variableName.isEmpty,
+                  let expectedValue = quotedLiteral(from: literal)
+            else {
+                return false
+            }
+            return values[variableName] == expectedValue
+        }
+
+        return isTruthy(values[trimmedExpression])
+    }
+
+    private static func quotedLiteral(from value: String) -> String? {
+        guard value.count >= 2,
+              value.first == "\"",
+              value.last == "\""
+        else {
+            return nil
+        }
+
+        let content = String(value.dropFirst().dropLast())
+        return content
+            .replacingOccurrences(of: "\\\\", with: "\\")
+            .replacingOccurrences(of: "\\\"", with: "\"")
     }
 }

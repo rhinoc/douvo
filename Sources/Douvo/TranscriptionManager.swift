@@ -59,6 +59,13 @@ final class TranscriptionManager {
         )
     }
 
+    private static var chatterflyAuthExpiredMessage: String {
+        L10n.text(
+            en: "Chatterfly login expired.",
+            zh: "Chatterfly 登录已失效"
+        )
+    }
+
     private static var recognitionFailedMessage: String {
         L10n.text(en: "Recognition failed.", zh: "识别失败")
     }
@@ -404,7 +411,7 @@ final class TranscriptionManager {
         writeASRErrorDiagnostic(provider: provider, error: authError, reason: "asr_auth_error", willContinue: willContinue)
         if shouldContinueAfterASRProviderFailure(provider: provider, error: authError) {
             clearASRAuthState(provider: provider)
-            if provider == "web" || provider == "bageshuo" {
+            if provider == "web" || provider == "bageshuo" || provider == "chatterfly" {
                 AppLog.info("ASR auth expired; opening login while continuing with remaining provider provider=\(provider)")
                 onAuthExpired?()
             }
@@ -494,7 +501,10 @@ final class TranscriptionManager {
         // Capture app/window context before Douvo shows its recording overlay.
         let shouldCaptureContext = LocalLLMPostProcessor.isCorrectionEnabled
             || (selection.usesAndroidASR && AndroidASRSettingsStore.sendContext)
-        let environmentContext = shouldCaptureContext ? PromptEnvironmentContext.current() : ""
+        let environmentSnapshot = shouldCaptureContext
+            ? PromptEnvironmentContext.capture()
+            : .empty
+        let environmentContext = environmentSnapshot.text
         let includeRecentDictationContext = shouldCaptureContext
             && LocalLLMSettingsStore.includeRecentDictationContext
         AppLog.info("Start recording requested providers=\(selection.storageValue) loginStatus=\(appState.loginStatus)")
@@ -638,6 +648,18 @@ final class TranscriptionManager {
             ])
         }
 
+        if selection.usesChatterflyASR, !ChatterflyAuthTokenStore.hasUsableCredentials {
+            AppLog.error("Start blocked: Chatterfly credentials are missing")
+            appState.errorMessage = Self.chatterflyAuthExpiredMessage
+            appState.loginStatus = .notLoggedIn
+            setRecordingState(.idle)
+            overlayPanel.show()
+            finishCurrentTrace(outcome: "blocked", metadata: ["reason": "chatterfly_auth_missing"])
+            onAuthExpired?()
+            resetToIdle(after: 1.5)
+            return
+        }
+
         if !selection.usesWebASR && !selection.usesBageshuoASR {
             transcriptionTrace?.event("asr.connect_requested", metadata: [
                 "asr_providers": selection.storageValue,
@@ -668,7 +690,8 @@ final class TranscriptionManager {
 
                 let contextSnapshot = DictationContextSnapshot(
                     environmentContext: environmentContext,
-                    recentDictationContext: recentDictationContext
+                    recentDictationContext: recentDictationContext,
+                    activeAppBundleID: environmentSnapshot.activeAppBundleID
                 )
                 self.activeContextSnapshot = contextSnapshot
                 let androidContext = AndroidASRContextBuilder.make(
@@ -728,7 +751,8 @@ final class TranscriptionManager {
     private func scheduleQuietCompletion() {
         quietCompletionWork?.cancel()
         quietCompletionWork = nil
-        guard !isWaitingForAndroidFinalization else { return }
+        guard !isWaitingForAndroidFinalization,
+              !isWaitingForChatterflyFinalization else { return }
 
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.awaitingFinalResult, self.appState.recordingState == .stopping else { return }
@@ -745,6 +769,13 @@ final class TranscriptionManager {
             && activeASRProviders.contains("android")
             && !finishedASRProviders.contains("android")
             && !failedASRProviders.contains("android")
+    }
+
+    private var isWaitingForChatterflyFinalization: Bool {
+        awaitingFinalResult
+            && activeASRProviders.contains("chatterfly")
+            && !finishedASRProviders.contains("chatterfly")
+            && !failedASRProviders.contains("chatterfly")
     }
 
     private func scheduleHardCompletion() {
@@ -1113,11 +1144,16 @@ final class TranscriptionManager {
         usingCachedParams = false
         cancelActiveSession()
         appState.transcript = ""
-        appState.errorMessage = failedProvider == "web"
-            ? Self.authExpiredMessage
-            : failedProvider == "bageshuo"
-                ? Self.bageshuoAuthExpiredMessage
-                : Self.androidAuthExpiredMessage
+        switch failedProvider {
+        case "web":
+            appState.errorMessage = Self.authExpiredMessage
+        case "bageshuo":
+            appState.errorMessage = Self.bageshuoAuthExpiredMessage
+        case "chatterfly":
+            appState.errorMessage = Self.chatterflyAuthExpiredMessage
+        default:
+            appState.errorMessage = Self.androidAuthExpiredMessage
+        }
         logASRResultSummary(reason: "auth_failure")
         finishCurrentTrace(outcome: "failed", metadata: ["reason": "auth_expired"])
         resetToIdle(after: 1.5)
@@ -1390,6 +1426,9 @@ final class TranscriptionManager {
             appState.loginStatus = .notLoggedIn
         case "android":
             DoubaoAndroidCredentialStore.clear()
+        case "chatterfly":
+            ChatterflyAuthTokenStore.clear()
+            appState.loginStatus = .notLoggedIn
         default:
             break
         }
@@ -1473,7 +1512,7 @@ final class TranscriptionManager {
         - 各路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
         - 用其他结果补足明显漏识别或错识别的片段
         - 不要重复输出同一内容
-        - 不要输出“识别结果”“Web”“Android”“Bage Shuo”“叭哥说”等输入标签
+        - 不要输出“识别结果”“Web”“Android”“Bage Shuo”“叭哥说”“Chatterfly”等输入标签
         """
 
         return LocalLLMPromptConfiguration(
@@ -1492,6 +1531,7 @@ final class TranscriptionManager {
             outputStyleStrength: current.outputStyleStrength,
             customOutputStyleInstruction: current.customOutputStyleInstruction,
             environmentContext: current.environmentContext,
+            activeAppBundleID: current.activeAppBundleID,
             userIdentity: current.userIdentity,
             selectedText: current.selectedText,
             translationLanguage: current.translationLanguage,
@@ -1512,6 +1552,7 @@ final class TranscriptionManager {
             outputStyleStrength: current.outputStyleStrength,
             customOutputStyleInstruction: current.customOutputStyleInstruction,
             environmentContext: current.environmentContext,
+            activeAppBundleID: current.activeAppBundleID,
             userIdentity: current.userIdentity,
             selectedText: selectedText,
             translationLanguage: "",
@@ -1532,6 +1573,7 @@ final class TranscriptionManager {
             outputStyleStrength: current.outputStyleStrength,
             customOutputStyleInstruction: current.customOutputStyleInstruction,
             environmentContext: current.environmentContext,
+            activeAppBundleID: current.activeAppBundleID,
             userIdentity: current.userIdentity,
             selectedText: "",
             translationLanguage: targetLanguage,
@@ -1549,7 +1591,7 @@ final class TranscriptionManager {
         - 各路内容可能有重叠、漏字、错词或标点差异；优先保留共同语义
         - 用其他结果补足明显漏识别或错识别的片段
         - 不要重复输出同一内容
-        - 不要输出“识别结果”“Web”“Android”“Bage Shuo”“叭哥说”等输入标签
+        - 不要输出“识别结果”“Web”“Android”“Bage Shuo”“叭哥说”“Chatterfly”等输入标签
         """
 
         return LocalLLMPromptConfiguration(
@@ -1563,6 +1605,7 @@ final class TranscriptionManager {
             outputStyleStrength: current.outputStyleStrength,
             customOutputStyleInstruction: current.customOutputStyleInstruction,
             environmentContext: current.environmentContext,
+            activeAppBundleID: current.activeAppBundleID,
             userIdentity: current.userIdentity,
             selectedText: current.selectedText,
             translationLanguage: current.translationLanguage,

@@ -18,7 +18,18 @@ enum AndroidASRSettingsStore {
 
 struct DictationContextSnapshot: Sendable, Equatable {
     let environmentContext: String
+    let activeAppBundleID: String
     let recentDictationContext: String
+
+    init(
+        environmentContext: String,
+        recentDictationContext: String,
+        activeAppBundleID: String = ""
+    ) {
+        self.environmentContext = environmentContext
+        self.activeAppBundleID = activeAppBundleID
+        self.recentDictationContext = recentDictationContext
+    }
 
     static let empty = DictationContextSnapshot(
         environmentContext: "",
@@ -85,6 +96,7 @@ extension LocalLLMPromptConfiguration {
             outputStyleStrength: outputStyleStrength,
             customOutputStyleInstruction: customOutputStyleInstruction,
             environmentContext: snapshot.environmentContext,
+            activeAppBundleID: snapshot.activeAppBundleID,
             userIdentity: userIdentity,
             selectedText: selectedText,
             translationLanguage: translationLanguage,

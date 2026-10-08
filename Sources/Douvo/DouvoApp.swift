@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var webViewManager: WebViewManager!
     private var bageshuoWebViewManager: BageshuoWebViewManager!
+    private var chatterflyAuthWebViewManager: ChatterflyAuthWebViewManager!
     private var hotkeyManager: HotkeyManager!
     private var overlayPanel: OverlayPanel!
     private var transcriptionManager: TranscriptionManager!
@@ -214,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupWebView() {
         webViewManager = WebViewManager(appState: appState)
         bageshuoWebViewManager = BageshuoWebViewManager(appState: appState)
+        chatterflyAuthWebViewManager = ChatterflyAuthWebViewManager()
         refreshSelectedProviderLoginStatus()
     }
 
@@ -239,6 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 statuses[provider] = .loggedIn
             case .bageshuo:
                 statuses[provider] = BageshuoASRParamsStore.load() != nil ? .loggedIn : .notLoggedIn
+            case .chatterfly:
+                statuses[provider] = ChatterflyAuthTokenStore.hasUsableCredentials ? .loggedIn : .notLoggedIn
             }
         }
     }
@@ -251,6 +255,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupHotkey() {
         hotkeyManager = HotkeyManager()
+        chatterflyAuthWebViewManager.onLoginWindowVisibilityChanged = { [weak self] isVisible in
+            self?.hotkeyManager.setEventTapEnabled(!isVisible)
+            if !isVisible {
+                self?.refreshSelectedProviderLoginStatus()
+                self?.rebuildMenu()
+            }
+        }
         hotkeyManager.onShortcutChanged = { [weak self] in
             self?.rebuildMenu()
         }
@@ -475,6 +486,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         openLogin(for: provider)
     }
 
+    @objc private func showChatterflyLogin() {
+        chatterflyAuthWebViewManager.showLoginWindow()
+    }
+
     private func synchronizeBageshuoVocabularyIfSelected(reason: String) {
         guard ASRProviderStore.selected.usesBageshuoASR else { return }
 
@@ -517,6 +532,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             bageshuoWebViewManager.showLoginWindow()
         case .android:
             break
+        case .chatterfly:
+            showChatterflyLogin()
         }
     }
 
@@ -540,6 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .web:
                 didSave = await webViewManager.extractAndSaveASRParams()
             case .android:
+                didSave = false
+            case .chatterfly:
                 didSave = false
             }
             if !didSave {
@@ -769,6 +788,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             webViewManager.logOut()
         case .android:
             break
+        case .chatterfly:
+            chatterflyAuthWebViewManager.logOut()
         }
     }
 
@@ -781,6 +802,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 DoubaoAndroidCredentialStore.debugInfo()
             case .bageshuo:
                 BageshuoASRParamsStore.loginDebugInfo()
+            case .chatterfly:
+                ChatterflyAuthTokenStore.debugInfo()
             }
         }.joined(separator: "\n\n")
         guard !debugInfo.isEmpty else { return }

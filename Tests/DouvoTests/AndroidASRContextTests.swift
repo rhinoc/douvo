@@ -51,12 +51,14 @@ final class AndroidASRContextTests: XCTestCase {
     func testPromptConfigurationUsesSameContextSnapshot() {
         let snapshot = DictationContextSnapshot(
             environmentContext: "current_time: 2026-07-16 18:00",
-            recentDictationContext: "上一条口述"
+            recentDictationContext: "上一条口述",
+            activeAppBundleID: "com.microsoft.VSCode"
         )
 
         let configuration = LocalLLMPromptConfiguration.current.withContextSnapshot(snapshot)
 
         XCTAssertEqual(configuration.environmentContext, snapshot.environmentContext)
+        XCTAssertEqual(configuration.activeAppBundleID, snapshot.activeAppBundleID)
         XCTAssertEqual(configuration.recentDictationContext, snapshot.recentDictationContext)
     }
 }

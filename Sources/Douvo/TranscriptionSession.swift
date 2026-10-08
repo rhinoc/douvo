@@ -68,6 +68,7 @@ actor TranscriptionSession {
     private let webASRClient: DoubaoASRClient?
     private let bageshuoASRClient: BageshuoASRClient?
     private let androidASRClient: DoubaoAndroidASRClient?
+    private let chatterflyASRClient: ChatterflyASRClient?
     private let audioCapture: AudioCaptureManager
     private let onEvent: EventHandler
     private var audioStartTask: Task<Void, Never>?
@@ -76,15 +77,17 @@ actor TranscriptionSession {
         let webASRClient = selection.usesWebASR ? DoubaoASRClient() : nil
         let bageshuoASRClient = selection.usesBageshuoASR ? BageshuoASRClient() : nil
         let androidASRClient = selection.usesAndroidASR ? DoubaoAndroidASRClient() : nil
+        let chatterflyASRClient = selection.usesChatterflyASR ? ChatterflyASRClient() : nil
         let audioCapture = AudioCaptureManager()
         self.selection = selection
         self.webASRClient = webASRClient
         self.bageshuoASRClient = bageshuoASRClient
         self.androidASRClient = androidASRClient
+        self.chatterflyASRClient = chatterflyASRClient
         self.audioCapture = audioCapture
         self.onEvent = onEvent
 
-        let onResult: (ASRRecognitionResult) -> Void = { [weak self] result in
+        let onResult: @Sendable (ASRRecognitionResult) -> Void = { [weak self] result in
             Task { await self?.emit(.asrResult(result)) }
         }
 
@@ -136,14 +139,36 @@ actor TranscriptionSession {
             Task { await self?.emit(.asrAuthError("android", info)) }
         }
 
+        chatterflyASRClient?.onOpen = { [weak self] in
+            Task {
+                await self?.emit(.asrOpened("chatterfly"))
+            }
+        }
+        chatterflyASRClient?.onResult = onResult
+        chatterflyASRClient?.onFinish = { [weak self] in
+            Task { await self?.emit(.asrFinished("chatterfly")) }
+        }
+        chatterflyASRClient?.onError = { [weak self] error in
+            let info = TranscriptionSessionError(error)
+            Task { await self?.emit(.asrError("chatterfly", info)) }
+        }
+        chatterflyASRClient?.onAuthError = { [weak self] error in
+            let info = TranscriptionSessionError(error)
+            Task { await self?.emit(.asrAuthError("chatterfly", info)) }
+        }
+        chatterflyASRClient?.onLevel = { [weak self] level in
+            Task { await self?.emit(.audioLevel(level)) }
+        }
+
         audioCapture.onWebPCMData = { [weak webASRClient] data in
             webASRClient?.sendAudio(data)
         }
         audioCapture.onBageshuoPCMData = { [weak bageshuoASRClient] data in
             bageshuoASRClient?.sendAudio(data)
         }
-        audioCapture.onAndroidOpusData = { [weak androidASRClient] data in
+        audioCapture.onAndroidOpusData = { [weak androidASRClient, weak chatterflyASRClient] data in
             androidASRClient?.sendAudio(data)
+            chatterflyASRClient?.sendAudio(data)
         }
         audioCapture.onLevel = { [weak self] level in
             Task { await self?.emit(.audioLevel(level)) }
@@ -198,7 +223,14 @@ actor TranscriptionSession {
             }
         }
 
-        if !selection.usesWebASR && !selection.usesBageshuoASR && !androidConnected {
+        if selection.usesChatterflyASR {
+            guard let chatterflyASRClient else {
+                throw NSError(domain: "Douvo.ChatterflyASR", code: 10, userInfo: [NSLocalizedDescriptionKey: "Chatterfly recognition client is unavailable"])
+            }
+            chatterflyASRClient.connect()
+        }
+
+        if !selection.usesWebASR && !selection.usesBageshuoASR && !androidConnected && !selection.usesChatterflyASR {
             throw NSError(domain: "Douvo.ASR", code: 12, userInfo: [NSLocalizedDescriptionKey: "No ASR provider connected"])
         }
 
@@ -206,12 +238,18 @@ actor TranscriptionSession {
         if selection.usesWebASR { captureMode.insert(.webPCM) }
         if selection.usesBageshuoASR { captureMode.insert(.bageshuoPCM) }
         if selection.usesAndroidASR { captureMode.insert(.androidOpus) }
+        if selection.usesChatterflyASR { captureMode.insert(.androidOpus) }
+
+        if captureMode.isEmpty {
+            return
+        }
 
         let audioCapture = self.audioCapture
         let weakSelf = WeakRef(self)
         let webASRClient = self.webASRClient
         let bageshuoASRClient = self.bageshuoASRClient
         let androidASRClient = self.androidASRClient
+        let chatterflyASRClient = self.chatterflyASRClient
         audioStartTask = Task.detached {
             do {
                 try Task.checkCancellation()
@@ -228,6 +266,7 @@ actor TranscriptionSession {
                 webASRClient?.disconnect()
                 bageshuoASRClient?.disconnect()
                 androidASRClient?.finishSessionThenDisconnect()
+                chatterflyASRClient?.disconnect()
                 await weakSelf.value?.emit(.audioStartFailed(TranscriptionSessionError(error)))
             }
         }
@@ -266,6 +305,7 @@ actor TranscriptionSession {
         webASRClient?.finishSending()
         bageshuoASRClient?.finishSending()
         androidASRClient?.finishSending()
+        chatterflyASRClient?.finishSending()
         return recordingURL
     }
 
@@ -276,6 +316,7 @@ actor TranscriptionSession {
         webASRClient?.disconnect()
         bageshuoASRClient?.disconnect()
         androidASRClient?.finishSessionThenDisconnect()
+        chatterflyASRClient?.disconnect()
     }
 
     private func emit(_ event: TranscriptionSessionEvent) async {

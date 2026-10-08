@@ -84,6 +84,14 @@ enum ASRDemoDiagnosticRunner {
             }
         }
 
+        if selection.usesChatterflyASR, !ChatterflyAuthTokenStore.hasUsableCredentials {
+            throw NSError(
+                domain: "Douvo.ASRDemo",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Chatterfly login credentials are missing"]
+            )
+        }
+
         let session = ASRDemoDiagnosticSession(selection: selection, audioURL: audioURL)
         return try await session.run(
             webParams: webParams,
@@ -118,6 +126,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
     private var webClient: DoubaoASRClient?
     private var bageshuoClient: BageshuoASRClient?
     private var androidClient: DoubaoAndroidASRClient?
+    private var chatterflyClient: ChatterflyASRClient?
     private var openedProviders = Set<String>()
     private var finishedProviders = Set<String>()
     private var latestTextByProvider: [String: String] = [:]
@@ -216,6 +225,20 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
             }
             androidClient = client
         }
+
+        if selection.usesChatterflyASR {
+            let client = ChatterflyASRClient()
+            client.onOpen = { [weak self] in self?.markOpened("chatterfly") }
+            client.onResult = { [weak self] result in self?.recordResult(result) }
+            client.onFinish = { [weak self] in self?.markFinished("chatterfly") }
+            client.onError = { [weak self] error in
+                self?.markError(provider: "chatterfly", error: TranscriptionSessionError(error))
+            }
+            client.onAuthError = { [weak self] error in
+                self?.markError(provider: "chatterfly", error: TranscriptionSessionError(error))
+            }
+            chatterflyClient = client
+        }
     }
 
     private func connect(
@@ -237,6 +260,9 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
                 context: androidContext,
                 usePersonalLexicon: usePersonalLexicon
             )
+        }
+        if selection.usesChatterflyASR {
+            chatterflyClient?.connect()
         }
     }
 
@@ -296,6 +322,16 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
                 }
             }
 
+            if openedProvidersSnapshot.contains("chatterfly"), let chatterflyClient {
+                group.addTask {
+                    for packet in packets.androidOpus {
+                        chatterflyClient.sendAudio(packet)
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
+                    chatterflyClient.finishSending()
+                }
+            }
+
             try await group.waitForAll()
         }
     }
@@ -315,6 +351,7 @@ private final class ASRDemoDiagnosticSession: @unchecked Sendable {
         webClient?.disconnect()
         bageshuoClient?.disconnect()
         androidClient?.disconnect()
+        chatterflyClient?.disconnect()
         await androidClient?.waitUntilDisconnected()
     }
 

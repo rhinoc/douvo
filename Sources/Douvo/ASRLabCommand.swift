@@ -11,7 +11,7 @@ enum ASRLabCommand {
     static func options(from arguments: [String]) throws -> ASRLabOptions {
         guard let commandIndex = arguments.firstIndex(of: "--asr-lab"),
               arguments.indices.contains(commandIndex + 1) else {
-            throw commandError("Usage: Douvo --asr-lab <audio-file> [--providers web,android,bageshuo] [--vocabulary <terms>]")
+            throw commandError("Usage: Douvo --asr-lab <audio-file> [--providers web,android,bageshuo,chatterfly] [--vocabulary <terms>]")
         }
 
         let audioURL = URL(fileURLWithPath: arguments[commandIndex + 1])
@@ -21,7 +21,7 @@ enum ASRLabCommand {
         if let providersFlag {
             guard arguments.indices.contains(providersFlag + 1),
                   let parsed = ASRProviderSelection.parse(arguments[providersFlag + 1]) else {
-                throw commandError("Invalid ASR providers; expected a comma-separated list of web, android, and bageshuo")
+                throw commandError("Invalid ASR providers; expected a comma-separated list of web, android, bageshuo, and chatterfly")
             }
             selection = parsed
         } else {

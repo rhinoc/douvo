@@ -2,19 +2,39 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+struct PromptEnvironmentSnapshot: Sendable, Equatable {
+    let text: String
+    let activeAppBundleID: String
+
+    static let empty = PromptEnvironmentSnapshot(
+        text: "",
+        activeAppBundleID: ""
+    )
+}
+
 enum PromptEnvironmentContext {
-    static func current() -> String {
+    static func capture() -> PromptEnvironmentSnapshot {
         var lines: [String] = []
+        var activeAppBundleID = ""
 
         if LocalLLMSettingsStore.includeCurrentTimeContext {
             lines.append(contentsOf: currentTimeLines())
         }
 
         if LocalLLMSettingsStore.includeFrontmostAppContext {
-            lines.append(contentsOf: frontmostAppLines())
+            let frontmostApp = frontmostAppSnapshot()
+            lines.append(contentsOf: frontmostApp.lines)
+            activeAppBundleID = frontmostApp.bundleID
         }
 
-        return lines.joined(separator: "\n")
+        return PromptEnvironmentSnapshot(
+            text: lines.joined(separator: "\n"),
+            activeAppBundleID: activeAppBundleID
+        )
+    }
+
+    static func current() -> String {
+        capture().text
     }
 
     private static func currentTimeLines() -> [String] {
@@ -37,9 +57,9 @@ enum PromptEnvironmentContext {
         ]
     }
 
-    private static func frontmostAppLines() -> [String] {
+    private static func frontmostAppSnapshot() -> (lines: [String], bundleID: String) {
         guard let app = NSWorkspace.shared.frontmostApplication else {
-            return []
+            return ([], "")
         }
 
         var lines: [String] = []
@@ -53,7 +73,7 @@ enum PromptEnvironmentContext {
             lines.append("window_title: \(sanitizedTitle)")
         }
 
-        return lines
+        return (lines, sanitized(app.bundleIdentifier) ?? "")
     }
 
     private static func frontmostWindowTitle(for app: NSRunningApplication) -> String? {

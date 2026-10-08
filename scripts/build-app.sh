@@ -75,6 +75,15 @@ install_name_tool -add_rpath @executable_path/../Frameworks "$MACOS/Douvo" 2>/de
 log_timing "assemble app bundle" "$ASSEMBLE_STARTED_AT"
 
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+ORIGINAL_KEYCHAINS=()
+KEYCHAIN_SEARCH_LIST_CHANGED=0
+restore_keychain_search_list() {
+  if [[ "$KEYCHAIN_SEARCH_LIST_CHANGED" == "1" && "${#ORIGINAL_KEYCHAINS[@]}" -gt 0 ]]; then
+    security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" >/dev/null 2>&1 || true
+  fi
+}
+trap restore_keychain_search_list EXIT
+
 if [[ -z "$CODESIGN_IDENTITY" && -z "${CODESIGN_KEYCHAIN:-}" ]]; then
   LOCAL_CODESIGN_DIR="${DOUVO_LOCAL_CODESIGN_DIR:-$HOME/Library/Application Support/Douvo/CodeSigning}"
   LOCAL_CODESIGN_KEYCHAIN="${DOUVO_CODESIGN_KEYCHAIN:-$LOCAL_CODESIGN_DIR/douvo-local-code-signing.keychain-db}"
@@ -87,6 +96,11 @@ if [[ -z "$CODESIGN_IDENTITY" && -z "${CODESIGN_KEYCHAIN:-}" ]]; then
       -k "$(<"$LOCAL_CODESIGN_PASSWORD_FILE")" \
       "$LOCAL_CODESIGN_KEYCHAIN" >/dev/null 2>&1
     CODESIGN_KEYCHAIN="$LOCAL_CODESIGN_KEYCHAIN"
+    while IFS= read -r keychain; do
+      [[ -n "$keychain" ]] && ORIGINAL_KEYCHAINS+=("$keychain")
+    done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"$//')
+    security list-keychains -d user -s "$CODESIGN_KEYCHAIN" >/dev/null
+    KEYCHAIN_SEARCH_LIST_CHANGED=1
     LOCAL_CODESIGN_IDENTITY="${DOUVO_LOCAL_CODESIGN_IDENTITY:-Douvo Local Code Signing}"
     if security find-identity -v -p codesigning "$CODESIGN_KEYCHAIN" 2>/dev/null \
       | awk -v name="$LOCAL_CODESIGN_IDENTITY" 'index($0, "\"" name "\"") { found = 1 } END { exit !found }'; then
