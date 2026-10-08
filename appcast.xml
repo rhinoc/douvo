@@ -7,6 +7,27 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.36</title>
+      <sparkle:version>0.1.36</sparkle:version>
+      <pubDate>Thu, 08 Oct 2026 05:49:48 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Added
+
+- Add prompt conditions that match the active application's bundle identifier.
+- Add Chatterfly as an optional real-time speech recognition provider with an embedded login flow.
+
+## Fixed
+
+- Stop retaining keyboard events after shortcut handling to prevent unnecessary memory growth.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.36/douvo-0.1.36-macos.dmg"
+        sparkle:edSignature="qzkOkMy6bDk9E/wtWIABo5WoDiS+kMwmz7n4uIohr7zY44bDguD99FYzNOY6EyaBWOjcAwEdxo7gu5aIzE4MDA==" length="18802197"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.35</title>
       <sparkle:version>0.1.35</sparkle:version>
       <pubDate>Fri, 11 Sep 2026 08:44:17 +0000</pubDate>
