@@ -81,7 +81,7 @@ When neither credential is available, the Account settings login action opens Ch
 
 ### Manual Vocabulary
 
-Before starting recognition, Douvo reads its effective vocabulary: manually configured Douvo terms plus terms imported from Bage Shuo. Those terms are placed in `config.speech_contexts` as `instants.phrases`; the ASR configuration is then encrypted and sent over the Chatterfly WebSocket. Vocabulary text is omitted from Douvo's configuration log.
+Before starting recognition, Douvo reads its effective vocabulary: manually configured Douvo terms plus terms imported from Bage Shuo. Those terms are placed in `config.speech_contexts` as `instants.phrases`, without empty context identifiers; the ASR configuration is then encrypted and sent over the Chatterfly WebSocket. Vocabulary text is omitted from Douvo's configuration log.
 
 ### WebSocket and Audio
 
