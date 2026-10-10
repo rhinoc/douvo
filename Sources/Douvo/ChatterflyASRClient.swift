@@ -388,14 +388,14 @@ final class ChatterflyASRClient: NSObject, URLSessionWebSocketDelegate, @uncheck
         }
     }
 
-    private struct RecognitionUpdate {
+    struct RecognitionUpdate {
         let stableTextDelta: String?
         let temporaryText: String?
         let replacementText: String?
         let isFinal: Bool
     }
 
-    private static func resultUpdate(from object: Any) -> RecognitionUpdate? {
+    static func resultUpdate(from object: Any) -> RecognitionUpdate? {
         guard let dictionary = object as? [String: Any] else { return nil }
         return resultUpdate(from: dictionary)
     }
@@ -419,7 +419,7 @@ final class ChatterflyASRClient: NSObject, URLSessionWebSocketDelegate, @uncheck
 
         let stableText = stringValueIncludingEmpty(dictionary["stable_result"])
         let temporaryText = stringValueIncludingEmpty(dictionary["temp_result"])
-        if stableText != nil || temporaryText != nil || isFinal {
+        if stableText != nil || temporaryText != nil {
             return RecognitionUpdate(
                 stableTextDelta: stableText,
                 temporaryText: temporaryText,
@@ -439,26 +439,24 @@ final class ChatterflyASRClient: NSObject, URLSessionWebSocketDelegate, @uncheck
             }
         }
 
+        if let alternatives = dictionary["alternatives"] as? [[String: Any]],
+           let alternative = alternatives.first {
+            for key in ["transcript", "text", "content"] {
+                if let text = nonEmptyString(alternative[key]) {
+                    return RecognitionUpdate(
+                        stableTextDelta: nil,
+                        temporaryText: nil,
+                        replacementText: text,
+                        isFinal: isFinal
+                    )
+                }
+            }
+        }
+
         if let results = dictionary["results"] as? [[String: Any]] {
             for result in results {
-                let resultFinal = boolValue(result["is_final"])
-                    ?? boolValue(result["isFinal"])
-                    ?? isFinal
-                if let update = resultUpdate(from: result, inheritedFinal: resultFinal) {
+                if let update = resultUpdate(from: result, inheritedFinal: isFinal) {
                     return update
-                }
-                if let alternatives = result["alternatives"] as? [[String: Any]],
-                   let alternative = alternatives.first {
-                    for key in ["transcript", "text", "content"] {
-                        if let text = nonEmptyString(alternative[key]) {
-                            return RecognitionUpdate(
-                                stableTextDelta: nil,
-                                temporaryText: nil,
-                                replacementText: text,
-                                isFinal: resultFinal
-                            )
-                        }
-                    }
                 }
             }
         }
