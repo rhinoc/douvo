@@ -7,6 +7,22 @@
     <language>en</language>
 
     <item>
+      <title>Version 0.1.38</title>
+      <sparkle:version>0.1.38</sparkle:version>
+      <pubDate>Sat, 10 Oct 2026 04:10:00 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">
+## Fixed
+
+- Preserve the complete final Chatterfly transcript so the last spoken words are included when dictation ends.
+      </description>
+      <enclosure
+        url="https://github.com/rhinoc/douvo/releases/download/v0.1.38/douvo-0.1.38-macos.dmg"
+        sparkle:edSignature="vFyfhu2jj1dvurWAC92dsa2Sp5faexTh2voIUkJ8+6DZf6mGIQfQpWKRwA/3U/Frjr+O4JFY+tbe4iuP//48AA==" length="18789395"
+        type="application/octet-stream"/>
+    </item>
+
+    <item>
       <title>Version 0.1.37</title>
       <sparkle:version>0.1.37</sparkle:version>
       <pubDate>Thu, 08 Oct 2026 11:54:54 +0000</pubDate>
